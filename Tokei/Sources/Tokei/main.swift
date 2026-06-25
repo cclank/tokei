@@ -4,6 +4,7 @@ import Combine
 
 final class Store: ObservableObject {
     @Published var usage: Usage?
+    @Published var localUsage: Usage?  // 本机数据（用于判断 active）
     @Published var lastUpdated: String = "加载中…"
     @Published var loadError: String?
     @Published var peers: [PeerDevice] = []
@@ -36,6 +37,7 @@ final class Store: ObservableObject {
             }
             self.retryCount = 0
             self.loadError = nil
+            self.localUsage = local  // 保存本机数据（合并前）
             if self.syncEnabled && self.showAllDevices {
                 let p = self.syncManager.loadPeers()
                 self.peers = p

@@ -78,7 +78,7 @@ struct PanelView: View {
             } else if mode == .settings {
                 settingsContent
             } else if let u = store.usage {
-                let cards = toolCards(for: u)
+                let cards = toolCards(for: u, localUsage: store.localUsage)
                 SegmentedTabs(sel: $sel)
                 toolCardsLayout(cards.filter { $0.visible && $0.active })
                 inactiveToolsLine(cards)
@@ -188,32 +188,41 @@ struct PanelView: View {
         }
     }
 
-    private func toolCards(for u: Usage) -> [ToolCardItem] {
+    private func toolCards(for u: Usage, localUsage: Usage?) -> [ToolCardItem] {
+        // 使用合并后的数据显示内容
         let cr = u.claude.ranges.get(sel), xr = u.codex.ranges.get(sel)
         let gr = u.gemini.ranges.get(sel), kr = u.grok.ranges.get(sel)
         let qr = u.qoder.ranges.get(sel), qwr = u.qoderwork.ranges.get(sel)
         let hr = u.hermes.ranges.get(sel)
         let lr = u.openclaw.ranges.get(sel), pr = u.pi.ranges.get(sel), or = u.opencode.ranges.get(sel)
+
+        // 使用本机数据判断 active（避免远程设备数据导致误显示）
+        let local = localUsage ?? u
+        let lcr = local.claude.ranges.get(sel), lxr = local.codex.ranges.get(sel)
+        let lgr = local.gemini.ranges.get(sel), lkr = local.grok.ranges.get(sel)
+        let lqr = local.qoder.ranges.get(sel), lqwr = local.qoderwork.ranges.get(sel), lhr = local.hermes.ranges.get(sel)
+        let llr = local.openclaw.ranges.get(sel), lpr = local.pi.ranges.get(sel), lor = local.opencode.ranges.get(sel)
+
         return [
-            ToolCardItem(id: "claude", name: "Claude", visible: showClaude, active: cr.sessions > 0,
+            ToolCardItem(id: "claude", name: "Claude", visible: showClaude, active: lcr.sessions > 0,
                          tint: Theme.claude, content: AnyView(claudeBlock(u.claude, cr))),
-            ToolCardItem(id: "codex", name: "Codex", visible: showCodex, active: xr.sessions > 0,
+            ToolCardItem(id: "codex", name: "Codex", visible: showCodex, active: lxr.sessions > 0,
                          tint: Theme.codex, content: AnyView(codexBlock(u.codex, xr))),
-            ToolCardItem(id: "gemini", name: "Gemini", visible: showGemini, active: gr.sessions > 0,
+            ToolCardItem(id: "gemini", name: "Gemini", visible: showGemini, active: lgr.sessions > 0,
                          tint: Theme.gemini, content: AnyView(geminiBlock(gr))),
-            ToolCardItem(id: "grok", name: "Grok", visible: showGrok, active: kr.sessions > 0,
+            ToolCardItem(id: "grok", name: "Grok", visible: showGrok, active: lkr.sessions > 0,
                          tint: Theme.grok, content: AnyView(grokBlock(kr, model: u.grok.model))),
-            ToolCardItem(id: "qoder", name: "Qoder", visible: showQoder, active: qr.calls > 0,
+            ToolCardItem(id: "qoder", name: "Qoder", visible: showQoder, active: lqr.calls > 0,
                          tint: Theme.qoder, content: AnyView(qoderIdeBlock(u.qoder, qr))),
-            ToolCardItem(id: "qoderwork", name: "QoderWork", visible: showQoderWork, active: qwr.calls > 0,
+            ToolCardItem(id: "qoderwork", name: "QoderWork", visible: showQoderWork, active: lqwr.calls > 0,
                          tint: Theme.qoderwork, content: AnyView(qoderworkBlock(u.qoderwork, qwr))),
-            ToolCardItem(id: "hermes", name: "Hermes", visible: showHermes, active: hr.sessions > 0,
+            ToolCardItem(id: "hermes", name: "Hermes", visible: showHermes, active: lhr.sessions > 0,
                          tint: Theme.hermes, content: AnyView(hermesBlock(hr))),
-            ToolCardItem(id: "openclaw", name: "OpenClaw", visible: showOpenClaw, active: lr.tasks > 0 || lr.in + lr.out > 0,
+            ToolCardItem(id: "openclaw", name: "OpenClaw", visible: showOpenClaw, active: llr.tasks > 0 || llr.in + llr.out > 0,
                          tint: Theme.openclaw, content: AnyView(openclawBlock(lr))),
-            ToolCardItem(id: "pi", name: "Pi", visible: showPi, active: pr.sessions > 0,
+            ToolCardItem(id: "pi", name: "Pi", visible: showPi, active: lpr.sessions > 0,
                          tint: Theme.pi, content: AnyView(tokenUsageBlock(title: "Pi Coding Agent", pr, tint: Theme.pi, modelsOpen: $piModelsOpen))),
-            ToolCardItem(id: "opencode", name: "OpenCode", visible: showOpenCode, active: or.sessions > 0,
+            ToolCardItem(id: "opencode", name: "OpenCode", visible: showOpenCode, active: lor.sessions > 0,
                          tint: Theme.opencode, content: AnyView(tokenUsageBlock(title: "OpenCode", or, tint: Theme.opencode, modelsOpen: $openCodeModelsOpen))),
         ]
     }

@@ -196,12 +196,13 @@ struct PanelView: View {
         let hr = u.hermes.ranges.get(sel)
         let lr = u.openclaw.ranges.get(sel), pr = u.pi.ranges.get(sel), or = u.opencode.ranges.get(sel)
 
-        // 使用本机数据判断 active（避免远程设备数据导致误显示）
-        let local = localUsage ?? u
-        let lcr = local.claude.ranges.get(sel), lxr = local.codex.ranges.get(sel)
-        let lgr = local.gemini.ranges.get(sel), lkr = local.grok.ranges.get(sel)
-        let lqr = local.qoder.ranges.get(sel), lqwr = local.qoderwork.ranges.get(sel), lhr = local.hermes.ranges.get(sel)
-        let llr = local.openclaw.ranges.get(sel), lpr = local.pi.ranges.get(sel), lor = local.opencode.ranges.get(sel)
+        // 根据"展示全部设备"开关决定 active 判断依据
+        // 本机模式：使用本机数据；全部设备模式：使用合并后数据
+        let activeUsage = store.showAllDevices ? u : (localUsage ?? u)
+        let lcr = activeUsage.claude.ranges.get(sel), lxr = activeUsage.codex.ranges.get(sel)
+        let lgr = activeUsage.gemini.ranges.get(sel), lkr = activeUsage.grok.ranges.get(sel)
+        let lqr = activeUsage.qoder.ranges.get(sel), lqwr = activeUsage.qoderwork.ranges.get(sel), lhr = activeUsage.hermes.ranges.get(sel)
+        let llr = activeUsage.openclaw.ranges.get(sel), lpr = activeUsage.pi.ranges.get(sel), lor = activeUsage.opencode.ranges.get(sel)
 
         return [
             ToolCardItem(id: "claude", name: "Claude", visible: showClaude, active: lcr.sessions > 0,

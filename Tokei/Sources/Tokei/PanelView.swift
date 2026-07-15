@@ -48,6 +48,7 @@ struct PanelView: View {
     private var hasMultipleDevices: Bool { store.syncEnabled && !store.peers.isEmpty }
     private var useWide: Bool { visibleCount > 2 }
     private var panelWidth: CGFloat { useWide ? 640 : Theme.panelWidth }
+    private let settingsPanelWidth: CGFloat = 660
 
     private var maxPanelHeight: CGFloat {
         (NSScreen.main?.visibleFrame.height ?? 900) - 40
@@ -63,7 +64,7 @@ struct PanelView: View {
     }
 
     var body: some View {
-        let w = mode == .settings ? max(panelWidth, 560) : (mode == .cards ? panelWidth : max(panelWidth, 420))
+        let w = mode == .settings ? settingsPanelWidth : (mode == .cards ? panelWidth : max(panelWidth, 420))
         if scrollable {
             ScrollView(.vertical, showsIndicators: false) { panelContent }
                 .frame(width: w)
@@ -1895,19 +1896,22 @@ struct PanelView: View {
     }
 
     func settingsRow(_ name: String, tint: Color, isOn: Binding<Bool>) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Circle().fill(tint.gradient).frame(width: 6, height: 6)
                 .shadow(color: tint.opacity(0.4), radius: 2)
             Text(name)
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(Theme.tPrimary)
-            Spacer()
+                .lineLimit(1)
+                .minimumScaleFactor(0.9)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
             Toggle("", isOn: isOn)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)

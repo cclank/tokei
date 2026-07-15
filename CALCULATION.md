@@ -14,7 +14,7 @@ Tokei 读取本地 AI CLI 工具的日志,统计 token 用量与成本。所有�
 | Grok CLI | `~/.grok/sessions/*/*/summary.json` + `updates.jsonl` | JSON, `_meta.totalTokens` |
 | Qoder | `~/Library/Application Support/QoderWork/data/agents.db` | SQLite, `messages.metadata` |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` | SQLite, `sessions` 表 |
-| OpenClaw | `~/.openclaw/tasks/runs.sqlite` | SQLite, `task_runs` 表 |
+| OpenClaw | `~/.openclaw/agents/*/sessions/*.jsonl` + `~/.openclaw/state/openclaw.sqlite` | JSONL 用量 + SQLite 任务 |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` | JSONL, `message.usage` |
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` | JSONL, `message.usage` / `providerData.usage` |
 | OpenCode | `~/.local/share/opencode/storage/message/ses_*/msg_*.json` | JSON, `tokens` + `cost` |
@@ -99,7 +99,9 @@ Tokei 优先读取逐请求日志以获得进行中会话和小时分布。旧�
 
 **Qoder** — `inputTokens` / `outputTokens` 目前全为 0,仅 `durationMs` 和 `contextUsageRatio` 有值。
 
-**OpenClaw** — 无 token 数据,仅统计 tasks / completed / failed 计数。
+**OpenClaw** — Session JSONL 的 `message.usage` 提供输入、输出、缓存读写和成本；
+`state/openclaw.sqlite` 的 `task_runs` 提供任务状态。旧版
+`~/.openclaw/tasks/runs.sqlite` 仍作为兼容回退。
 
 ---
 

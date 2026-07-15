@@ -86,6 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = Store()
     var statusItem: NSStatusItem!
     var popover = NSPopover()
+    lazy var statusMenu: NSMenu = {
+        let menu = NSMenu()
+        let quitItem = NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+        return menu
+    }()
     var timer: Timer?
     var globalMouseMonitor: Any?
 
@@ -96,8 +103,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let b = statusItem.button {
-            b.action = #selector(togglePopover)
+            b.action = #selector(handleStatusItemClick(_:))
             b.target = self
+            b.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         updateStatusTitle()
 
@@ -231,6 +239,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             proc.waitUntilExit()
             DispatchQueue.main.async { self?.store.refresh() }
         }
+    }
+
+    @objc func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp,
+           let event = NSApp.currentEvent {
+            if popover.isShown { popover.performClose(nil) }
+            NSMenu.popUpContextMenu(statusMenu, with: event, for: sender)
+            return
+        }
+        togglePopover()
+    }
+
+    @objc func quitApp() {
+        NSApp.terminate(nil)
     }
 
     @objc func togglePopover() {

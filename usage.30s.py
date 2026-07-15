@@ -105,6 +105,7 @@ ZCODE_DB = os.path.abspath(os.path.expanduser(os.environ.get(
 MIMOCODE_DB = os.path.abspath(os.path.expanduser(os.environ.get("TOKEI_MIMOCODE_DB", ""))) \
     if os.environ.get("TOKEI_MIMOCODE_DB") else ""
 OPENCLAW_DB = os.path.join(HOME, ".openclaw", "tasks", "runs.sqlite")
+OPENCLAW_STATE_DB = os.path.join(HOME, ".openclaw", "state", "openclaw.sqlite")
 OPENCLAW_AGENTS = os.path.join(HOME, ".openclaw", "agents")
 PI_AGENT_DIR = os.path.expanduser(os.environ.get("PI_CODING_AGENT_DIR", os.path.join(HOME, ".pi", "agent")))
 PI_SESSION_DIR = os.path.expanduser(os.environ.get("PI_CODING_AGENT_SESSION_DIR", os.path.join(PI_AGENT_DIR, "sessions")))
@@ -404,7 +405,7 @@ def human(n: float) -> str:
 # ---------- 增量扫描缓存 ----------
 import tempfile as _tempfile
 _SCAN_CACHE_FILE = os.path.join(_tempfile.gettempdir(), "_tokei_scan_cache.json")
-_SCAN_CACHE_VERSION = 16
+_SCAN_CACHE_VERSION = 17
 
 
 def _load_scan_cache():
@@ -2122,8 +2123,52 @@ def scan_hermes(bounds, cache):
 
 
 # ---------- OpenClaw ----------
-# SQLite: ~/.openclaw/tasks/runs.sqlite — 任务计数
+# SQLite: ~/.openclaw/state/openclaw.sqlite（新版）或 ~/.openclaw/tasks/runs.sqlite（旧版）
 # Session JSONL: ~/.openclaw/agents/*/sessions/*.jsonl — token 用量
+def _openclaw_db_paths():
+    return [path for path in _path_candidates(
+        "TOKEI_OPENCLAW_DB", OPENCLAW_STATE_DB, OPENCLAW_DB) if os.path.isfile(path)]
+
+
+def _openclaw_task_db_path(_sq):
+    for path in _openclaw_db_paths():
+        conn = None
+        try:
+            conn = _sq.connect(f"file:{path}?mode=ro", uri=True)
+            found = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_runs'"
+            ).fetchone()
+            if found:
+                return path
+        except Exception:
+            continue
+        finally:
+            if conn is not None:
+                conn.close()
+    return None
+
+
+def _scan_openclaw_db(db_path, _sq):
+    conn = _sq.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        task_days = {}
+        for row in conn.execute("""
+            SELECT date(created_at/1000,'unixepoch','localtime') as day,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN status IN ('completed','succeeded','success') THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN status IN ('failed','error') THEN 1 ELSE 0 END)
+            FROM task_runs WHERE created_at > 0
+            GROUP BY day
+        """):
+            dk, total, completed, failed = row
+            if dk:
+                task_days[dk] = {"tasks": int(total or 0), "completed": int(completed or 0),
+                                 "failed": int(failed or 0)}
+        return task_days
+    finally:
+        conn.close()
+
+
 def scan_openclaw(bounds, cache):
     import sqlite3 as _sq
     fc = cache.setdefault("openclaw", {})
@@ -2152,43 +2197,23 @@ def scan_openclaw(bounds, cache):
              "cost": 0.0, "sessions": set(), "models": {}} for k in RANGE_KEYS}
 
     # --- Part 1: SQLite task counts ---
-    if os.path.isfile(OPENCLAW_DB):
-        try:
-            sig = f"{os.path.getmtime(OPENCLAW_DB)}:{os.path.getsize(OPENCLAW_DB)}"
-        except OSError:
-            sig = None
-        if sig:
-            entry = fc.get("_db")
-            if not entry or entry.get("sig") != sig:
-                task_days = {}
-                try:
-                    conn = _sq.connect(f"file:{OPENCLAW_DB}?mode=ro", uri=True)
-                    for row in conn.execute("""
-                        SELECT date(created_at/1000,'unixepoch','localtime') as day,
-                               COUNT(*) as total,
-                               SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),
-                               SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)
-                        FROM task_runs WHERE created_at > 0
-                        GROUP BY day
-                    """):
-                        dk, total, completed, failed = row
-                        if dk:
-                            task_days[dk] = {"tasks": int(total or 0), "completed": int(completed or 0),
-                                             "failed": int(failed or 0)}
-                    conn.close()
-                except Exception:
-                    pass
-                fc["_db"] = {"sig": sig, "days": task_days}
-                changed = True
-            for dk, day in fc.get("_db", {}).get("days", {}).items():
-                try:
-                    d = date.fromisoformat(dk)
-                except ValueError:
-                    continue
-                for k in _day_keys(d):
-                    b = B[k]
-                    b["tasks"] += day["tasks"]; b["completed"] += day["completed"]
-                    b["failed"] += day["failed"]
+    db_path = _openclaw_task_db_path(_sq)
+    if db_path:
+        sig = _sqlite_signature(db_path)
+        entry = fc.get("_db")
+        if not entry or entry.get("path") != db_path or entry.get("sig") != sig:
+            task_days = _scan_openclaw_db(db_path, _sq)
+            fc["_db"] = {"path": db_path, "sig": sig, "days": task_days}
+            changed = True
+        for dk, day in fc.get("_db", {}).get("days", {}).items():
+            try:
+                d = date.fromisoformat(dk)
+            except ValueError:
+                continue
+            for k in _day_keys(d):
+                b = B[k]
+                b["tasks"] += day["tasks"]; b["completed"] += day["completed"]
+                b["failed"] += day["failed"]
     elif "_db" in fc:
         fc.pop("_db", None)
         changed = True

@@ -176,25 +176,30 @@ struct ProjectTrailView: View {
                     }
                 }
                 if let ports = p.ports, !ports.isEmpty {
-                    HStack(spacing: 5) {
-                        ForEach(ports, id: \.self) { port in
-                            Button {
-                                if let url = URL(string: "http://localhost:\(port)") {
-                                    NSWorkspace.shared.open(url)
+                    ScrollView(.horizontal, showsIndicators: ports.count > 4) {
+                        HStack(spacing: 5) {
+                            ForEach(ports, id: \.self) { port in
+                                Button {
+                                    if let url = URL(string: "http://localhost:\(port)") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Circle().fill(.green).frame(width: 5, height: 5)
+                                        Text("localhost:\(port)")
+                                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(Theme.hermes)
+                                            .lineLimit(1)
+                                    }
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Capsule().fill(Theme.hermes.opacity(0.12)))
                                 }
-                            } label: {
-                                HStack(spacing: 3) {
-                                    Circle().fill(.green).frame(width: 5, height: 5)
-                                    Text("localhost:\(port)")
-                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(Theme.hermes)
-                                }
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Capsule().fill(Theme.hermes.opacity(0.12)))
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+                    .frame(height: 22)
                 }
             }
             Spacer(minLength: 4)

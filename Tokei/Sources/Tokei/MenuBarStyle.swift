@@ -350,6 +350,9 @@ enum MenuBarTitleRenderer {
     private static func appendArtwork(_ image: NSImage, to title: NSMutableAttributedString) {
         let attachment = NSTextAttachment()
         attachment.image = image
+        // NSTextAttachment 默认贴着文本基线，图标会比数字视觉中心偏高；按字体中心下移对齐。
+        let y = round((valueFont.ascender + valueFont.descender - image.size.height) / 2)
+        attachment.bounds = NSRect(x: 0, y: y, width: image.size.width, height: image.size.height)
         title.append(NSAttributedString(attachment: attachment))
     }
 

@@ -199,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : (presentation.title.length == 0 ? .imageOnly : .imageLeading)
         b.attributedTitle = presentation.title
         b.contentTintColor = nil
+        fitStatusItemWidth(b)
         var summaryParts = metrics.map { metric in
             let name: String
             switch metric.kind {
@@ -218,6 +219,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let accessibility = summary.isEmpty ? "Tokei" : "Tokei · \(summary)"
         b.toolTip = accessibility
         b.setAccessibilityLabel(accessibility)
+    }
+
+    private func fitStatusItemWidth(_ button: NSStatusBarButton) {
+        button.invalidateIntrinsicContentSize()
+        let compactWidth = ceil(button.intrinsicContentSize.width) + 4
+        statusItem.length = max(NSStatusBar.system.thickness, compactWidth)
     }
 
     func autoFetchPricing() {

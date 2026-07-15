@@ -113,8 +113,36 @@ Tokei 支持通过私有 Git 仓库在多台机器间同步用量数据。
 git clone <你的私有仓库> ~/.tokei/sync
 curl -fsSL https://dl.lanshuagent.com/tokei/usage.30s.py -o ~/.tokei/usage.30s.py
 echo '{"sync_dir":"~/.tokei/sync","device_id":"'$(hostname -s)'"}' > ~/.tokei/config.json
-# 每 5 分钟自动采集并同步
-(crontab -l 2>/dev/null; echo '*/5 * * * * cd ~/.tokei/sync && python3 ~/.tokei/usage.30s.py --json >/dev/null && git pull -q && git add -A && git diff --cached --quiet || git commit -qm sync && git push -q') | crontab -
+cat > ~/.tokei/tokei-sync.sh <<'SH'
+#!/bin/bash
+set -euo pipefail
+exec 9>"$HOME/.tokei/sync.lock"
+flock -n 9 || exit 0
+cd "$HOME/.tokei/sync"
+python3 "$HOME/.tokei/usage.30s.py" --json >/dev/null
+git fetch -q origin main
+device_file=$(find . -maxdepth 1 -type f -iname "$(hostname -s).json" -print -quit)
+[ -n "$device_file" ] || device_file="./$(hostname -s).json"
+for peer_file in ./*.json; do
+  [ "$peer_file" = "$device_file" ] && continue
+  git restore --staged --worktree -- "$peer_file" 2>/dev/null || true
+done
+git add -- "$device_file"
+git diff --cached --quiet || git commit -qm "chore(sync): 更新 $(hostname -s) 用量数据"
+for attempt in 1 2 3; do
+  git fetch -q origin main
+  if ! git rebase -q origin/main; then
+    git rebase --abort 2>/dev/null || true
+    exit 1
+  fi
+  git push -q origin HEAD:main && exit 0
+  sleep "$attempt"
+done
+exit 1
+SH
+chmod +x ~/.tokei/tokei-sync.sh
+# 每 5 分钟自动采集并同步，日志写入 ~/.tokei/sync.log
+(crontab -l 2>/dev/null | grep -v 'tokei-sync.sh'; echo '*/5 * * * * ~/.tokei/tokei-sync.sh >> ~/.tokei/sync.log 2>&1') | crontab -
 ```
 
 ## 数据来源

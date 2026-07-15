@@ -77,7 +77,10 @@ GEMINI_DIR = os.path.join(HOME, ".gemini", "tmp")
 GEMINI_DIRS = _path_candidates(
     "TOKEI_GEMINI_DIR", GEMINI_DIR,
     os.path.join(HOME, ".gemini", "gemini-cli", "conversations"))
-GROK_DIR = os.path.join(HOME, ".grok", "sessions")
+GROK_HOME = os.path.abspath(os.path.expanduser(
+    os.environ.get("GROK_HOME", os.path.join(HOME, ".grok"))))
+GROK_DIR = os.path.join(GROK_HOME, "sessions")
+GROK_LOG = os.path.join(GROK_HOME, "logs", "unified.jsonl")
 WORKBUDDY_DIR = os.path.join(HOME, ".workbuddy", "projects")
 QODER_IDE_DB = os.path.join(HOME, "Library", "Application Support", "Qoder",
                             "SharedClientCache", "cache", "db", "local.db")
@@ -404,7 +407,7 @@ def human(n: float) -> str:
 # ---------- 增量扫描缓存 ----------
 import tempfile as _tempfile
 _SCAN_CACHE_FILE = os.path.join(_tempfile.gettempdir(), "_tokei_scan_cache.json")
-_SCAN_CACHE_VERSION = 16
+_SCAN_CACHE_VERSION = 17
 
 
 def _load_scan_cache():
@@ -462,7 +465,9 @@ def _empty_gemini():
 
 
 def _empty_grok():
-    ranges = {k: {"tokens": 0, "sessions": set(), "turns": 0, "tools": 0,
+    ranges = {k: {"tokens": 0, "in": 0, "out": 0, "cr": 0, "reason": 0,
+                  "cost": 0.0, "models": {}, "usage_sessions": set(), "usage_calls": 0,
+                  "sessions": set(), "turns": 0, "tools": 0,
                   "duration": 0, "ctx_used": 0, "ctx_window": 0, "errors": 0,
                   "cancellations": 0, "ttft_sum": 0, "response_sum": 0, "latency_count": 0}
               for k in RANGE_KEYS}
@@ -583,10 +588,10 @@ def _merge_token_day(bucket, day, session=None):
                          mv.get("cr", 0), mv.get("cw", 0), mv.get("reason", 0), mv.get("cost", 0))
 
 
-def _format_token_models(models):
+def _format_token_models(models, include_prices=True):
     result = []
     for n, v in sorted(models.items(), key=lambda kv: -kv[1].get("cost", 0)):
-        price_id = _pricing_id(n)
+        price_id = _pricing_id(n) if include_prices else None
         p = _raw_price(price_id) if price_id else {
             "in": 0.0, "out": 0.0, "cache_read": 0.0, "cache_write": 0.0}
         result.append({"name": nice_model(n), "in": v.get("in", 0), "out": v.get("out", 0),
@@ -1597,32 +1602,144 @@ def scan_gemini(bounds, cache):
     return {"ranges": B}
 
 
-# ---------- Grok CLI ----------
+# ---------- Grok Build ----------
 # 日志:~/.grok/sessions/<cwd>/<uuid>/{summary.json,signals.json,events.jsonl,updates.jsonl}
-# 当前 Grok CLI 本地日志未落 prompt_tokens/completion_tokens usage;官方 API 响应有 usage。
-# 这里展示 Grok 本地可验证的上下文、轮次、工具、耗时和延迟,不估真实消耗成本。
-def scan_grok(bounds):
-    B = {k: {"tokens": 0, "sessions": set(), "turns": 0, "tools": 0,
-             "duration": 0, "ctx_used": 0, "ctx_window": 0, "errors": 0,
-             "cancellations": 0, "ttft_sum": 0, "response_sum": 0, "latency_count": 0}
-         for k in RANGE_KEYS}
+# Grok Build TUI 会把每次推理的真实 token 记入 logs/unified.jsonl；会话目录提供模型、
+# 项目、上下文和运行指标。OAuth/订阅路径通常不落完整成本，因此只统计 token，不估价。
+def _grok_log_signature(path):
+    try:
+        st = os.stat(path)
+        return {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size,
+                "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        return None
+
+
+def _grok_usage_record(obj):
+    if obj.get("msg") != "shell.turn.inference_done":
+        return None
+    ctx = obj.get("ctx") or {}
+    if not isinstance(ctx, dict):
+        return None
+    sid = str(obj.get("sid") or "")
+    ts = str(obj.get("ts") or "")
+    dt = parse_ts(ts)
+    if not sid or dt is None:
+        return None
+    try:
+        prompt = max(int(ctx.get("prompt_tokens") or 0), 0)
+        cached = max(int(ctx.get("cached_prompt_tokens") or 0), 0)
+        completion = max(int(ctx.get("completion_tokens") or 0), 0)
+        reasoning = max(int(ctx.get("reasoning_tokens") or 0), 0)
+    except (TypeError, ValueError):
+        return None
+    cached = min(cached, prompt)
+    reasoning = min(reasoning, completion)
+    try:
+        loop_index = int(ctx.get("loop_index") or 0)
+    except (TypeError, ValueError):
+        loop_index = 0
+    record_id = f"{sid}:{ts}:{loop_index}:{prompt}:{cached}:{completion}:{reasoning}"
+    return {"id": record_id, "ts": ts, "sid": sid, "loop": loop_index,
+            "in": prompt - cached, "cr": cached,
+            "out": completion - reasoning, "reason": reasoning}
+
+
+def _load_grok_usage_entries(cache=None):
+    signature = _grok_log_signature(GROK_LOG)
+    if signature is None:
+        if cache is not None and cache.pop("grok_usage", None) is not None:
+            cache["_dirty"] = True
+        return []
+
+    old = cache.get("grok_usage", {}) if cache is not None else {}
+    same_file = old.get("dev") == signature["dev"] and old.get("ino") == signature["ino"]
+    old_offset = int(old.get("offset", 0) or 0)
+    can_append = same_file and signature["size"] >= old_offset
+    if (can_append and old.get("size") == signature["size"]
+            and old.get("mtime_ns") == signature["mtime_ns"]):
+        return old.get("entries", [])
+
+    entries = list(old.get("entries", [])) if can_append else []
+    offset = old_offset if can_append else 0
+    seen = {entry.get("id") for entry in entries if entry.get("id")}
+    try:
+        with open(GROK_LOG, "rb") as fh:
+            fh.seek(offset)
+            while True:
+                line_start = fh.tell()
+                raw = fh.readline()
+                if not raw:
+                    break
+                if not raw.endswith(b"\n"):
+                    offset = line_start
+                    break
+                offset = fh.tell()
+                try:
+                    obj = json.loads(raw.decode("utf-8", errors="ignore"))
+                except Exception:
+                    continue
+                record = _grok_usage_record(obj)
+                if record and record["id"] not in seen:
+                    entries.append(record)
+                    seen.add(record["id"])
+    except OSError:
+        return entries
+
+    if cache is not None:
+        updated = {**signature, "offset": offset, "entries": entries}
+        if updated != old:
+            cache["grok_usage"] = updated
+            cache["_dirty"] = True
+    return entries
+
+
+def _grok_session_metadata():
+    sessions = {}
     latest_mtime = -1.0
     latest_model = None
     if not os.path.isdir(GROK_DIR):
-        return {"ranges": B, "model": None}
+        return sessions, latest_model
     for sm in glob.glob(os.path.join(GROK_DIR, "*", "*", "summary.json")):
         try:
-            mtime = os.path.getmtime(sm)
-        except OSError:
-            continue
-        try:
             with open(sm, "r", encoding="utf-8", errors="ignore") as fh:
-                s = json.load(fh)
+                summary = json.load(fh)
+            sid = str((summary.get("info") or {}).get("id") or os.path.basename(os.path.dirname(sm)))
+            group_dir = os.path.dirname(os.path.dirname(sm))
+            cwd_encoded = os.path.basename(group_dir)
+            from urllib.parse import unquote
+            project = unquote(cwd_encoded)
+            cwd_file = os.path.join(group_dir, ".cwd")
+            if os.path.isfile(cwd_file):
+                try:
+                    with open(cwd_file, "r", encoding="utf-8", errors="ignore") as fh:
+                        project = fh.read().strip() or project
+                except OSError:
+                    pass
+            model = summary.get("current_model_id")
+            sessions[sid] = {"summary": summary, "path": sm,
+                             "project": project if project.startswith("/") else "",
+                             "model": model}
+            mtime = os.path.getmtime(sm)
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_model = model
         except Exception:
             continue
-        if mtime > latest_mtime:
-            latest_mtime = mtime
-            latest_model = s.get("current_model_id")
+    return sessions, latest_model
+
+
+def scan_grok(bounds, cache=None):
+    B = {k: {"tokens": 0, "in": 0, "out": 0, "cr": 0, "reason": 0,
+             "cost": 0.0, "models": {}, "usage_sessions": set(), "usage_calls": 0,
+             "sessions": set(), "turns": 0, "tools": 0,
+             "duration": 0, "ctx_used": 0, "ctx_window": 0, "errors": 0,
+             "cancellations": 0, "ttft_sum": 0, "response_sum": 0, "latency_count": 0}
+         for k in RANGE_KEYS}
+    sessions, latest_model = _grok_session_metadata()
+    for sid, meta in sessions.items():
+        sm = meta["path"]
+        s = meta["summary"]
         dt = parse_ts(s.get("updated_at") or s.get("created_at") or "")
         if dt is None:
             continue
@@ -1654,7 +1771,8 @@ def scan_grok(bounds):
         except OSError:
             pass
 
-        event_turns = event_tools = event_duration = event_errors = event_cancellations = 0
+        event_turns = event_tools = event_duration = 0
+        event_tool_errors = event_turn_errors = event_cancellations = 0
         ej = os.path.join(os.path.dirname(sm), "events.jsonl")
         try:
             with open(ej, "r", encoding="utf-8", errors="ignore") as fh:
@@ -1670,9 +1788,12 @@ def scan_grok(bounds):
                         event_tools += 1
                         event_duration += int(e.get("duration_ms") or 0)
                         if e.get("outcome") not in (None, "success"):
-                            event_errors += 1
-                    elif typ == "turn_ended" and e.get("outcome") not in (None, "completed"):
-                        event_cancellations += 1
+                            event_tool_errors += 1
+                    elif typ == "turn_ended":
+                        if e.get("outcome") == "cancelled":
+                            event_cancellations += 1
+                        elif e.get("outcome") == "error":
+                            event_turn_errors += 1
         except OSError:
             pass
 
@@ -1681,17 +1802,15 @@ def scan_grok(bounds):
         duration = int(sig.get("sessionDurationSeconds") or 0)
         ctx_used = int(sig.get("contextTokensUsed") or mx or 0)
         ctx_window = int(sig.get("contextWindowTokens") or 0)
-        errors = int(sig.get("errorCount") or 0) + int(sig.get("toolFailureCount") or event_errors or 0)
-        cancellations = int(sig.get("cancellationCount") or event_cancellations or 0)
+        signal_errors = int(sig.get("errorCount") or 0) + int(sig.get("toolFailureCount") or 0)
+        errors = max(signal_errors, event_turn_errors, event_tool_errors)
+        cancellations = max(int(sig.get("cancellationCount") or 0), event_cancellations)
         latency_count = int(sig.get("latencySampleCount") or turns or 0)
         ttft_sum = int(sig.get("avgTimeToFirstTokenMs") or 0) * latency_count
         response_sum = int(sig.get("avgResponseTimeMs") or 0) * latency_count
-        token_proxy = ctx_used or mx
 
-        sid = (s.get("info") or {}).get("id") or sm
         for k in ks:
             b = B[k]
-            b["tokens"] += token_proxy
             b["sessions"].add(sid)
             b["turns"] += turns
             b["tools"] += tools
@@ -1703,6 +1822,28 @@ def scan_grok(bounds):
             b["ttft_sum"] += ttft_sum
             b["response_sum"] += response_sum
             b["latency_count"] += latency_count
+
+    for entry in _load_grok_usage_entries(cache):
+        dt = parse_ts(entry.get("ts") or "")
+        if dt is None:
+            continue
+        ks = classify(dt.astimezone(), bounds)
+        if not ks:
+            continue
+        sid = entry.get("sid") or ""
+        model = (sessions.get(sid) or {}).get("model") or latest_model or "grok"
+        for k in ks:
+            b = B[k]
+            b["in"] += entry.get("in", 0)
+            b["out"] += entry.get("out", 0)
+            b["cr"] += entry.get("cr", 0)
+            b["reason"] += entry.get("reason", 0)
+            b["usage_calls"] += 1
+            if sid:
+                b["usage_sessions"].add(sid)
+                b["sessions"].add(sid)
+            _add_model_usage(b["models"], model, entry.get("in", 0), entry.get("out", 0),
+                             entry.get("cr", 0), 0, entry.get("reason", 0), 0.0)
     return {"ranges": B, "model": latest_model}
 
 
@@ -3372,7 +3513,7 @@ def compute():
     cc = _safe_scan("claude", lambda: scan_claude(bounds, cache), _empty_claude, errors)
     cx = _safe_scan("codex", lambda: scan_codex(bounds, cache), _empty_codex, errors)
     gm = _safe_scan("gemini", lambda: scan_gemini(bounds, cache), _empty_gemini, errors)
-    gk = _safe_scan("grok", lambda: scan_grok(bounds), _empty_grok, errors)
+    gk = _safe_scan("grok", lambda: scan_grok(bounds, cache), _empty_grok, errors)
     qd = _safe_scan("qoderwork", lambda: scan_qoder(bounds, cache), _empty_qoder, errors)
     qi = _safe_scan("qoder_ide", lambda: scan_qoder_ide(bounds, cache), _empty_qoder_ide, errors)
     hm = _safe_scan("hermes", lambda: scan_hermes(bounds, cache), _empty_hermes, errors)
@@ -3421,7 +3562,20 @@ def compute():
         latency_count = b.get("latency_count", 0)
         ctx_window = b.get("ctx_window", 0)
         ctx_pct = (b.get("ctx_used", 0) / ctx_window * 100) if ctx_window else 0.0
-        return {"tokens": b.get("tokens", 0), "sessions": len(b.get("sessions", [])),
+        usage_total = sum(b.get(key, 0) for key in ("in", "out", "cr", "reason"))
+        usage_available = b.get("usage_calls", 0) > 0
+        input_total = b.get("in", 0) + b.get("cr", 0)
+        hit = (b.get("cr", 0) / input_total * 100) if input_total else 0.0
+        return {"tokens": usage_total if usage_available else b.get("ctx_used", 0),
+                "hit": hit,
+                "in": b.get("in", 0), "out": b.get("out", 0),
+                "cr": b.get("cr", 0), "reason": b.get("reason", 0),
+                "cost": b.get("cost", 0),
+                "models": _format_token_models(b.get("models", {}), include_prices=False),
+                "usage_available": usage_available,
+                "usage_calls": b.get("usage_calls", 0),
+                "usage_sessions": len(b.get("usage_sessions", [])),
+                "sessions": len(b.get("sessions", [])),
                 "turns": b.get("turns", 0), "tools": b.get("tools", 0),
                 "duration": b.get("duration", 0), "ctx_used": b.get("ctx_used", 0),
                 "ctx_window": ctx_window, "ctx": ctx_pct,
@@ -3719,15 +3873,22 @@ def main():
     print(f"今日 ≈成本  ${gt['cost']:.2f} {F}")
     print(f"  (按 API 价估,非订阅实付) | font=Menlo size=11")
     print("---")
-    # Grok 块(降级:仅上下文 token,不估成本)
+    # Grok Build 块：优先真实 token，旧日志降级为上下文快照。
     gk = d["grok"]
     kt = gk["ranges"]["today"]
-    print(f"Grok CLI {HEAD}")
+    print(f"Grok Build {HEAD}")
     print(f"今日 会话   {kt['sessions']:>6} {F}")
-    print(f"上下文 token {human(kt['tokens']):>6} {F}")
+    if kt.get("usage_available"):
+        print(f"今日 输入   {human(kt['in']):>6} {F}")
+        print(f"今日 缓存   {human(kt['cr']):>6} {F}")
+        print(f"今日 输出   {human(kt['out']):>6} {F}")
+        if kt.get("reason"):
+            print(f"今日 推理   {human(kt['reason']):>6} {F}")
+    else:
+        print(f"上下文快照 {human(kt['ctx_used']):>6} {F}")
     if gk.get("model"):
         print(f"model: {gk['model']} {F}")
-    print(f"  (仅上下文 token,非消耗量;成本 —) | font=Menlo size=11")
+    print(f"  (成本未提供) | font=Menlo size=11")
     print("---")
     # Pi 块
     pt = d["pi"]["ranges"]["today"]
@@ -4015,6 +4176,7 @@ def build_daily_costs(period="all", refresh=True):
                        "p_in": 0, "p_out": 0, "p_cr": 0, "p_cw": 0, "p_reason": 0,
                        "w_in": 0, "w_out": 0, "w_cr": 0, "w_cw": 0,
                        "q_in": 0, "q_out": 0, "q_cr": 0, "q_reason": 0,
+                       "g_in": 0, "g_out": 0, "g_cr": 0, "g_reason": 0,
                        "tokens": 0, "sessions": 0}
 
     for fp, entry in cache.get("claude", {}).items():
@@ -4133,6 +4295,26 @@ def build_daily_costs(period="all", refresh=True):
             for key in TOKEN_FIELDS:
                 m[key] += mv.get(key, 0)
 
+    grok_sessions, grok_latest_model = _grok_session_metadata()
+    for entry in cache.get("grok_usage", {}).get("entries", []):
+        dt = parse_ts(entry.get("ts") or "")
+        if dt is None:
+            continue
+        local_dt = dt.astimezone()
+        dk = local_dt.date().isoformat()
+        if cutoff and dk < cutoff:
+            continue
+        d = days.setdefault(dk, _empty())
+        d["g_in"] += entry.get("in", 0); d["g_out"] += entry.get("out", 0)
+        d["g_cr"] += entry.get("cr", 0); d["g_reason"] += entry.get("reason", 0)
+        d["tokens"] += token_total(entry)
+        model_name = (grok_sessions.get(entry.get("sid")) or {}).get("model") or grok_latest_model or "grok"
+        nm = f"{nice_model(model_name)} (Grok Build)"
+        m = models.setdefault(nm, {"cost": 0.0, "in": 0, "out": 0, "cr": 0,
+                                   "cw": 0, "reason": 0, "tool": "grok"})
+        for key in TOKEN_FIELDS:
+            m[key] += entry.get(key, 0)
+
     for fp, entry in cache.get("hermes", {}).items():
         for dk, day in entry.get("days", {}).items():
             if cutoff and dk < cutoff:
@@ -4182,6 +4364,7 @@ def build_daily_costs(period="all", refresh=True):
               "p_in": v["p_in"], "p_out": v["p_out"], "p_cr": v["p_cr"], "p_cw": v["p_cw"], "p_reason": v["p_reason"],
               "w_in": v["w_in"], "w_out": v["w_out"], "w_cr": v["w_cr"], "w_cw": v["w_cw"],
               "q_in": v["q_in"], "q_out": v["q_out"], "q_cr": v["q_cr"], "q_reason": v["q_reason"],
+              "g_in": v["g_in"], "g_out": v["g_out"], "g_cr": v["g_cr"], "g_reason": v["g_reason"],
               "tokens": v["tokens"]}
              for dk, v in sorted(days.items())]
 
@@ -4446,6 +4629,33 @@ def build_wrapped(period="all", refresh=True):
             nm = f"{nice_model(model_name)} (Qoder)"
             model_tok[nm] = model_tok.get(nm, 0) + tok
 
+    # --- Grok Build（unified 日志中的真实 token）---
+    grok_sessions, grok_latest_model = _grok_session_metadata()
+    for entry in cache.get("grok_usage", {}).get("entries", []):
+        dt = parse_ts(entry.get("ts") or "")
+        if dt is None:
+            continue
+        local_dt = dt.astimezone()
+        dk = local_dt.date().isoformat()
+        if cutoff and dk < cutoff:
+            continue
+        tok = token_total(entry)
+        day_tokens[dk] = day_tokens.get(dk, 0) + tok
+        total_tokens += tok
+        weekday[local_dt.weekday()] += tok
+        hours[local_dt.hour] += tok
+        all_day_hours.add(f"{dk}:{local_dt.hour}")
+        meta = grok_sessions.get(entry.get("sid")) or {}
+        project_path = meta.get("project") or ""
+        project = os.path.basename(project_path.rstrip("/")) or "?"
+        if project != "?":
+            pt = proj_tok.setdefault(project, [0, 0.0])
+            pt[0] += tok
+            day_projs.setdefault(dk, set()).add(project)
+        model_name = meta.get("model") or grok_latest_model or "grok"
+        display_name = f"{nice_model(model_name)} (Grok Build)"
+        model_tok[display_name] = model_tok.get(display_name, 0) + tok
+
     # --- Gemini (无缓存,需重新扫描取 year 总量;仅 all/365d 包含) ---
     if period in ("all", "365d"):
         try:
@@ -4455,15 +4665,6 @@ def build_wrapped(period="all", refresh=True):
             gm_tok = yr.get("in", 0) + yr.get("out", 0) + yr.get("cached", 0) + yr.get("thoughts", 0)
             total_tokens += gm_tok
             total_cost += yr.get("cost", 0)
-        except Exception:
-            pass
-
-    # --- Grok (无缓存,需重新扫描取 year 总量;仅 all/365d 包含) ---
-    if period in ("all", "365d"):
-        try:
-            gk = scan_grok(bounds if period == "all" else range_bounds())
-            gk_tok = gk["ranges"].get("year", {}).get("tokens", 0)
-            total_tokens += gk_tok
         except Exception:
             pass
 
@@ -4658,29 +4859,38 @@ def projects():
     for proj_path, session_ids in workbuddy_sessions.items():
         proj_map[proj_path]["sessions"] += len(session_ids)
 
-    # Grok sessions (cwd encoded in directory name)
-    from urllib.parse import unquote
-    for sm in glob.glob(os.path.join(GROK_DIR, "*", "*", "summary.json")):
-        parts = sm.split(os.sep)
-        try:
-            cwd_encoded = parts[-3]
-            grok_path = unquote(cwd_encoded)
-            if not grok_path.startswith("/"):
-                continue
-            with open(sm, "r", encoding="utf-8", errors="ignore") as fh:
-                s = json.load(fh)
-            dt = parse_ts(s.get("updated_at") or s.get("created_at") or "")
-            if dt is None:
-                continue
+    # Grok Build sessions + unified 日志真实 token
+    grok_sessions, grok_latest_model = _grok_session_metadata()
+    for meta in grok_sessions.values():
+        grok_path = meta.get("project") or ""
+        if not grok_path:
+            continue
+        summary = meta.get("summary") or {}
+        dt = parse_ts(summary.get("updated_at") or summary.get("created_at") or "")
+        p = proj_map.setdefault(grok_path, {"sessions": 0, "tokens": 0, "cost": 0.0,
+                                             "last_active": "", "model_tok": {}, "tools": set()})
+        p["sessions"] += 1
+        p["tools"].add("grok")
+        if dt is not None:
             dk = dt.astimezone().date().isoformat()
-            p = proj_map.setdefault(grok_path, {"sessions": 0, "tokens": 0, "cost": 0.0,
-                                                 "last_active": "", "model_tok": {}, "tools": set()})
-            p["sessions"] += 1
-            p["tools"].add("grok")
             if dk > p["last_active"]:
                 p["last_active"] = dk
-        except Exception:
+    for usage_entry in cache.get("grok_usage", {}).get("entries", []):
+        meta = grok_sessions.get(usage_entry.get("sid")) or {}
+        grok_path = meta.get("project") or ""
+        if not grok_path:
             continue
+        p = proj_map[grok_path]
+        tok = token_total(usage_entry)
+        p["tokens"] += tok
+        model_name = meta.get("model") or grok_latest_model or "grok"
+        display_name = f"{nice_model(model_name)} (Grok Build)"
+        p["model_tok"][display_name] = p["model_tok"].get(display_name, 0) + tok
+        dt = parse_ts(usage_entry.get("ts") or "")
+        if dt is not None:
+            dk = dt.astimezone().date().isoformat()
+            if dk > p["last_active"]:
+                p["last_active"] = dk
 
     # 检测本地 LISTEN 端口,匹配项目 cwd
     port_map = _detect_local_servers(set(proj_map.keys()))

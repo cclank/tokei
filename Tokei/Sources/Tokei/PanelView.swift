@@ -8,6 +8,7 @@ struct PanelView: View {
     @State private var claudeModelsOpen = false
     @State private var codexModelsOpen = false
     @State private var geminiModelsOpen = false
+    @State private var grokModelsOpen = false
     @State private var zcodeModelsOpen = false
     @State private var mimocodeModelsOpen = false
     @State private var piModelsOpen = false
@@ -231,7 +232,7 @@ struct PanelView: View {
                          tint: Theme.codex, content: AnyView(codexBlock(u.codex, xr))),
             ToolCardItem(id: "gemini", name: "Gemini", visible: showGemini, active: gr.sessions > 0,
                          tint: Theme.gemini, content: AnyView(geminiBlock(gr))),
-            ToolCardItem(id: "grok", name: "Grok", visible: showGrok, active: kr.sessions > 0,
+            ToolCardItem(id: "grok", name: "Grok Build", visible: showGrok, active: kr.sessions > 0,
                          tint: Theme.grok, content: AnyView(grokBlock(kr, model: u.grok.model))),
             ToolCardItem(id: "qoder", name: "Qoder", visible: showQoder, active: qr.calls > 0,
                          tint: Theme.qoder, content: AnyView(qoderIdeBlock(u.qoder, qr))),
@@ -392,14 +393,24 @@ struct PanelView: View {
     @ViewBuilder
     func grokBlock(_ r: GrokRange, model: String?) -> some View {
         VStack(alignment: .leading, spacing: 11) {
-            cardHeadPlain("Grok CLI", tint: Theme.grok)
+            cardHead("Grok Build", tint: Theme.grok, sessions: r.sessions)
             if r.sessions > 0 {
-                CostHeadline(value: Fmt.human(r.ctx_used ?? r.tokens), caption: "\(sel.label) 总量", tint: Theme.grok)
-                metricGrid({
-                    var items: [Metric] = [
+                CostHeadline(value: Fmt.human(r.tokens),
+                             caption: r.usage_available ? "\(sel.label) 真实用量" : "\(sel.label) 上下文快照",
+                             tint: Theme.grok)
+                let grokMetrics: [Metric] = {
+                    var items: [Metric] = []
+                    if r.usage_available {
+                        items.append(.init("arrow.down", "输入", Fmt.human(r.in)))
+                        items.append(.init("bolt.fill", "缓存读", Fmt.human(r.cr)))
+                        items.append(.init("arrow.up", "输出", Fmt.human(r.out)))
+                        if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
+                        items.append(.init("waveform", "调用", "\(r.usage_calls)"))
+                    }
+                    items.append(contentsOf: [
                         .init("arrow.triangle.2.circlepath", "轮次", "\(r.turns ?? 0)"),
                         .init("wrench.and.screwdriver", "工具", "\(r.tools ?? 0)"),
-                    ]
+                    ])
                     if let duration = r.duration, duration > 0 {
                         items.append(.init("clock", "耗时", Fmt.duration(duration * 1000)))
                     }
@@ -419,11 +430,17 @@ struct PanelView: View {
                         items.append(.init("xmark.circle", "取消", "\(r.cancellations ?? 0)"))
                     }
                     return items
-                }(), tint: Theme.grok)
-                if let model, !model.isEmpty {
+                }()
+                metricGrid([], hit: r.usage_available ? r.hit : 0,
+                           extra: grokMetrics, tint: Theme.grok)
+                if r.usage_available && !r.models.isEmpty {
+                    tokenModelDisclosure(r.models, open: $grokModelsOpen, tint: Theme.grok)
+                } else if let model, !model.isEmpty {
                     modelBadge(model, tint: Theme.grok)
                 }
-                Text("Grok CLI 本地日志没有保存 input/output usage,这里展示上下文与执行指标。")
+                Text(r.usage_available
+                     ? "来自 Grok Build 本地推理日志；成本未提供。"
+                     : "未找到真实 usage 日志，当前仅展示上下文与执行指标。")
                     .font(.system(size: 8.5))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -686,7 +703,7 @@ struct PanelView: View {
         }
     }
 
-    // 无命中环的卡头(Grok 无缓存命中数据)。
+    // 无命中环的简化卡头。
     func cardHeadPlain(_ title: String, tint: Color) -> some View {
         HStack(spacing: 7) {
             Circle().fill(tint.gradient).frame(width: 8, height: 8)
@@ -805,6 +822,7 @@ struct PanelView: View {
                         .buttonStyle(.plain)
                         if isExpanded {
                             modelDetailRow(tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw,
+                                           tokReason: m.reason,
                                            pin: m.pin, pout: m.pout, hit: hit, tint: tint)
                         }
                     }
@@ -891,7 +909,7 @@ struct PanelView: View {
     }
 
     @ViewBuilder
-    func modelDetailRow(tokIn: Int, tokOut: Int, tokCR: Int, tokCW: Int,
+    func modelDetailRow(tokIn: Int, tokOut: Int, tokCR: Int, tokCW: Int, tokReason: Int = 0,
                          pin: Double, pout: Double, hit: Double = 0, tint: Color) -> some View {
         let tagFont = Font.system(size: 9, weight: .medium, design: .monospaced)
         let labelFont = Font.system(size: 8.5)
@@ -908,6 +926,9 @@ struct PanelView: View {
                 if tokCW > 0 {
                     detailTag("✎ \(Fmt.human(tokCW))", label: "缓存写", tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 }
+                if tokReason > 0 {
+                    detailTag("◉ \(Fmt.human(tokReason))", label: "推理", tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
+                }
                 if hit > 0 {
                     HStack(spacing: 2) {
                         Text("命中").font(labelFont).foregroundStyle(Theme.tTertiary)
@@ -917,14 +938,16 @@ struct PanelView: View {
                     .background(Capsule().fill(bg))
                     .overlay(Capsule().strokeBorder(border, lineWidth: 0.5))
                 }
-                HStack(spacing: 2) {
-                    Text("$").font(tagFont).foregroundStyle(tint)
-                    Text("\(String(format: "%.2g", pin))/\(String(format: "%.2g", pout))")
-                        .font(tagFont).foregroundStyle(tint)
+                if pin > 0 || pout > 0 {
+                    HStack(spacing: 2) {
+                        Text("$").font(tagFont).foregroundStyle(tint)
+                        Text("\(String(format: "%.2g", pin))/\(String(format: "%.2g", pout))")
+                            .font(tagFont).foregroundStyle(tint)
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 2.5)
+                    .background(Capsule().fill(tint.opacity(0.12)))
+                    .overlay(Capsule().strokeBorder(tint.opacity(0.25), lineWidth: 0.5))
                 }
-                .padding(.horizontal, 6).padding(.vertical, 2.5)
-                .background(Capsule().fill(tint.opacity(0.12)))
-                .overlay(Capsule().strokeBorder(tint.opacity(0.25), lineWidth: 0.5))
             }
         }
         .padding(.top, 5).padding(.bottom, 2)
@@ -1240,7 +1263,7 @@ struct PanelView: View {
                 settingsRow("Claude", tint: Theme.claude, isOn: $showClaude)
                 settingsRow("Codex", tint: Theme.codex, isOn: $showCodex)
                 settingsRow("Gemini", tint: Theme.gemini, isOn: $showGemini)
-                settingsRow("Grok", tint: Theme.grok, isOn: $showGrok)
+                settingsRow("Grok Build", tint: Theme.grok, isOn: $showGrok)
                 settingsRow("Qoder", tint: Theme.qoder, isOn: $showQoder)
                 settingsRow("QoderWork", tint: Theme.qoderwork, isOn: $showQoderWork)
                 settingsRow("Hermes", tint: Theme.hermes, isOn: $showHermes)

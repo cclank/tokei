@@ -233,7 +233,18 @@ final class SyncManager {
             var d = dst.get(pair.dst), s = src.get(pair.src)
             let originalLatencyWeight = max(d.turns ?? 0, d.sessions)
             let sourceLatencyWeight = max(s.turns ?? 0, s.sessions)
-            d.tokens += s.tokens; d.sessions += s.sessions
+            d.in += s.in; d.out += s.out; d.cr += s.cr; d.reason += s.reason
+            d.cost += s.cost
+            d.usage_available = d.usage_available || s.usage_available
+            d.usage_calls += s.usage_calls; d.usage_sessions += s.usage_sessions
+            if d.usage_available {
+                d.tokens = d.in + d.out + d.cr + d.reason
+            } else {
+                d.tokens += s.tokens
+            }
+            d.hit = hitRate(cached: d.cr, input: d.in)
+            mergeTokenModels(&d.models, s.models)
+            d.sessions += s.sessions
             d.turns = add(d.turns, s.turns)
             d.tools = add(d.tools, s.tools)
             d.duration = add(d.duration, s.duration)

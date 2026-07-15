@@ -29,6 +29,10 @@ struct DailyCost: Codable, Identifiable {
     var q_out: Int?
     var q_cr: Int?
     var q_reason: Int?
+    var g_in: Int?
+    var g_out: Int?
+    var g_cr: Int?
+    var g_reason: Int?
     var tokens: Int = 0
     var id: String { date }
 }
@@ -269,6 +273,18 @@ struct DashboardView: View {
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
                     Text(String(format: "$%.2f", d.qwencode ?? 0))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
+                }
+                if (d.g_in ?? 0) + (d.g_out ?? 0) + (d.g_cr ?? 0) + (d.g_reason ?? 0) > 0 {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Circle().fill(Theme.grok).frame(width: 6, height: 6)
+                            Text("Grok Build").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.grok)
+                        }
+                        Text("\(Fmt.human((d.g_in ?? 0) + (d.g_out ?? 0) + (d.g_cr ?? 0) + (d.g_reason ?? 0))) tok")
+                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
+                        Text("成本未提供")
+                            .font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.tTertiary)
+                    }
                 }
             }
         }
@@ -684,6 +700,10 @@ struct DashboardView: View {
                   q_out: (lhs.q_out ?? 0) + (rhs.q_out ?? 0),
                   q_cr: (lhs.q_cr ?? 0) + (rhs.q_cr ?? 0),
                   q_reason: (lhs.q_reason ?? 0) + (rhs.q_reason ?? 0),
+                  g_in: (lhs.g_in ?? 0) + (rhs.g_in ?? 0),
+                  g_out: (lhs.g_out ?? 0) + (rhs.g_out ?? 0),
+                  g_cr: (lhs.g_cr ?? 0) + (rhs.g_cr ?? 0),
+                  g_reason: (lhs.g_reason ?? 0) + (rhs.g_reason ?? 0),
                   tokens: lhs.tokens + rhs.tokens)
     }
 
@@ -786,9 +806,11 @@ struct DashboardView: View {
         }
 
         let grok = usage.grok.ranges.get(key)
-        let grokTokens = grok.ctx_used ?? grok.tokens
-        if grokTokens > 0 {
-            out.append(modelCost(name: usage.grok.model ?? "Grok CLI", cost: 0, tool: "grok", tokens: grokTokens))
+        if !grok.models.isEmpty {
+            appendTokenModels(grok.models, tool: "grok", suffix: "Grok Build", to: &out)
+        } else if grok.usage_available && grok.tokens > 0 {
+            out.append(modelCost(name: usage.grok.model ?? "Grok Build", cost: 0,
+                                 tool: "grok", tokens: grok.tokens))
         }
 
         let qoder = usage.qoder.ranges.get(key)
@@ -849,7 +871,7 @@ struct DashboardView: View {
         return claude.in + claude.out + claude.cr + claude.cw
             + codex.in + codex.cached + codex.out
             + gemini.in + gemini.cached + gemini.out + gemini.thoughts
-            + (grok.ctx_used ?? grok.tokens)
+            + (grok.usage_available ? grok.tokens : 0)
             + qoder.in + qoder.cached + qoder.out
             + hermesTotal(usage.hermes.ranges.get(key))
             + tokenUsageTotal(usage.zcode.ranges.get(key))

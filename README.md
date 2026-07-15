@@ -28,7 +28,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪你在 **12 款 AI 编�
 | **Claude Code** | Token（输入/输出/缓存）、成本、配额、模型 |
 | **Codex CLI** | Token、成本、配额、会话 |
 | **Gemini CLI** | Token、思考量、成本、模型 |
-| **Grok CLI** | Token、会话、上下文 |
+| **Grok Build** | Token（输入/输出/缓存/推理）、会话、上下文、延迟 |
 | **Hermes** | Token、成本、缓存命中率、模型 |
 | **OpenClaw** | Token、成本、任务、模型 |
 | **Pi Coding Agent CLI** | Token、成本、缓存命中率、模型、项目 |
@@ -62,7 +62,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪你在 **12 款 AI 编�
 - 随时切换，对比不同时段用量趋势
 
 ### 项目追踪
-- 按项目维度查看 Claude Code / Pi / WorkBuddy / Grok 用量
+- 按项目维度查看 Claude Code / Pi / WorkBuddy / Grok Build 用量
 - 了解每个项目消耗了多少 Token 和成本
 
 ### 多设备同步
@@ -126,7 +126,7 @@ echo '{"sync_dir":"~/.tokei/sync","device_id":"'$(hostname -s)'"}' > ~/.tokei/co
 | Claude Code | `~/.claude/projects/<proj>/<session>.jsonl` |
 | Codex CLI | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` |
 | Gemini CLI | `~/.gemini/gemini-cli/conversations/*.json` |
-| Grok CLI | `~/.grok/sessions/YYYY/MM/DD/*.jsonl` |
+| Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl` + `sessions/*/*/{summary,signals}.json` |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` |
 | OpenClaw | `~/.openclaw/agents/*/sessions/*.jsonl` + SQLite |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` |
@@ -255,7 +255,7 @@ Tokei is a **macOS menu bar app** that tracks usage, cost, and performance acros
 
 **Features:** Real-time monitoring (30s refresh, five menu bar styles, three density modes) · Cost estimation (317 models, OpenRouter pricing) · Dashboard (daily chart, weekly heatmap) · Time ranges (today/week/month/year) · Project-level tracking · Multi-device sync (Git-based, Mac + Linux) · Annual Wrapped · Keep awake · Sit reminder · Privacy-first (local logs only) · [Compare with CodexBar](https://tokei.lanshuagent.com#compare)
 
-**Supported tools:** Claude Code, Codex CLI, Gemini CLI, Grok CLI, Hermes, OpenClaw, Pi Coding Agent CLI, WorkBuddy, OpenCode, Qwen Code, Qoder, QoderWork
+**Supported tools:** Claude Code, Codex CLI, Gemini CLI, Grok Build, Hermes, OpenClaw, Pi Coding Agent CLI, WorkBuddy, OpenCode, Qwen Code, Qoder, QoderWork
 
 For full documentation, visit [tokei.lanshuagent.com](https://tokei.lanshuagent.com).
 

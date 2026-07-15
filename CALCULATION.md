@@ -11,7 +11,7 @@ Tokei 读取本地 AI CLI 工具的日志,统计 token 用量与成本。所有�
 | Claude Code | `~/.claude/*/*.jsonl` | JSONL, `type=assistant` 行含 `message.usage` |
 | Codex | `~/.codex/**/rollout-*.jsonl` | JSONL, `payload.info.last_token_usage` |
 | Gemini CLI | `~/.gemini/*/chats/session-*.json` | JSON, `messages[].tokens` |
-| Grok CLI | `~/.grok/sessions/*/*/summary.json` + `updates.jsonl` | JSON, `_meta.totalTokens` |
+| Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl` + `sessions/*/*/{summary,signals}.json` | JSONL, `shell.turn.inference_done` + 会话指标 |
 | Qoder | `~/Library/Application Support/QoderWork/data/agents.db` | SQLite, `messages.metadata` |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` | SQLite, `sessions` 表 |
 | OpenClaw | `~/.openclaw/tasks/runs.sqlite` | SQLite, `task_runs` 表 |
@@ -95,7 +95,16 @@ Tokei 优先读取逐请求日志以获得进行中会话和小时分布。旧�
 按 `sessionId` 取最后一份快照,用于补齐逐请求日志出现前的历史。同一会话同时存在两种来源时,
 逐请求日志优先,避免重复累计。
 
-**Grok CLI** — 无输入/输出拆分,仅 `totalTokens`(上下文窗口累计,取最大值,非真实消耗量)。
+**Grok Build** — `unified.jsonl` 中每条 `shell.turn.inference_done` 是一次模型调用：
+- 输入 = `prompt_tokens - cached_prompt_tokens`
+- 缓存读 = `cached_prompt_tokens`
+- 输出 = `completion_tokens - reasoning_tokens`
+- 推理 = `reasoning_tokens`
+- 总量 = 输入 + 缓存读 + 输出 + 推理
+
+记录按自身 `ts` 归入日期和小时，并通过 `sid` 关联 `summary.json` 中的模型与项目路径。
+若没有真实 usage 日志，卡片会降级展示 `signals.json` / `updates.jsonl` 的上下文快照，
+但快照不会计入 Dashboard、Wrapped 或项目 token 总量。
 
 **Qoder** — `inputTokens` / `outputTokens` 目前全为 0,仅 `durationMs` 和 `contextUsageRatio` 有值。
 
@@ -107,7 +116,7 @@ Tokei 优先读取逐请求日志以获得进行中会话和小时分布。旧�
 
 两种公式,取决于 `input` 是否包含缓存:
 
-### Claude / Hermes / Pi / WorkBuddy / OpenCode / Qwen Code(input 不含缓存)
+### Claude / Grok Build / Hermes / Pi / WorkBuddy / OpenCode / Qwen Code(input 不含缓存)
 
 ```
 hit% = cache_read / (cache_read + cache_write + input) × 100
@@ -206,9 +215,10 @@ cost = non_cached_input/1M × price_in
 
 Pi 优先使用会话 JSONL 中的 `usage.cost.total`；OpenCode 直接使用消息 JSON 中的 `cost` 字段。若 Pi 成本字段缺失，则按统一价格表用 input/output/cache_read/cache_write 回退估算。
 
-### Grok / Qoder / OpenClaw
+### Grok Build / Qoder / OpenClaw
 
-不估算成本。
+不估算成本。Grok Build 的 OAuth/订阅交互日志通常没有完整成本，缺失值不视为 0 美元；
+只有 token 参与聚合和排行。
 
 ---
 

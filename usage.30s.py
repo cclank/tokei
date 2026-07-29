@@ -420,6 +420,7 @@ _SCAN_CACHE_FILE = os.path.join(_tempfile.gettempdir(), "_tokei_scan_cache.json"
 _SCAN_CACHE_VERSION = 20
 _SCAN_CACHE_MIGRATABLE_VERSION = 19
 _CODEX_EVENT_CACHE_SUFFIX = ".codex-events"
+_CODEX_SCAN_CHECKPOINT_BYTES = 256 * 1024 * 1024
 _GEMINI_DAYS_CACHE_KEY = "_gemini_dashboard_days"
 _GROK_DAYS_CACHE_KEY = "_grok_dashboard_days"
 
@@ -1738,6 +1739,30 @@ def _codex_complete_offset(path, size, chunk_size=64 * 1024):
     return 0
 
 
+def _codex_checkpoint_offset(path, start_offset, complete_offset, checkpoint_bytes=None,
+                             read_size=64 * 1024):
+    """Return a complete-record boundary near the next durable scan checkpoint."""
+    checkpoint_bytes = checkpoint_bytes or _CODEX_SCAN_CHECKPOINT_BYTES
+    target = min(start_offset + checkpoint_bytes, complete_offset)
+    if target >= complete_offset:
+        return complete_offset
+    try:
+        with open(path, "rb", buffering=0) as fh:
+            fh.seek(target)
+            position = target
+            while position < complete_offset:
+                data = fh.read(min(read_size, complete_offset - position))
+                if not data:
+                    break
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    return position + newline + 1
+                position += len(data)
+    except OSError:
+        return complete_offset
+    return complete_offset
+
+
 def _codex_offset_guard(path, offset, guard_size=4096):
     if offset <= 0:
         return ""
@@ -1837,7 +1862,7 @@ def _codex_canonical_file_cache(file_cache):
     return canonical
 
 
-def scan_codex(bounds, cache):
+def scan_codex(bounds, cache, checkpoint=None):
     fc = cache.setdefault("codex", {})
     if _codex_migrate_event_cache(fc):
         cache["_dirty"] = True
@@ -1862,6 +1887,7 @@ def scan_codex(bounds, cache):
     cur_file, cur_mtime = None, -1.0
     stale = set(fc.keys())
     dedupe_paths = set()
+    checkpoint_bytes = 0
     active_root = os.path.realpath(CODEX_DIR) if os.path.isdir(CODEX_DIR) else None
 
     for f in rollout_files:
@@ -1879,10 +1905,11 @@ def scan_codex(bounds, cache):
             cur_mtime = mtime
             cur_file = f
         sig = f"{st.st_mtime_ns}:{size}"
+        complete_offset = _codex_complete_offset(f, size)
         entry = fc.get(f)
         if (not entry or entry.get("sig") != sig or entry.get("model_version") != 2
+                or int(entry.get("parsed_size", -1) or 0) != complete_offset
                 or not _codex_event_cache_ready(f, entry)):
-            complete_offset = _codex_complete_offset(f, size)
             file_id = f"{st.st_dev}:{st.st_ino}"
             append_from = None
             if isinstance(entry, dict) and entry.get("model_version") == 2:
@@ -1915,87 +1942,22 @@ def scan_codex(bounds, cache):
                 file_model = entry.get("active_model")
                 parse_start = append_from
 
-            try:
-                for record_kind, record in _iter_codex_usage_records(
-                        f, start_offset=parse_start, end_offset=complete_offset):
-                    if record_kind == "model":
-                        file_model = record
-                        continue
-                    try:
-                        o = json.loads(record.decode("utf-8", errors="ignore"))
-                    except Exception:
-                        continue
-                    info = (o.get("payload") or {}).get("info") or {}
-                    last = info.get("last_token_usage") or {}
-                    total = info.get("total_token_usage") or {}
-                    total_key = None
-                    duplicate_total = False
-                    if total:
-                        total_key = (total.get("input_tokens", 0) or 0,
-                                     total.get("cached_input_tokens", 0) or 0,
-                                     total.get("output_tokens", 0) or 0,
-                                     total.get("reasoning_output_tokens", 0) or 0)
-                        duplicate_total = total_key == prev_total_key
-                        prev_total_key = total_key
-                        file_last_total = total
-                    ts = parse_ts(o.get("timestamp", ""))
-                    rl = (o.get("payload") or {}).get("rate_limits")
-                    if ts and rl:
-                        ts_iso = ts.isoformat()
-                        if file_g_ts is None or ts_iso > file_g_ts:
-                            file_g_ts = ts_iso
-                            file_g_limits = rl
-                            file_g_plan = rl.get("plan_type")
-                        if rl.get("limit_id") == "codex" and (file_limits_ts is None or ts_iso > file_limits_ts):
-                            file_limits_ts = ts_iso
-                            file_limits = rl
-                            file_plan = rl.get("plan_type")
-                    # Codex may emit the same cumulative snapshot twice; in that case
-                    # last_token_usage is repeated too, so counting it again overstates usage.
-                    if ts and last and not duplicate_total:
-                        dk = ts.astimezone().date().isoformat()
-                        li = last.get("input_tokens", 0) or 0
-                        lc = last.get("cached_input_tokens", 0) or 0
-                        lo = last.get("output_tokens", 0) or 0
-                        lr = last.get("reasoning_output_tokens", 0) or 0
-                        model = _known_id_or_raw(file_model) or "openai/gpt-5.5"
-                        price_model = model if _has_known_price(model) else "openai/gpt-5.5"
-                        cx_base = _raw_price(price_model)
-                        hi = li > 272_000
-                        p_in = cx_base["in"] * (2 if hi else 1)
-                        p_out = cx_base["out"] * (1.5 if hi else 1)
-                        p_cr = cx_base["cache_read"] * (2 if hi else 1)
-                        cost = (li - lc) / 1e6 * p_in + lc / 1e6 * p_cr + lo / 1e6 * p_out
-                        totals = total_key if total_key is not None else (None, None, None, None)
-                        # timestamp, local day, cumulative usage, incremental usage, cost
-                        events.append([ts.isoformat(), dk, *totals, li, lc, lo, lr, cost, model])
-            except OSError:
-                continue
-
             if append_from is None:
-                event_cache_size = _codex_write_event_cache(f, events)
-                metadata = _codex_event_metadata(events)
+                event_cache_size = 0
+                metadata = _codex_event_metadata([])
                 deduped_days = {}
                 drop_count = 0
                 dedupe_open = True
                 was_canonical = False
                 dedupe_paths.add(f)
             else:
-                event_cache_size = _codex_append_event_cache(
-                    f, events, int(entry.get("event_cache_size", 0) or 0))
+                event_cache_size = int(entry.get("event_cache_size", 0) or 0)
                 metadata = {
-                    "event_count": int(entry.get("event_count", 0) or 0) + len(events),
+                    "event_count": int(entry.get("event_count", 0) or 0),
                     "first_keys": entry.get("first_keys") or [],
                     "first_event_ts": entry.get("first_event_ts"),
-                    "last_event_ts": (
-                        str(events[-1][0]) if events else entry.get("last_event_ts")
-                    ),
+                    "last_event_ts": entry.get("last_event_ts"),
                 }
-                if len(metadata["first_keys"]) < 2 and metadata["event_count"]:
-                    prefix_events = list(_iter_codex_cached_events(f, limit=2))
-                    prefix_metadata = _codex_event_metadata(prefix_events)
-                    metadata["first_keys"] = prefix_metadata["first_keys"]
-                    metadata["first_event_ts"] = prefix_metadata["first_event_ts"]
                 deduped_days = entry.get("deduped_days")
                 if not isinstance(deduped_days, dict):
                     deduped_days = dict(entry.get("days") or {})
@@ -2004,34 +1966,130 @@ def scan_codex(bounds, cache):
                 was_canonical = bool(entry.get("canonical"))
                 if dedupe_open:
                     dedupe_paths.add(f)
-                else:
-                    for event in events:
-                        _codex_add_event(deduped_days, event)
 
-            fc[f] = {
-                "sig": sig, "days": entry.get("days", {}) if isinstance(entry, dict) else {},
-                "deduped_days": deduped_days,
-                "session_id": session_id, "forked_from_id": forked_from_id,
-                "limits": file_limits, "limits_ts": file_limits_ts, "plan": file_plan,
-                "g_limits": file_g_limits, "g_ts": file_g_ts, "g_plan": file_g_plan,
-                "last_total": file_last_total, "prev_total_key": prev_total_key,
-                "active_model": file_model, "model_version": 2,
-                "file_id": file_id, "parsed_size": complete_offset,
-                "parsed_guard": _codex_offset_guard(f, complete_offset),
-                "event_cache_size": event_cache_size,
-                "event_count": metadata["event_count"],
-                "first_keys": metadata["first_keys"],
-                "first_event_ts": metadata["first_event_ts"],
-                "last_event_ts": metadata["last_event_ts"],
-                "drop_count": drop_count, "dedupe_open": dedupe_open,
-                "canonical": was_canonical,
-            }
-            cache["_dirty"] = True
+            first_chunk = append_from is None
+            while parse_start < complete_offset:
+                chunk_end = _codex_checkpoint_offset(f, parse_start, complete_offset)
+                events = []
+                try:
+                    for record_kind, record in _iter_codex_usage_records(
+                            f, start_offset=parse_start, end_offset=chunk_end):
+                        if record_kind == "model":
+                            file_model = record
+                            continue
+                        try:
+                            o = json.loads(record.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            continue
+                        info = (o.get("payload") or {}).get("info") or {}
+                        last = info.get("last_token_usage") or {}
+                        total = info.get("total_token_usage") or {}
+                        total_key = None
+                        duplicate_total = False
+                        if total:
+                            total_key = (total.get("input_tokens", 0) or 0,
+                                         total.get("cached_input_tokens", 0) or 0,
+                                         total.get("output_tokens", 0) or 0,
+                                         total.get("reasoning_output_tokens", 0) or 0)
+                            duplicate_total = total_key == prev_total_key
+                            prev_total_key = total_key
+                            file_last_total = total
+                        ts = parse_ts(o.get("timestamp", ""))
+                        rl = (o.get("payload") or {}).get("rate_limits")
+                        if ts and rl:
+                            ts_iso = ts.isoformat()
+                            if file_g_ts is None or ts_iso > file_g_ts:
+                                file_g_ts = ts_iso
+                                file_g_limits = rl
+                                file_g_plan = rl.get("plan_type")
+                            if (rl.get("limit_id") == "codex" and
+                                    (file_limits_ts is None or ts_iso > file_limits_ts)):
+                                file_limits_ts = ts_iso
+                                file_limits = rl
+                                file_plan = rl.get("plan_type")
+                        # Codex may emit the same cumulative snapshot twice; in that case
+                        # last_token_usage is repeated too, so counting it again overstates usage.
+                        if ts and last and not duplicate_total:
+                            dk = ts.astimezone().date().isoformat()
+                            li = last.get("input_tokens", 0) or 0
+                            lc = last.get("cached_input_tokens", 0) or 0
+                            lo = last.get("output_tokens", 0) or 0
+                            lr = last.get("reasoning_output_tokens", 0) or 0
+                            model = _known_id_or_raw(file_model) or "openai/gpt-5.5"
+                            price_model = model if _has_known_price(model) else "openai/gpt-5.5"
+                            cx_base = _raw_price(price_model)
+                            hi = li > 272_000
+                            p_in = cx_base["in"] * (2 if hi else 1)
+                            p_out = cx_base["out"] * (1.5 if hi else 1)
+                            p_cr = cx_base["cache_read"] * (2 if hi else 1)
+                            cost = ((li - lc) / 1e6 * p_in + lc / 1e6 * p_cr +
+                                    lo / 1e6 * p_out)
+                            totals = total_key if total_key is not None else (None, None, None, None)
+                            # timestamp, local day, cumulative usage, incremental usage, cost
+                            events.append([ts.isoformat(), dk, *totals,
+                                           li, lc, lo, lr, cost, model])
+                except OSError:
+                    break
+
+                if first_chunk:
+                    event_cache_size = _codex_write_event_cache(f, events)
+                    metadata = _codex_event_metadata(events)
+                    first_chunk = False
+                else:
+                    event_cache_size = _codex_append_event_cache(
+                        f, events, event_cache_size)
+                    metadata["event_count"] += len(events)
+                    if metadata["first_event_ts"] is None and events:
+                        metadata["first_event_ts"] = str(events[0][0])
+                    if events:
+                        metadata["last_event_ts"] = str(events[-1][0])
+                    if len(metadata["first_keys"]) < 2 and metadata["event_count"]:
+                        prefix_events = list(_iter_codex_cached_events(f, limit=2))
+                        prefix_metadata = _codex_event_metadata(prefix_events)
+                        metadata["first_keys"] = prefix_metadata["first_keys"]
+                        metadata["first_event_ts"] = prefix_metadata["first_event_ts"]
+                    if not dedupe_open:
+                        for event in events:
+                            _codex_add_event(deduped_days, event)
+
+                previous_days = entry.get("days", {}) if isinstance(entry, dict) else {}
+                fc[f] = {
+                    "sig": sig, "days": previous_days,
+                    "deduped_days": deduped_days,
+                    "session_id": session_id, "forked_from_id": forked_from_id,
+                    "limits": file_limits, "limits_ts": file_limits_ts, "plan": file_plan,
+                    "g_limits": file_g_limits, "g_ts": file_g_ts, "g_plan": file_g_plan,
+                    "last_total": file_last_total, "prev_total_key": prev_total_key,
+                    "active_model": file_model, "model_version": 2,
+                    "file_id": file_id, "parsed_size": chunk_end,
+                    "parsed_guard": _codex_offset_guard(f, chunk_end),
+                    "event_cache_size": event_cache_size,
+                    "event_count": metadata["event_count"],
+                    "first_keys": metadata["first_keys"],
+                    "first_event_ts": metadata["first_event_ts"],
+                    "last_event_ts": metadata["last_event_ts"],
+                    "drop_count": drop_count, "dedupe_open": dedupe_open,
+                    "canonical": was_canonical,
+                }
+                cache["_dirty"] = True
+                checkpoint_bytes += chunk_end - parse_start
+                parse_start = chunk_end
+                entry = fc[f]
+                if checkpoint is not None and checkpoint_bytes >= _CODEX_SCAN_CHECKPOINT_BYTES:
+                    checkpoint(cache)
+                    checkpoint_bytes = 0
 
     for p in stale:
         fc.pop(p, None)
         _codex_remove_event_cache(p)
         cache["_dirty"] = True
+
+    # Persist raw-scan progress before the potentially expensive cross-session
+    # deduplication pass. If the app timeout terminates this run, the next one
+    # resumes from the last complete JSONL boundary instead of byte zero.
+    if checkpoint is not None and cache.get("_dirty"):
+        checkpoint(cache)
+        checkpoint_bytes = 0
 
     # A session can briefly exist in active and archived directories together.
     # Select the more complete copy before applying fork/replay deduplication.
@@ -5115,7 +5173,9 @@ def compute():
     cache = _load_scan_cache()
     errors = {}
     cc = _safe_scan("claude", lambda: scan_claude(bounds, cache), _empty_claude, errors)
-    cx = _safe_scan("codex", lambda: scan_codex(bounds, cache), _empty_codex, errors)
+    cx = _safe_scan(
+        "codex", lambda: scan_codex(bounds, cache, checkpoint=_save_scan_cache),
+        _empty_codex, errors)
     gm = _safe_scan("gemini", lambda: scan_gemini(bounds, cache), _empty_gemini, errors)
     gk = _safe_scan("grok", lambda: scan_grok(bounds, cache), _empty_grok, errors)
     qd = _safe_scan("qoderwork", lambda: scan_qoder(bounds, cache), _empty_qoder, errors)

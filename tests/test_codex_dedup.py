@@ -305,6 +305,77 @@ class CodexScanDedupTests(unittest.TestCase):
         self.assertNotIn("events", cache["codex"][cache_path])
         self.assertEqual(usage["models"]["openai/gpt-5.4"]["in"], 30)
 
+    def test_interrupted_large_file_scan_resumes_from_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            path = sessions / "rollout-checkpoint.jsonl"
+            prefix = "\n".join([
+                self.session_meta("checkpoint"),
+                self.turn_context("2024-01-08T00:00:00Z", "gpt-5.4"),
+                self.token_count(
+                    "2024-01-08T00:01:00Z",
+                    (100, 80, 5, 2),
+                    (100, 80, 5, 2),
+                ),
+            ]) + "\n"
+            unrelated = json.dumps({
+                "timestamp": "2024-01-08T00:01:30Z",
+                "type": "response_item",
+                "payload": {"content": "x" * 4096},
+            }) + "\n"
+            suffix = unrelated + self.token_count(
+                "2024-01-08T00:02:00Z",
+                (150, 120, 8, 3),
+                (50, 40, 3, 1),
+            ) + "\n"
+            path.write_text(prefix + suffix, encoding="utf-8")
+            full_size = path.stat().st_size
+            cache_path = root / "scan-cache.json"
+            checkpoint_bytes = len(prefix.encode("utf-8")) - 1
+
+            def save_then_interrupt(cache):
+                USAGE._save_scan_cache(cache)
+                raise RuntimeError("simulated timeout")
+
+            patches = (
+                mock.patch.object(USAGE, "_SCAN_CACHE_FILE", str(cache_path)),
+                mock.patch.object(USAGE, "_CODEX_SCAN_CHECKPOINT_BYTES", checkpoint_bytes),
+                mock.patch.object(USAGE, "CODEX_DIR", str(sessions)),
+                mock.patch.object(USAGE, "CODEX_ARCHIVED_DIR", str(root / "archived")),
+                mock.patch.object(USAGE, "fetch_codex_live_limits", return_value=None),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                with self.assertRaisesRegex(RuntimeError, "simulated timeout"):
+                    USAGE.scan_codex(
+                        self.bounds(), {"v": USAGE._SCAN_CACHE_VERSION},
+                        checkpoint=save_then_interrupt)
+
+                persisted = USAGE._load_scan_cache()
+                source_path = str(path.resolve())
+                partial_size = persisted["codex"][source_path]["parsed_size"]
+                self.assertGreater(partial_size, 0)
+                self.assertLess(partial_size, path.stat().st_size)
+
+                original_iterator = USAGE._iter_codex_usage_records
+                with mock.patch.object(
+                    USAGE, "_iter_codex_usage_records", wraps=original_iterator,
+                ) as iterator:
+                    result = USAGE.scan_codex(
+                        self.bounds(), persisted, checkpoint=USAGE._save_scan_cache)
+
+                stored = json.loads(cache_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(iterator.call_args_list[0].kwargs["start_offset"], partial_size)
+        usage = result["ranges"]["all"]
+        self.assertEqual(usage["in"], 150)
+        self.assertEqual(usage["cached"], 120)
+        self.assertEqual(usage["out"], 8)
+        self.assertEqual(usage["reason"], 3)
+        self.assertEqual(stored["codex"][source_path]["parsed_size"], full_size)
+        self.assertEqual(stored["codex"][source_path]["event_count"], 2)
+
     def test_missing_event_sidecar_rebuilds_unchanged_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -191,10 +191,13 @@ struct PanelView: View {
                         Text("Tokei")
                             .font(.system(size: 15, weight: .bold, design: .rounded))
                             .tracking(0.5)
+                            .lineLimit(1)
                         Text("知度 · AI 用量")
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.tTertiary)
+                            .lineLimit(1)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .contentShape(Rectangle())
             }

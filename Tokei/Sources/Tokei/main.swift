@@ -225,7 +225,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .applicationDefined
-        popover.animates = true
+        // The panel can be nearly screen-height and contains a full SwiftUI card tree.
+        // NSPopover's native animation lays out that entire tree synchronously while
+        // opening, which makes a menu-bar click feel delayed. Show it immediately;
+        // lightweight in-panel transitions remain available where they add context.
+        popover.animates = false
 
         // 启动时先把 Qoder IDE / Grok 实时额度开关落盘到 config.json,
         // 确保随后的 refresh() 触发的 Python 扫描能读到正确配置。

@@ -166,7 +166,7 @@ struct RingGauge: View {
             }
         }
         .frame(width: size, height: size)
-        .animation(.easeOut(duration: 0.5), value: value)
+        .animation(.easeOut(duration: 0.18), value: value)
     }
 }
 
@@ -184,7 +184,7 @@ struct MiniBar: View {
             }
         }
         .frame(height: 5)
-        .animation(.easeOut(duration: 0.45), value: value)
+        .animation(.easeOut(duration: 0.18), value: value)
     }
 }
 
@@ -293,11 +293,18 @@ struct CostHeadline: View {
 // 自定义滑动分段控件(替代原生 segmented),选中态滑动高亮。
 struct SegmentedTabs: View {
     @Binding var sel: RangeKey
+    @State private var highlighted: RangeKey
     @Namespace private var ns
+
+    init(sel: Binding<RangeKey>) {
+        _sel = sel
+        _highlighted = State(initialValue: sel.wrappedValue)
+    }
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(RangeKey.displayCases) { k in
-                let on = k == sel
+                let on = k == highlighted
                 Text(k.label)
                     .font(.system(size: 12, weight: on ? .semibold : .regular))
                     .foregroundStyle(on ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
@@ -316,7 +323,9 @@ struct SegmentedTabs: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { sel = k }
+                        guard sel != k else { return }
+                        sel = k
+                        withAnimation(.easeOut(duration: 0.18)) { highlighted = k }
                     }
             }
         }
@@ -325,6 +334,10 @@ struct SegmentedTabs: View {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .fill(Color.primary.opacity(0.06))
         )
+        .onChange(of: sel) { value in
+            guard highlighted != value else { return }
+            highlighted = value
+        }
     }
 }
 

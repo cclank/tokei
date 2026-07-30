@@ -176,7 +176,7 @@ struct PanelView: View {
     var header: some View {
         HStack(spacing: 9) {
             Button {
-                if mode != .cards { withAnimation(.easeInOut(duration: 0.35)) { mode = .cards } }
+                if mode != .cards { mode = .cards }
             } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "timer")
@@ -218,7 +218,7 @@ struct PanelView: View {
                 .font(.system(size: 9.5, design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
             Button {
-                withAnimation(.easeInOut(duration: 0.35)) { mode = mode == .projects ? .cards : .projects }
+                mode = mode == .projects ? .cards : .projects
             } label: {
                 Image(systemName: "folder")
                     .font(.system(size: 11, weight: .medium))
@@ -230,9 +230,7 @@ struct PanelView: View {
             .buttonStyle(.plain)
             .tip("项目足迹")
             Button {
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    mode = mode == .quotaHistory ? .cards : .quotaHistory
-                }
+                mode = mode == .quotaHistory ? .cards : .quotaHistory
             } label: {
                 Image(systemName: "chart.xyaxis.line")
                     .font(.system(size: 11, weight: .medium))
@@ -244,7 +242,7 @@ struct PanelView: View {
             .buttonStyle(.plain)
             .tip("额度曲线")
             Button {
-                withAnimation(.easeInOut(duration: 0.35)) { mode = mode == .dashboard ? .cards : .dashboard }
+                mode = mode == .dashboard ? .cards : .dashboard
             } label: {
                 Image(systemName: "chart.bar")
                     .font(.system(size: 11, weight: .medium))
@@ -256,7 +254,7 @@ struct PanelView: View {
             .buttonStyle(.plain)
             .tip("数据面板")
             Button {
-                withAnimation(.easeInOut(duration: 0.35)) { mode = mode == .settings ? .cards : .settings }
+                mode = mode == .settings ? .cards : .settings
             } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 11, weight: .medium))
@@ -350,7 +348,7 @@ struct PanelView: View {
     }
 
     private func cardContentIdentity(for item: ToolCardItem) -> String {
-        "\(item.id):\(sel.rawValue):\(store.syncEnabled):\(store.showAllDevices)"
+        "\(item.id):\(store.syncEnabled):\(store.showAllDevices)"
     }
 
     // MARK: - Claude 卡片
@@ -2034,7 +2032,7 @@ struct PanelView: View {
             }
             updatePill
             Button {
-                withAnimation(.easeInOut(duration: 0.25)) { mode = .cards }
+                mode = .cards
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))

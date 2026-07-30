@@ -91,6 +91,9 @@ final class Store: ObservableObject {
             let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
             self.lastUpdated = "更新 " + f.string(from: Date())
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
+            DispatchQueue.main.async {
+                (NSApp.delegate as? AppDelegate)?.prewarmPopoverContentIfNeeded()
+            }
             if !self.refreshPending && !self.dashboardPrewarmStarted {
                 self.dashboardPrewarmStarted = true
                 DashboardRepository.shared.load(.all, force: true)
@@ -206,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     var timer: Timer?
     var globalMouseMonitor: Any?
+    private var didPrewarmPopoverContent = false
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -225,11 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .applicationDefined
-        // The panel can be nearly screen-height and contains a full SwiftUI card tree.
-        // NSPopover's native animation lays out that entire tree synchronously while
-        // opening, which makes a menu-bar click feel delayed. Show it immediately;
-        // lightweight in-panel transitions remain available where they add context.
-        popover.animates = false
+        popover.animates = true
 
         // 启动时先把 Qoder IDE / Grok 实时额度开关落盘到 config.json,
         // 确保随后的 refresh() 触发的 Python 扫描能读到正确配置。
@@ -386,6 +386,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let accessibility = summary.isEmpty ? "Tokei" : "Tokei · \(summary)"
         b.toolTip = accessibility
         b.setAccessibilityLabel(accessibility)
+    }
+
+    func prewarmPopoverContentIfNeeded() {
+        guard !didPrewarmPopoverContent,
+              !popover.isShown,
+              let contentView = popover.contentViewController?.view else { return }
+
+        didPrewarmPopoverContent = true
+        let size = contentView.fittingSize
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else {
+            didPrewarmPopoverContent = false
+            return
+        }
+        contentView.setFrameSize(size)
+        contentView.layoutSubtreeIfNeeded()
     }
 
     private func fitStatusItemWidth(_ button: NSStatusBarButton) {

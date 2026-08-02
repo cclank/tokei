@@ -252,6 +252,45 @@ class CodexScanDedupTests(unittest.TestCase):
         self.assertEqual(models["openai/gpt-5.5"]["in"], 10)
         self.assertEqual(models["openai/gpt-5.5"]["cr"], 40)
 
+    def test_scan_keeps_unknown_gpt56_variant_identity(self):
+        """gpt-5.6-luna must bucket as itself, not collapse into openai/gpt-5.5."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-luna.jsonl"
+            path.write_text("\n".join([
+                self.session_meta("luna"),
+                self.turn_context("2024-01-08T00:00:00Z", "gpt-5.6-luna"),
+                self.token_count("2024-01-08T00:01:00Z", (100, 80, 10, 4), (100, 80, 10, 4)),
+                self.turn_context("2024-01-08T00:02:00Z", "gpt-5.6-terra"),
+                self.token_count("2024-01-08T00:03:00Z", (150, 120, 15, 6), (50, 40, 5, 2)),
+            ]) + "\n", encoding="utf-8")
+            bounds = self.bounds()
+            old_dir = USAGE.CODEX_DIR
+            old_archive_dir = USAGE.CODEX_ARCHIVED_DIR
+            USAGE.CODEX_DIR = tmp
+            USAGE.CODEX_ARCHIVED_DIR = str(Path(tmp) / "archived_sessions")
+            try:
+                with mock.patch.object(USAGE, "fetch_codex_live_limits", return_value=None):
+                    result = USAGE.scan_codex(bounds, {"v": USAGE._SCAN_CACHE_VERSION})
+            finally:
+                USAGE.CODEX_DIR = old_dir
+                USAGE.CODEX_ARCHIVED_DIR = old_archive_dir
+
+        models = result["ranges"]["all"]["models"]
+        self.assertIn("openai/gpt-5.6-luna", models)
+        self.assertIn("openai/gpt-5.6-terra", models)
+        self.assertNotIn("openai/gpt-5.5", models)
+        self.assertEqual(models["openai/gpt-5.6-luna"]["in"], 20)
+        self.assertEqual(models["openai/gpt-5.6-luna"]["cr"], 80)
+        self.assertEqual(models["openai/gpt-5.6-terra"]["in"], 10)
+        self.assertEqual(models["openai/gpt-5.6-terra"]["cr"], 40)
+        # Cost may use gpt-5.5 family price, but identity stays 5.6-*.
+        self.assertGreater(models["openai/gpt-5.6-luna"]["cost"], 0)
+        formatted = USAGE._format_token_models(models)
+        names = {row["name"] for row in formatted}
+        self.assertIn("GPT-5.6 Luna", names)
+        self.assertIn("GPT-5.6 Terra", names)
+        self.assertNotIn("GPT-5.5", names)
+
     def test_scan_parses_only_appended_codex_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-growing.jsonl"
@@ -565,7 +604,7 @@ class ScanCacheMigrationTests(unittest.TestCase):
                         "events": [first, second],
                         "days": {},
                         "session_id": "migrate",
-                        "model_version": 2,
+                        "model_version": USAGE._CODEX_MODEL_VERSION,
                         "parsed_size": 0,
                     },
                 },

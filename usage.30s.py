@@ -247,7 +247,11 @@ def _resolve_id(model: str):
 
 
 def _known_id_or_raw(model: str):
-    """Return a canonical priced ID when known, preserving unknown model names."""
+    """Identity for bucketing/display: priced canonical when known, else keep real id.
+
+    Family/default price fallbacks belong in `_resolve_id` / `_raw_price` only.
+    Unknown variants such as gpt-5.6-luna must not be rewritten to openai/gpt-5.5.
+    """
     s = (model or "").strip()
     if not s or s.lower() == "<synthetic>":
         return None
@@ -256,13 +260,8 @@ def _known_id_or_raw(model: str):
     norm = _normalize(s)
     if norm and (norm in _OV_MODELS or norm in _PRICING_DB or norm in _DEFAULT_PRICES):
         return norm
-    low = s.lower()
-    if "gemini" in low:
-        return "google/gemini-3.1-pro-preview" if "pro" in low else "google/gemini-3.5-flash"
-    for keyword, representative in _FAMILY:
-        if keyword in low:
-            return representative
-    return s
+    # Preserve identity (prefer normalized openrouter-style id when available).
+    return norm or s
 
 
 def _has_known_price(model: str):
@@ -270,13 +269,20 @@ def _has_known_price(model: str):
 
 
 def _pricing_id(model: str):
-    canonical = _known_id_or_raw(model)
-    if canonical and (canonical in _OV_MODELS or canonical in _PRICING_DB or canonical in _DEFAULT_PRICES):
-        return canonical
+    """Return an id that has a price row, without rewriting display identity."""
+    s = (model or "").strip()
+    if not s or s.lower() == "<synthetic>":
+        return None
+    if s in _OV_ALIASES:
+        alias = _OV_ALIASES[s]
+        if alias in _OV_MODELS or alias in _PRICING_DB or alias in _DEFAULT_PRICES:
+            return alias
+    norm = _normalize(s)
+    if norm and (norm in _OV_MODELS or norm in _PRICING_DB or norm in _DEFAULT_PRICES):
+        return norm
     # ZCode currently reports GLM-5.2, whose public price is not listed yet.
     # Use the documented GLM-5.1 equivalent until the pricing feed adds 5.2.
-    normalized = _normalize(model)
-    if normalized == "z-ai/glm-5.2" and "z-ai/glm-5.1" in _PRICING_DB:
+    if norm == "z-ai/glm-5.2" and "z-ai/glm-5.1" in _PRICING_DB:
         return "z-ai/glm-5.1"
     return None
 
@@ -325,10 +331,25 @@ def nice_model(m: str) -> str:
             mt = re.search(r"(\d+)-(\d+)", s)
             return f"{disp} {mt.group(1)}.{mt.group(2)}" if mt else disp
     if "gpt" in s:
-        mt = re.search(r"gpt[- ]?(\d+(?:\.\d+)?)", s)
-        version = mt.group(1) if mt else ""
-        suffix = " Mini" if "mini" in s else ""
-        return f"GPT-{version}{suffix}" if version else "GPT"
+        name = m.split("/")[-1]
+        mt = re.search(r"gpt[- ]?(\d+(?:\.\d+)?)", name, re.I)
+        if not mt:
+            return "GPT"
+        version = mt.group(1)
+        after = name[mt.end():]
+        parts = [p for p in re.split(r"[-_\s]+", after) if p]
+        skip = {"free", "preview", "latest"}
+        labels = [f"GPT-{version}"]
+        for part in parts:
+            pl = part.lower()
+            if pl in skip:
+                continue
+            if pl in ("mini", "nano", "pro", "codex", "chat"):
+                labels.append(pl[:1].upper() + pl[1:])
+            else:
+                # Variant codenames: luna / terra / sol → Luna / Terra / Sol
+                labels.append(part[:1].upper() + part[1:].lower() if part[:1].isalpha() else part)
+        return " ".join(labels)
     if "mimo" in s:
         name = m.split("/")[-1]
         version = re.sub(r"^mimo[- ]?v?", "", name, flags=re.I).strip()
@@ -417,8 +438,12 @@ def human(n: float) -> str:
 # ---------- 增量扫描缓存 ----------
 import tempfile as _tempfile
 _SCAN_CACHE_FILE = os.path.join(_tempfile.gettempdir(), "_tokei_scan_cache.json")
-_SCAN_CACHE_VERSION = 20
-_SCAN_CACHE_MIGRATABLE_VERSION = 19
+_SCAN_CACHE_VERSION = 21
+# Older versions that can be upgraded in place (sidecar migration, etc.).
+# Wrong gpt-5.6 identity buckets are fixed by _CODEX_MODEL_VERSION bump below.
+_SCAN_CACHE_MIGRATABLE_VERSIONS = frozenset({19, 20})
+_SCAN_CACHE_MIGRATABLE_VERSION = 20  # backward-compat alias for tests/tools
+_CODEX_MODEL_VERSION = 3
 _CODEX_EVENT_CACHE_SUFFIX = ".codex-events"
 _GEMINI_DAYS_CACHE_KEY = "_gemini_dashboard_days"
 _GROK_DAYS_CACHE_KEY = "_grok_dashboard_days"
@@ -434,14 +459,14 @@ def _load_scan_cache():
         with open(_SCAN_CACHE_FILE, "r") as f:
             c = json.load(f)
         version = c.get("v")
-        if version not in (_SCAN_CACHE_VERSION, _SCAN_CACHE_MIGRATABLE_VERSION):
-            _remove_codex_event_cache_dir()
-            return {"v": _SCAN_CACHE_VERSION, "_dirty": True}
-        if version == _SCAN_CACHE_MIGRATABLE_VERSION:
+        if version == _SCAN_CACHE_VERSION:
+            c["_dirty"] = False
+        elif version in _SCAN_CACHE_MIGRATABLE_VERSIONS:
             c["v"] = _SCAN_CACHE_VERSION
             c["_dirty"] = True
         else:
-            c["_dirty"] = False
+            _remove_codex_event_cache_dir()
+            return {"v": _SCAN_CACHE_VERSION, "_dirty": True}
         c["_keys"] = {k for k in c if not k.startswith("_")}
         return c
     except Exception:
@@ -1880,12 +1905,13 @@ def scan_codex(bounds, cache):
             cur_file = f
         sig = f"{st.st_mtime_ns}:{size}"
         entry = fc.get(f)
-        if (not entry or entry.get("sig") != sig or entry.get("model_version") != 2
+        if (not entry or entry.get("sig") != sig
+                or entry.get("model_version") != _CODEX_MODEL_VERSION
                 or not _codex_event_cache_ready(f, entry)):
             complete_offset = _codex_complete_offset(f, size)
             file_id = f"{st.st_dev}:{st.st_ino}"
             append_from = None
-            if isinstance(entry, dict) and entry.get("model_version") == 2:
+            if isinstance(entry, dict) and entry.get("model_version") == _CODEX_MODEL_VERSION:
                 old_offset = int(entry.get("parsed_size", 0) or 0)
                 if (entry.get("file_id") == file_id and old_offset <= complete_offset
                         and entry.get("parsed_guard") == _codex_offset_guard(f, old_offset)
@@ -1958,8 +1984,12 @@ def scan_codex(bounds, cache):
                         lc = last.get("cached_input_tokens", 0) or 0
                         lo = last.get("output_tokens", 0) or 0
                         lr = last.get("reasoning_output_tokens", 0) or 0
-                        model = _known_id_or_raw(file_model) or "openai/gpt-5.5"
-                        price_model = model if _has_known_price(model) else "openai/gpt-5.5"
+                        # Keep real model identity for buckets/display; price may fall back.
+                        model = _known_id_or_raw(file_model) or "unknown"
+                        if _has_known_price(model):
+                            price_model = model
+                        else:
+                            price_model = _resolve_id(file_model or model) or "openai/gpt-5.5"
                         cx_base = _raw_price(price_model)
                         hi = li > 272_000
                         p_in = cx_base["in"] * (2 if hi else 1)
@@ -2015,7 +2045,7 @@ def scan_codex(bounds, cache):
                 "limits": file_limits, "limits_ts": file_limits_ts, "plan": file_plan,
                 "g_limits": file_g_limits, "g_ts": file_g_ts, "g_plan": file_g_plan,
                 "last_total": file_last_total, "prev_total_key": prev_total_key,
-                "active_model": file_model, "model_version": 2,
+                "active_model": file_model, "model_version": _CODEX_MODEL_VERSION,
                 "file_id": file_id, "parsed_size": complete_offset,
                 "parsed_guard": _codex_offset_guard(f, complete_offset),
                 "event_cache_size": event_cache_size,
@@ -6125,8 +6155,8 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
     codex_out = sum(d["x_out"] for d in days.values())
     codex_reason = sum(d["x_reason"] for d in days.values())
     if codex_total > 0 and not any(v.get("tool") == "codex" for v in models.values()):
-        models["GPT-5.5 (Codex)"] = {"cost": round(codex_total, 2), "in": codex_in, "out": codex_out,
-                                      "reason": codex_reason, "tool": "codex"}
+        models["Codex"] = {"cost": round(codex_total, 2), "in": codex_in, "out": codex_out,
+                           "reason": codex_reason, "tool": "codex"}
 
     daily = [{"date": dk, "claude": round(v["claude"], 2), "codex": round(v["codex"], 2),
               "gemini": round(v["gemini"], 2), "hermes": round(v["hermes"], 2),

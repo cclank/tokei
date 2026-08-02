@@ -835,7 +835,7 @@ struct DashboardView: View {
                 }
             }
         } else if codexTokens > 0 || codex.cost > 0 {
-            out.append(modelCost(name: "GPT-5.5 (Codex)", cost: codex.cost, tool: "codex",
+            out.append(modelCost(name: "Codex", cost: codex.cost, tool: "codex",
                                  input: codex.in + codex.cached, out: codex.out,
                                  reason: codex.reason, tokens: codexTokens))
         }

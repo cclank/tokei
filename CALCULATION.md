@@ -158,9 +158,14 @@ hit% = cached / input × 100
 本地模型名 → OpenRouter canonical ID:
 - `claude-opus-4-8` → `anthropic/claude-opus-4.8`
 - `gpt-5.5` → `openai/gpt-5.5`
+- `gpt-5.6-luna` → `openai/gpt-5.6-luna`（展示/分桶保留真实 id）
 - `gemini-3.5-flash` → `google/gemini-3.5-flash`
 - `:free` / `-free` 后缀去除,按基础价计算
-- 未知模型按 `anthropic/claude-opus-4.8` 兜底(偏保守)
+
+**身份 vs 计价（分开处理）:**
+- 用量分桶与界面展示使用真实模型 id（如 `openai/gpt-5.6-luna` → 显示 `GPT-5.6 Luna`）
+- 价目表无该 id 时，**仅查价**按家族关键字回退（如未知 `gpt-5*` → `openai/gpt-5.5` 单价），不把统计身份改写成回退 id
+- 完全无法归类时，查价才按 `anthropic/claude-opus-4.8` 兜底(偏保守)
 
 ### Claude Code 成本公式
 

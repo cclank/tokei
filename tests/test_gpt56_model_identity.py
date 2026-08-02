@@ -47,6 +47,11 @@ class Gpt56ModelIdentityTests(unittest.TestCase):
             "gpt-5.6-sol": "GPT-5.6 Sol",
             "openai/gpt-5.5": "GPT-5.5",
             "gpt-5-mini": "GPT-5 Mini",
+            # Glued letter versions must not become "GPT-4 O"
+            "gpt-4o": "GPT-4o",
+            "openai/gpt-4o": "GPT-4o",
+            "gpt-4o-mini": "GPT-4o Mini",
+            "gpt-4o-2024-08-06": "GPT-4o 2024-08-06",
         }
         for raw, display in cases.items():
             self.assertEqual(USAGE.nice_model(raw), display, raw)

@@ -332,14 +332,22 @@ def nice_model(m: str) -> str:
             return f"{disp} {mt.group(1)}.{mt.group(2)}" if mt else disp
     if "gpt" in s:
         name = m.split("/")[-1]
-        mt = re.search(r"gpt[- ]?(\d+(?:\.\d+)?)", name, re.I)
+        # Keep glued letter suffixes on the version (4o → 4o), not "4 O".
+        # Separators still split codenames (5.6-luna) and tiers (4o-mini).
+        mt = re.search(r"gpt[- ]?(\d+(?:\.\d+)?[a-z]*)", name, re.I)
         if not mt:
             return "GPT"
-        version = mt.group(1)
+        version_raw = mt.group(1)
+        vm = re.match(r"(\d+(?:\.\d+)?)([a-zA-Z]*)$", version_raw)
+        version = (vm.group(1) + vm.group(2).lower()) if vm else version_raw.lower()
         after = name[mt.end():]
         parts = [p for p in re.split(r"[-_\s]+", after) if p]
         skip = {"free", "preview", "latest"}
         labels = [f"GPT-{version}"]
+        # Snapshot tails like 2024-08-06 stay as one token, not "2024 08 06".
+        if parts and all(p.isdigit() for p in parts):
+            labels.append("-".join(parts))
+            return " ".join(labels)
         for part in parts:
             pl = part.lower()
             if pl in skip:

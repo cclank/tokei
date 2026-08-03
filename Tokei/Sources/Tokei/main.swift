@@ -73,9 +73,11 @@ final class Store: ObservableObject {
             var allDevices = local
             if self.syncEnabled {
                 let p: [PeerDevice]
-                if self.syncing {
+                if self.syncing && !self.peers.isEmpty {
                     p = self.peers
                 } else {
+                    // 同步进行中若内存 peers 为空(如启动初期),仍从磁盘读快照,
+                    // 避免首次刷新只显示本机数据造成"暂无数据→过一会才有"的闪变
                     let report = self.syncManager.loadPeers()
                     p = report.peers
                     self.peerLoadIssues = report.issues

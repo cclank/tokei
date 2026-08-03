@@ -324,6 +324,8 @@ def nice_model(m: str) -> str:
     """claude-opus-4-7 → Opus 4.7;<synthetic> → 合成;其它去前缀/-free 后美化。"""
     if not m or m == "<synthetic>":
         return "合成"
+    if m == "unknown":
+        return "未知"
     import re
     s = m.lower()
     for key, disp in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")):
@@ -1992,12 +1994,16 @@ def scan_codex(bounds, cache):
                         lc = last.get("cached_input_tokens", 0) or 0
                         lo = last.get("output_tokens", 0) or 0
                         lr = last.get("reasoning_output_tokens", 0) or 0
-                        # Keep real model identity for buckets/display; price may fall back.
+                        # 无模型字段(老版本 CLI 日志/截断会话)标为 unknown,不冒充 gpt-5.5。
+                        # 分桶/展示保留真实 id；无价时查价可回退(有 file_model 走 _resolve_id,
+                        # 否则 Codex 默认按 gpt-5.5 保守估算)。
                         model = _known_id_or_raw(file_model) or "unknown"
                         if _has_known_price(model):
                             price_model = model
+                        elif file_model:
+                            price_model = _resolve_id(file_model) or "openai/gpt-5.5"
                         else:
-                            price_model = _resolve_id(file_model or model) or "openai/gpt-5.5"
+                            price_model = "openai/gpt-5.5"
                         cx_base = _raw_price(price_model)
                         hi = li > 272_000
                         p_in = cx_base["in"] * (2 if hi else 1)

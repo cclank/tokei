@@ -321,6 +321,8 @@ def nice_model(m: str) -> str:
         return "合成"
     if m == "unknown":
         return "未知"
+    if m.startswith("codex-runtime/"):
+        return "Codex 运行时：" + m.split("/", 1)[1].replace("-", " ")
     import re
     s = m.lower()
     for key, disp in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")):
@@ -425,8 +427,8 @@ def human(n: float) -> str:
 # ---------- 增量扫描缓存 ----------
 import tempfile as _tempfile
 _SCAN_CACHE_FILE = os.path.join(_tempfile.gettempdir(), "_tokei_scan_cache.json")
-_SCAN_CACHE_VERSION = 20
-_SCAN_CACHE_MIGRATABLE_VERSION = 19
+_SCAN_CACHE_VERSION = 21
+_SCAN_CACHE_MIGRATABLE_VERSIONS = (19, 20)
 _CODEX_EVENT_CACHE_SUFFIX = ".codex-events"
 _GEMINI_DAYS_CACHE_KEY = "_gemini_dashboard_days"
 _GROK_DAYS_CACHE_KEY = "_grok_dashboard_days"
@@ -442,10 +444,10 @@ def _load_scan_cache():
         with open(_SCAN_CACHE_FILE, "r") as f:
             c = json.load(f)
         version = c.get("v")
-        if version not in (_SCAN_CACHE_VERSION, _SCAN_CACHE_MIGRATABLE_VERSION):
+        if version not in (_SCAN_CACHE_VERSION, *_SCAN_CACHE_MIGRATABLE_VERSIONS):
             _remove_codex_event_cache_dir()
             return {"v": _SCAN_CACHE_VERSION, "_dirty": True}
-        if version == _SCAN_CACHE_MIGRATABLE_VERSION:
+        if version in _SCAN_CACHE_MIGRATABLE_VERSIONS:
             c["v"] = _SCAN_CACHE_VERSION
             c["_dirty"] = True
         else:
@@ -1796,6 +1798,25 @@ def _codex_session_meta(path, max_lines=20, max_line_bytes=2 * 1024 * 1024):
     return None, None
 
 
+def _codex_runtime_label(rate_limits):
+    """Return the token event's runtime bucket without presenting it as the selected model.
+
+    `token_count` snapshots do not contain the model chosen in the UI.  In a
+    long-lived session, the most recent `turn_context` can therefore be stale
+    when a later snapshot is emitted.  A per-event `limit_name` is the most
+    specific attribution signal available, but it is a runtime/quota label,
+    not necessarily the selected model name.
+    """
+    if not isinstance(rate_limits, dict):
+        return None
+    name = str(rate_limits.get("limit_name") or "").strip()
+    if not name:
+        return None
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return f"codex-runtime/{slug}" if slug else None
+
+
 def _codex_rollout_files():
     roots = _existing_dirs(
         _path_candidates("TOKEI_CODEX_DIR", CODEX_DIR) +
@@ -1888,12 +1909,12 @@ def scan_codex(bounds, cache):
             cur_file = f
         sig = f"{st.st_mtime_ns}:{size}"
         entry = fc.get(f)
-        if (not entry or entry.get("sig") != sig or entry.get("model_version") != 2
+        if (not entry or entry.get("sig") != sig or entry.get("model_version") != 3
                 or not _codex_event_cache_ready(f, entry)):
             complete_offset = _codex_complete_offset(f, size)
             file_id = f"{st.st_dev}:{st.st_ino}"
             append_from = None
-            if isinstance(entry, dict) and entry.get("model_version") == 2:
+            if isinstance(entry, dict) and entry.get("model_version") == 3:
                 old_offset = int(entry.get("parsed_size", 0) or 0)
                 if (entry.get("file_id") == file_id and old_offset <= complete_offset
                         and entry.get("parsed_guard") == _codex_offset_guard(f, old_offset)
@@ -1966,9 +1987,13 @@ def scan_codex(bounds, cache):
                         lc = last.get("cached_input_tokens", 0) or 0
                         lo = last.get("output_tokens", 0) or 0
                         lr = last.get("reasoning_output_tokens", 0) or 0
-                        # 无模型字段(老版本 CLI 日志/截断会话)标为 unknown,不冒充 gpt-5.5;
-                        # 计费仍按 gpt-5.5 保守估算(下行 price_model 兜底)
-                        model = _known_id_or_raw(file_model) or "unknown"
+                        # token_count 没有选择模型字段。优先使用事件自身的
+                        # 运行时/配额标签，避免长会话仍用旧 turn_context 误归因；
+                        # 运行时标签单独展示，不冒充为 UI 选择的模型名称。
+                        model = (_codex_runtime_label(rl)
+                                 or _known_id_or_raw(file_model)
+                                 or "unknown")
+                        # 运行时标签不对应公开定价模型，计费仍使用保守兜底。
                         price_model = model if _has_known_price(model) else "openai/gpt-5.5"
                         cx_base = _raw_price(price_model)
                         hi = li > 272_000
@@ -2025,7 +2050,7 @@ def scan_codex(bounds, cache):
                 "limits": file_limits, "limits_ts": file_limits_ts, "plan": file_plan,
                 "g_limits": file_g_limits, "g_ts": file_g_ts, "g_plan": file_g_plan,
                 "last_total": file_last_total, "prev_total_key": prev_total_key,
-                "active_model": file_model, "model_version": 2,
+                "active_model": file_model, "model_version": 3,
                 "file_id": file_id, "parsed_size": complete_offset,
                 "parsed_guard": _codex_offset_guard(f, complete_offset),
                 "event_cache_size": event_cache_size,

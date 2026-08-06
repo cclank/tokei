@@ -255,7 +255,7 @@ class CodexScanDedupTests(unittest.TestCase):
         self.assertEqual(models["openai/gpt-5.5"]["in"], 10)
         self.assertEqual(models["openai/gpt-5.5"]["cr"], 40)
 
-    def test_scan_prefers_per_event_runtime_label_over_stale_turn_context(self):
+    def test_scan_ignores_runtime_quota_label_for_model_attribution(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-runtime-label.jsonl"
             path.write_text("\n".join([
@@ -280,8 +280,8 @@ class CodexScanDedupTests(unittest.TestCase):
                 USAGE.CODEX_ARCHIVED_DIR = old_archive_dir
 
         models = result["ranges"]["all"]["models"]
-        self.assertIn("codex-runtime/gpt-5-3-codex-spark", models)
-        self.assertNotIn("openai/gpt-5.5", models)
+        self.assertIn("openai/gpt-5.5", models)
+        self.assertNotIn("codex-runtime/gpt-5-3-codex-spark", models)
 
     def test_scan_parses_only_appended_codex_records(self):
         with tempfile.TemporaryDirectory() as tmp:

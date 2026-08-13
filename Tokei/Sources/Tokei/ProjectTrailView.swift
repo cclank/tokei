@@ -255,6 +255,7 @@ struct ProjectTrailView: View {
         case "mimocode": return Theme.mimocode
         case "pi": return Theme.pi
         case "workbuddy": return Theme.workbuddy
+        case "deepseek_harness": return Theme.deepseekHarness
         default: return Theme.tTertiary
         }
     }

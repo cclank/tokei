@@ -17,6 +17,7 @@ struct PanelView: View {
     @State private var workBuddyModelsOpen = false
     @State private var openCodeModelsOpen = false
     @State private var qwenCodeModelsOpen = false
+    @State private var deepSeekHarnessModelsOpen = false
     @State private var expandedModels: Set<String> = []
     @State private var mode: PanelMode = .cards
     @State private var trailProjects: [TrailProject]?
@@ -44,6 +45,7 @@ struct PanelView: View {
     @AppStorage("showWorkBuddy") private var showWorkBuddy = true
     @AppStorage("showOpenCode") private var showOpenCode = true
     @AppStorage("showQwenCode") private var showQwenCode = true
+    @AppStorage("showDeepSeekHarness") private var showDeepSeekHarness = true
     /// 默认关闭：Grok 额度只读本地日志；开启后才用登录凭据请求实时账单接口。
     @AppStorage("grokLiveQuotaEnabled") private var grokLiveQuotaEnabled = false
     /// 菜单栏额度来源（与显示卡片独立）。Grok 默认关，避免新额度源抢占状态栏。
@@ -53,7 +55,7 @@ struct PanelView: View {
 
     private var visibleCount: Int {
         [showClaude, showCodex, showGemini, showGrok, showQoder, showQoderWork, showQoderCli, showHermes, showZcode, showMimoCode,
-         showOpenClaw, showPi, showWorkBuddy, showOpenCode, showQwenCode].filter { $0 }.count
+         showOpenClaw, showPi, showWorkBuddy, showOpenCode, showQwenCode, showDeepSeekHarness].filter { $0 }.count
     }
     private var hasMultipleDevices: Bool { store.syncEnabled && !store.peers.isEmpty }
     private var useWide: Bool { visibleCount > 2 }
@@ -287,6 +289,7 @@ struct PanelView: View {
         let lr = u.openclaw.ranges.get(sel), pr = u.pi.ranges.get(sel)
         let wr = u.workbuddy.ranges.get(sel), or = u.opencode.ranges.get(sel)
         let qcr = u.qwencode.ranges.get(sel)
+        let dshr = u.deepseek_harness.ranges.get(sel)
         return [
             ToolCardItem(id: "claude", name: "Claude", visible: showClaude,
                          active: cr.sessions > 0 || u.claude.q5 != nil ||
@@ -324,6 +327,11 @@ struct PanelView: View {
                          tint: Theme.opencode, content: AnyView(tokenUsageBlock(title: "OpenCode", or, tint: Theme.opencode, modelsOpen: $openCodeModelsOpen))),
             ToolCardItem(id: "qwencode", name: "Qwen Code", visible: showQwenCode, active: qcr.sessions > 0,
                          tint: Theme.qwencode, content: AnyView(tokenUsageBlock(title: "Qwen Code", qcr, tint: Theme.qwencode, modelsOpen: $qwenCodeModelsOpen))),
+            ToolCardItem(id: "deepseek_harness", name: "DeepSeek Harness", visible: showDeepSeekHarness,
+                         active: dshr.sessions > 0, tint: Theme.deepseekHarness,
+                         content: AnyView(tokenUsageBlock(title: "DeepSeek Harness", dshr,
+                                                          tint: Theme.deepseekHarness,
+                                                          modelsOpen: $deepSeekHarnessModelsOpen))),
         ]
     }
 
@@ -1614,6 +1622,7 @@ struct PanelView: View {
                 settingsRow("WorkBuddy", tint: Theme.workbuddy, isOn: $showWorkBuddy)
                 settingsRow("OpenCode", tint: Theme.opencode, isOn: $showOpenCode)
                 settingsRow("Qwen Code", tint: Theme.qwencode, isOn: $showQwenCode)
+                settingsRow("DeepSeek Harness", tint: Theme.deepseekHarness, isOn: $showDeepSeekHarness)
             }
         }
         .onChange(of: showQoder) { enabled in
@@ -2278,7 +2287,8 @@ struct PanelView: View {
         if let data = result.stdout.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let tools = ["claude", "codex", "gemini", "grok", "qoder", "qoderwork", "hermes",
-                         "zcode", "mimocode", "openclaw", "pi", "workbuddy", "opencode", "qwencode"]
+                         "zcode", "mimocode", "openclaw", "pi", "workbuddy", "opencode", "qwencode",
+                         "deepseek_harness"]
                 .filter { json[$0] != nil }
                 .joined(separator: ",")
             lines.append("json: ok tools: \(tools)")

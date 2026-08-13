@@ -44,6 +44,7 @@ enum Theme {
     static let workbuddy = Color(red: 0.25, green: 0.78, blue: 0.72) // 青绿
     static let opencode = Color(red: 0.55, green: 0.75, blue: 0.90) // 天蓝灰
     static let qwencode = Color(red: 0.48, green: 0.55, blue: 0.95) // 靛蓝
+    static let deepseekHarness = Color(red: 0.18, green: 0.68, blue: 0.88) // 深海蓝
 
     static let panelWidth: CGFloat = 322
     static let cardRadius: CGFloat = 16

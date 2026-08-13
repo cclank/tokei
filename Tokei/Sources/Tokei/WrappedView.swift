@@ -402,7 +402,7 @@ struct ConfettiView: View {
     @State private var fall = false
     private let palette: [Color] = [Theme.claude, Theme.qoder, Theme.qoderwork, Theme.hermes,
                                     Theme.codex, Theme.gemini, Theme.zcode, Theme.mimocode,
-                                    Theme.openclaw]
+                                    Theme.openclaw, Theme.deepseekHarness]
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .top) {

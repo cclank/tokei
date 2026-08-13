@@ -19,7 +19,7 @@
 
 ## 什么是 Tokei？
 
-Tokei 是一款 **macOS 菜单栏应用**，实时追踪你在 **12 款 AI 编程工具** 上的用量、成本和性能。Token 统计以本地日志为主，额度查询使用对应工具已有的本机登录态。
+Tokei 是一款 **macOS 菜单栏应用**，实时追踪你在 **16 款 AI 编程工具** 上的用量、成本和性能。Token 统计以本地日志为主，额度查询使用对应工具已有的本机登录态。
 
 ### 支持的工具
 
@@ -35,8 +35,12 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪你在 **12 款 AI 编�
 | **WorkBuddy** | Token、成本、缓存命中率、模型、项目 |
 | **OpenCode** | Token、成本、缓存命中率、模型 |
 | **Qwen Code** | Token、思考量、成本、模型 |
-| **Qoder** | Token、调用次数、配额 |
+| **DeepSeek Harness** | Token（输入/输出/缓存/推理）、成本、模型、会话 |
+| **Qoder Desktop** | Token、调用次数、配额 |
 | **QoderWork** | Token、调用次数、配额 |
+| **Qoder CLI** | Token、调用次数、工具调用 |
+| **ZCode** | Token、成本、缓存命中率、模型 |
+| **MiMoCode** | Token、成本、缓存命中率、模型 |
 
 ## 功能一览
 
@@ -162,14 +166,18 @@ chmod +x ~/.tokei/tokei-sync.sh
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` |
 | OpenCode | `~/.opencode/sessions/*.json` |
 | Qwen Code | `~/.qwen/usage/token-usage-*.jsonl` + `~/.qwen/usage_record.jsonl` |
-| Qoder | `~/.qodo-ai/sessions/*.jsonl` |
+| DeepSeek Harness | `${DSH_HOME:-~/.dsh}/sessions/**/session.jsonl.zstd`（兼容 `session.jsonl`） |
+| Qoder Desktop | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` |
 | QoderWork | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` |
+| Qoder CLI | `~/.qoder/cli/` |
+| ZCode | `~/.zcode/cli/db/db.sqlite` |
+| MiMoCode | 自动发现 MiMoCode/OpenCode SQLite 数据库 |
 
 ## 对比 CodexBar
 
 | 功能 | Tokei | [CodexBar](https://github.com/steipete/CodexBar) |
 |------|:-----:|:---------:|
-| 支持工具 | 12 | 40+ |
+| 支持工具 | 16 | 40+ |
 | Token 级用量分析 | ✅ | — |
 | 成本估算（317 模型） | ✅ | 部分 |
 | 数据面板（图表 + 热力图） | ✅ | — |
@@ -318,11 +326,11 @@ chmod +x ~/.tokei/tokei-sync.sh
 
 ## English
 
-Tokei is a **macOS menu bar app** that tracks usage, cost, and performance across **12 AI coding tools** in real-time — all from local log files, with zero network traffic.
+Tokei is a **macOS menu bar app** that tracks usage, cost, and performance across **16 AI coding tools** in real-time — all from local log files, with zero network traffic.
 
 **Features:** Real-time monitoring (30s refresh, seven menu bar styles, three density modes) · Cost estimation (317 models, OpenRouter pricing) · Dashboard (daily chart, weekly heatmap) · Time ranges (today/week/month/year) · Project-level tracking · Multi-device sync (Git-based, Mac + Linux) · Annual Wrapped · Keep awake · Sit reminder · Privacy-first (local logs only) · [Compare with CodexBar](https://tokei.lanshuagent.com#compare)
 
-**Supported tools:** Claude Code, Codex CLI, Gemini CLI, Grok Build, Hermes, OpenClaw, Pi Coding Agent CLI, WorkBuddy, OpenCode, Qwen Code, Qoder, QoderWork
+**Supported tools:** Claude Code, Codex CLI, Gemini CLI, Grok Build, Qoder Desktop, QoderWork, Qoder CLI, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, WorkBuddy, OpenCode, Qwen Code, DeepSeek Harness
 
 For full documentation, visit [tokei.lanshuagent.com](https://tokei.lanshuagent.com).
 

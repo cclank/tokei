@@ -40,6 +40,10 @@ curl -sL https://raw.githubusercontent.com/<user>/tokei-sync/main/install.sh | b
 - Pi Coding Agent CLI (`~/.pi/agent/sessions/`)
 - OpenCode (`~/.local/share/opencode/`)
 - Qwen Code (`~/.qwen/`)
+- DeepSeek Harness (`${DSH_HOME:-~/.dsh}/sessions/`)
+- Qoder CLI (`~/.qoder/cli/`)
+- ZCode (`~/.zcode/cli/db/db.sqlite`)
+- MiMoCode (自动发现本地 SQLite 数据库)
 
 ## 卸载
 

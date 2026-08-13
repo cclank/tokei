@@ -19,6 +19,7 @@ Tokei 读取本地 AI CLI 工具的日志,统计 token 用量与成本。所有�
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` | JSONL, `message.usage` / `providerData.usage` |
 | OpenCode | `~/.local/share/opencode/opencode.db`，旧版回退 `~/.local/share/opencode/storage/message/ses_*/msg_*.json` | SQLite/JSON, `tokens` + `cost` |
 | Qwen Code | `${QWEN_RUNTIME_DIR:-~/.qwen}/usage/token-usage-*.jsonl` + `~/.qwen/usage_record.jsonl` | JSONL,逐请求记录 + 会话汇总 |
+| DeepSeek Harness | `${DSH_HOME:-~/.dsh}/sessions/**/session.jsonl.zstd`，兼容 `session.jsonl` | zstd 压缩或明文 JSONL，`assistant/message.data.usage` |
 
 ---
 
@@ -99,6 +100,19 @@ token 快照误删。
 Tokei 优先读取逐请求日志以获得进行中会话和小时分布。旧版 `usage_record.jsonl`
 按 `sessionId` 取最后一份快照,用于补齐逐请求日志出现前的历史。同一会话同时存在两种来源时,
 逐请求日志优先,避免重复累计。
+
+**DeepSeek Harness** — usage bucket 相互独立，但 `reasoningTokens` 是 `outputTokens` 的子集:
+- 输入 = `inputTokens`
+- 输出 = `outputTokens - reasoningTokens`
+- 缓存读 = `cacheReadTokens`
+- 缓存写 = `cacheWriteTokens`
+- 推理 = `reasoningTokens`
+- 总量 = `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`
+
+同一次调用会先出现 `assistant/chunk` usage，再出现 `assistant/message` 最终 usage。Tokei
+按 `(turn, step)` 使用后者覆盖前者，避免重复计数；模型取该调用之前最近的
+`request/context`，会话 identity 取日志首行 `session.id`。当前只接受官方 session format v0，
+遇到未来版本会保留上次成功缓存并在诊断中报告，而不会按未知 schema 猜测。
 
 **Grok Build** — `unified.jsonl` 中每条带 token 字段的 `shell.turn.inference_done` 代表一次模型调用：
 - 输入 = `prompt_tokens - cached_prompt_tokens`

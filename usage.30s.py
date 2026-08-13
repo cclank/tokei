@@ -14,6 +14,7 @@
 #   Pi:          ~/.pi/agent/sessions/**/*.jsonl + ~/.omp/agent/sessions/**/*.jsonl
 #   WorkBuddy:   ~/.workbuddy/projects/**/*.jsonl (逐次模型调用 message.usage)
 #   Qwen Code:   ~/.qwen/usage/token-usage-*.jsonl (逐请求,usage_record.jsonl 补历史)
+#   DeepSeek Harness: ~/.dsh/sessions/**/session.jsonl{,.zstd} (逐次 assistant usage)
 
 import os
 import sys
@@ -122,6 +123,8 @@ OMP_SESSION_DIR = os.path.expanduser(os.environ.get(
     "OMP_CODING_AGENT_SESSION_DIR", os.path.join(HOME, ".omp", "agent", "sessions")))
 QWEN_CODE_DIR = os.path.abspath(os.path.expanduser(
     os.environ.get("QWEN_HOME", os.path.join(HOME, ".qwen"))))
+DSH_HOME = os.path.abspath(os.path.expanduser(
+    os.environ.get("DSH_HOME", os.path.join(HOME, ".dsh"))))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _USER_DIR = os.path.join(HOME, ".tokei")
@@ -814,6 +817,10 @@ def _empty_workbuddy():
 
 
 def _empty_qwencode():
+    return _empty_opencode()
+
+
+def _empty_deepseek_harness():
     return _empty_opencode()
 
 
@@ -5471,6 +5478,298 @@ def scan_qwencode(bounds, cache):
     return {"ranges": B}
 
 
+# ---------- DeepSeek Harness ----------
+# 官方 v0 session 日志是 append-only logical JSONL；默认物理编码为一串 zstd frame。
+# assistant/chunk usage 与随后的 assistant/message usage 是同一步的先后样本，按
+# (turn, step) last-wins 折叠，不能相加。reasoningTokens 已包含在 outputTokens 中，
+# 因此写入 Tokei 通用桶时拆成 out=非推理输出、reason=推理输出。
+_DSH_SESSION_FORMAT_VERSION = 0
+_DSH_PARSER_VERSION = 1
+
+
+def _dsh_sessions_root():
+    override = _expand_path(os.environ.get("TOKEI_DSH_DIR"))
+    if override:
+        return override
+    home = _expand_path(os.environ.get("DSH_HOME")) or DSH_HOME
+    return os.path.join(home, "sessions")
+
+
+def _dsh_session_files():
+    root = _dsh_sessions_root()
+    if not os.path.isdir(root):
+        return []
+    # compression 配置切换后同一 session 目录理论上可能同时残留两种 artifact；
+    # 每个目录只选一份，优先当前默认的 zstd，避免重复计费。
+    selected = {}
+    for name in ("session.jsonl", "session.jsonl.zstd"):
+        for path in glob.glob(os.path.join(root, "**", name), recursive=True):
+            selected[os.path.dirname(path)] = os.path.realpath(path)
+    return sorted(selected.values())
+
+
+def _dsh_file_signature(path):
+    st = os.stat(path)
+    return ":".join(str(value) for value in (
+        getattr(st, "st_dev", 0), getattr(st, "st_ino", 0), st.st_size,
+        st.st_mtime_ns, getattr(st, "st_ctime_ns", 0), _DSH_PARSER_VERSION))
+
+
+def _dsh_read_text(path):
+    if not path.endswith(".zstd"):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    try:
+        from compression import zstd
+        with zstd.open(path, "rt", encoding="utf-8") as f:
+            return f.read()
+    except ImportError:
+        pass
+    try:
+        import zstandard
+        with open(path, "rb") as f:
+            with zstandard.ZstdDecompressor().stream_reader(f) as reader:
+                return reader.read().decode("utf-8")
+    except ImportError:
+        pass
+    with open(path, "rb") as f:
+        return _dsh_zstd_ctypes(f.read()).decode("utf-8")
+
+
+def _dsh_zstd_ctypes(source):
+    """用系统 libzstd 解开 Harness 的 concatenated frames，不依赖外部命令。"""
+    import ctypes
+    import ctypes.util
+    library = ctypes.util.find_library("zstd")
+    if not library:
+        for candidate in (
+            "/opt/homebrew/lib/libzstd.dylib", "/usr/local/lib/libzstd.dylib",
+            "/opt/homebrew/lib/libzstd.so", "/usr/local/lib/libzstd.so",
+            "/usr/lib/libzstd.dylib", "/usr/lib/libzstd.so",
+        ):
+            if os.path.isfile(candidate):
+                library = candidate
+                break
+    if not library:
+        raise RuntimeError("Python 和系统均缺少 zstd 解压支持")
+    zstd = ctypes.CDLL(library)
+    size_t = ctypes.c_size_t
+    zstd.ZSTD_findFrameCompressedSize.argtypes = [ctypes.c_void_p, size_t]
+    zstd.ZSTD_findFrameCompressedSize.restype = size_t
+    zstd.ZSTD_getFrameContentSize.argtypes = [ctypes.c_void_p, size_t]
+    zstd.ZSTD_getFrameContentSize.restype = ctypes.c_ulonglong
+    zstd.ZSTD_decompressBound.argtypes = [ctypes.c_void_p, size_t]
+    zstd.ZSTD_decompressBound.restype = ctypes.c_ulonglong
+    zstd.ZSTD_decompress.argtypes = [ctypes.c_void_p, size_t, ctypes.c_void_p, size_t]
+    zstd.ZSTD_decompress.restype = size_t
+    zstd.ZSTD_isError.argtypes = [size_t]
+    zstd.ZSTD_isError.restype = ctypes.c_uint
+    zstd.ZSTD_getErrorName.argtypes = [size_t]
+    zstd.ZSTD_getErrorName.restype = ctypes.c_char_p
+
+    if not source:
+        return b""
+    src = ctypes.create_string_buffer(source)
+    base = ctypes.addressof(src)
+    offset = 0
+    decoded = []
+    unknown = (1 << 64) - 1
+    error_size = unknown - 1
+    while offset < len(source):
+        ptr = ctypes.c_void_p(base + offset)
+        remaining = len(source) - offset
+        frame_size = zstd.ZSTD_findFrameCompressedSize(ptr, remaining)
+        if zstd.ZSTD_isError(frame_size):
+            name = zstd.ZSTD_getErrorName(frame_size).decode("utf-8", errors="replace")
+            raise ValueError(f"无效的 zstd frame: {name}")
+        content_size = zstd.ZSTD_getFrameContentSize(ptr, frame_size)
+        if content_size in (unknown, error_size):
+            content_size = zstd.ZSTD_decompressBound(ptr, frame_size)
+        if content_size <= 0 or content_size > 512 * 1024 * 1024:
+            raise ValueError("zstd frame 解压大小无效")
+        out = ctypes.create_string_buffer(content_size)
+        written = zstd.ZSTD_decompress(out, content_size, ptr, frame_size)
+        if zstd.ZSTD_isError(written):
+            name = zstd.ZSTD_getErrorName(written).decode("utf-8", errors="replace")
+            raise ValueError(f"zstd 解压失败: {name}")
+        decoded.append(out.raw[:written])
+        offset += frame_size
+    return b"".join(decoded)
+
+
+def _dsh_nonnegative_int(value):
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _dsh_route_from_header(data):
+    header = data.get("header") if isinstance(data, dict) else None
+    config = header.get("config") if isinstance(header, dict) else None
+    if not isinstance(config, dict):
+        return None
+    model = config.get("model")
+    return str(model).strip() if model else None
+
+
+def _dsh_parse_session(path):
+    text = _dsh_read_text(path)
+    lines = text.splitlines()
+    if not lines:
+        raise ValueError("空的 DeepSeek Harness session 日志")
+    try:
+        header = json.loads(lines[0])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("无效的 DeepSeek Harness session header") from exc
+    if not isinstance(header, dict) or header.get("type") != "session" or not header.get("id"):
+        raise ValueError("缺少 DeepSeek Harness session identity")
+    if header.get("version") != _DSH_SESSION_FORMAT_VERSION:
+        raise ValueError(f"不支持的 DeepSeek Harness session version: {header.get('version')}")
+
+    session_id = str(header["id"])
+    cwd = str(header.get("cwd") or "")
+    project = os.path.basename(cwd.rstrip(os.sep)) or "?"
+    current_model = "unknown"
+    calls = {}
+    malformed = 0
+
+    for raw in lines[1:]:
+        if not raw.strip():
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            malformed += 1
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type")
+        data = event.get("data")
+        if event_type == "request/context" and isinstance(data, dict):
+            model = data.get("model")
+            if model:
+                current_model = str(model).strip() or current_model
+            continue
+        if event_type == "request/header" and isinstance(data, dict):
+            current_model = _dsh_route_from_header(data) or current_model
+            continue
+
+        usage = None
+        if event_type == "assistant/message" and isinstance(data, dict):
+            usage = data.get("usage")
+        elif event_type == "assistant/chunk" and isinstance(data, dict):
+            chunk = data.get("chunk")
+            if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                usage = chunk.get("usage")
+        if not isinstance(usage, dict) or not isinstance(data, dict):
+            continue
+
+        turn = data.get("turn")
+        step = data.get("step")
+        if turn is None or step is None:
+            continue
+        try:
+            event_time = datetime.fromtimestamp(int(event.get("time")) / 1000).astimezone()
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
+        inp = _dsh_nonnegative_int(usage.get("inputTokens"))
+        output_total = _dsh_nonnegative_int(usage.get("outputTokens"))
+        reason = min(_dsh_nonnegative_int(usage.get("reasoningTokens")), output_total)
+        out = output_total - reason
+        cr = _dsh_nonnegative_int(usage.get("cacheReadTokens"))
+        cw = _dsh_nonnegative_int(usage.get("cacheWriteTokens"))
+        model = current_model or "unknown"
+        price_id = _pricing_id(model)
+        p = _raw_price(price_id) if price_id else {
+            "in": 0.0, "out": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+        cost = ((inp * p["in"] + cr * p["cache_read"] + cw * p["cache_write"]
+                 + output_total * p["out"]) / 1e6)
+        # Log ordering guarantees samples for a step are adjacent. Assignment provides
+        # the same replacement semantics as Harness tokenUsageProjectionDefinition.
+        calls[(turn, step)] = {
+            "date": event_time.date().isoformat(), "hour": event_time.hour,
+            "in": inp, "out": out, "cr": cr, "cw": cw, "reason": reason,
+            "cost": cost, "model": model,
+        }
+
+    days = {}
+    for call in calls.values():
+        day = days.setdefault(call["date"], _empty_token_day())
+        _add_token_usage(day, call["in"], call["out"], call["cr"], call["cw"],
+                         call["reason"], call["cost"], call["model"])
+        day["hours"][call["hour"]] += token_total(call)
+        day.setdefault("projects", []).append(project)
+    for day in days.values():
+        day["projects"] = sorted(set(day.get("projects", [])))
+    return {"session": session_id, "proj": cwd, "project": project, "days": days,
+            "version": header["version"], "malformed": malformed}
+
+
+def scan_deepseek_harness(bounds, cache):
+    ledger_touch("deepseek_harness")
+    fc = cache.setdefault("deepseek_harness", {})
+    B = _empty_token_ranges()
+    paths = _dsh_session_files()
+    present = set(paths)
+    scan_errors = []
+
+    for path in paths:
+        try:
+            sig = _dsh_file_signature(path)
+        except OSError as exc:
+            scan_errors.append(f"{os.path.basename(os.path.dirname(path))}: {exc}")
+            continue
+        entry = fc.get(path)
+        if not isinstance(entry, dict) or entry.get("sig") != sig:
+            try:
+                parsed = _dsh_parse_session(path)
+            except Exception as exc:
+                # Writer 中途追加或暂时无法解压时保留上次完整快照，避免统计闪零。
+                scan_errors.append(f"{os.path.basename(os.path.dirname(path))}: {type(exc).__name__}: {exc}")
+                continue
+            parsed["sig"] = sig
+            fc[path] = parsed
+            cache["_dirty"] = True
+
+    for key in list(fc):
+        if key.startswith("_"):
+            continue
+        if key not in present:
+            del fc[key]
+            cache["_dirty"] = True
+    if scan_errors:
+        fc["_errors"] = scan_errors[:5]
+    elif fc.pop("_errors", None) is not None:
+        cache["_dirty"] = True
+
+    live_days = {}
+    for path, entry in fc.items():
+        if path.startswith("_") or not isinstance(entry, dict):
+            continue
+        session = entry.get("session")
+        for day_key, day_usage in entry.get("days", {}).items():
+            agg = live_days.setdefault(day_key, _empty_token_day())
+            _merge_live_token_day(agg, day_usage)
+            try:
+                day = date.fromisoformat(day_key)
+            except (TypeError, ValueError):
+                continue
+            for key in classify_date(day, bounds):
+                B[key]["sessions"].add(session)
+
+    for day_key, day_usage in ledger_reconcile("deepseek_harness", live_days).items():
+        try:
+            day = date.fromisoformat(day_key)
+        except (TypeError, ValueError):
+            continue
+        for key in classify_date(day, bounds):
+            _merge_token_day(B[key], day_usage)
+    return {"ranges": B, "errors": scan_errors}
+
+
 def fmt_reset(epoch):
     try:
         return datetime.fromtimestamp(int(epoch)).astimezone().strftime("%m-%d %H:%M")
@@ -5751,6 +6050,10 @@ def compute():
     wb = _safe_scan("workbuddy", lambda: scan_workbuddy(bounds, cache), _empty_workbuddy, errors)
     ocode = _safe_scan("opencode", lambda: scan_opencode(bounds, cache), _empty_opencode, errors)
     qwc = _safe_scan("qwencode", lambda: scan_qwencode(bounds, cache), _empty_qwencode, errors)
+    dsh = _safe_scan("deepseek_harness", lambda: scan_deepseek_harness(bounds, cache),
+                     _empty_deepseek_harness, errors)
+    if dsh.get("errors"):
+        errors["deepseek_harness"] = "; ".join(dsh["errors"])
     _cache_dashboard_days(cache, _GEMINI_DAYS_CACHE_KEY, gm.get("days", {}))
     _cache_dashboard_days(cache, _GROK_DAYS_CACHE_KEY, gk.get("days", {}))
     _save_scan_cache(cache)
@@ -5877,6 +6180,7 @@ def compute():
     wbranges = {k: token_usage_range(wb["ranges"][k]) for k in RANGE_KEYS}
     ocranges = {k: token_usage_range(ocode["ranges"][k]) for k in RANGE_KEYS}
     qwcranges = {k: token_usage_range(qwc["ranges"][k]) for k in RANGE_KEYS}
+    dshranges = {k: token_usage_range(dsh["ranges"][k]) for k in RANGE_KEYS}
 
     cur = cc["cur"]
     cur_total = cur["in"] + cur["out"] + cur["cr"] + cur["cw"]
@@ -5958,6 +6262,9 @@ def compute():
         "qwencode": {
             "ranges": qwcranges,
         },
+        "deepseek_harness": {
+            "ranges": dshranges,
+        },
     }
     if errors:
         result["_errors"] = errors
@@ -5967,7 +6274,8 @@ def compute():
 
 def _recalc_costs(result):
     """只重算缺少权威账单的工具；已有日志成本的工具保留原值。"""
-    for tool_key in ("gemini", "grok", "hermes", "zcode", "mimocode", "workbuddy", "qwencode"):
+    for tool_key in ("gemini", "grok", "hermes", "zcode", "mimocode", "workbuddy",
+                     "qwencode", "deepseek_harness"):
         tool = result.get(tool_key)
         if not tool or "ranges" not in tool:
             continue
@@ -6001,7 +6309,7 @@ def _recalc_costs(result):
                     thoughts = m.get("thoughts", 0)
                     cost = (ti / 1e6 * p["in"] + (to + thoughts) / 1e6 * p["out"]
                             + cached / 1e6 * p["cache_read"])
-                elif tool_key in ("hermes", "zcode", "mimocode"):
+                elif tool_key in ("hermes", "zcode", "mimocode", "deepseek_harness"):
                     cr = m.get("cr", 0)
                     cw = m.get("cw", 0)
                     reason = m.get("reason", 0)
@@ -6514,12 +6822,14 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
     _empty = lambda: {"claude": 0.0, "codex": 0.0, "gemini": 0.0, "grok": 0.0,
                        "zcode": 0.0, "mimocode": 0.0, "pi": 0.0,
                        "workbuddy": 0.0, "opencode": 0.0, "qwencode": 0.0,
-                       "hermes": 0.0, "openclaw": 0.0,
+                       "hermes": 0.0, "openclaw": 0.0, "deepseek_harness": 0.0,
                        "c_in": 0, "c_out": 0, "c_cr": 0, "c_cw": 0,
                        "x_in": 0, "x_out": 0, "x_cached": 0, "x_reason": 0,
                        "p_in": 0, "p_out": 0, "p_cr": 0, "p_cw": 0, "p_reason": 0,
                        "w_in": 0, "w_out": 0, "w_cr": 0, "w_cw": 0,
                        "q_in": 0, "q_out": 0, "q_cr": 0, "q_reason": 0,
+                       "dsh_in": 0, "dsh_out": 0, "dsh_cr": 0, "dsh_cw": 0,
+                       "dsh_reason": 0,
                        "g_in": 0, "g_out": 0, "g_cr": 0, "g_reason": 0,
                        "tokens": 0, "sessions": 0}
 
@@ -6676,6 +6986,27 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
             for key in TOKEN_FIELDS:
                 m[key] += mv.get(key, 0)
 
+    for entry in cache.get("deepseek_harness", {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for dk, day_data in entry.get("days", {}).items():
+            if cutoff and dk < cutoff:
+                continue
+            d = days.setdefault(dk, _empty())
+            d["deepseek_harness"] += day_data.get("cost", 0)
+            d["dsh_in"] += day_data.get("in", 0); d["dsh_out"] += day_data.get("out", 0)
+            d["dsh_cr"] += day_data.get("cr", 0); d["dsh_cw"] += day_data.get("cw", 0)
+            d["dsh_reason"] += day_data.get("reason", 0)
+            _add_day_tokens(d, dk, "deepseek_harness", token_total(day_data))
+            for mn, mv in day_data.get("models", {}).items():
+                nm = f"{nice_model(mn)} (DeepSeek Harness)"
+                m = models.setdefault(nm, {"cost": 0.0, "in": 0, "out": 0, "cr": 0,
+                                           "cw": 0, "reason": 0,
+                                           "tool": "deepseek_harness"})
+                m["cost"] += mv.get("cost", 0)
+                for key in TOKEN_FIELDS:
+                    m[key] += mv.get(key, 0)
+
     for fp, entry in cache.get("hermes", {}).items():
         for dk, day in entry.get("days", {}).items():
             if cutoff and dk < cutoff:
@@ -6748,7 +7079,7 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
     # 输出结构保持完全不变(qoderwork/qoder_ide/qodercli 无成本列,只参与 token 合并)。
     _LEDGER_COST_COLUMNS = frozenset((
         "claude", "codex", "gemini", "grok", "hermes", "openclaw", "zcode",
-        "mimocode", "pi", "workbuddy", "opencode", "qwencode"))
+        "mimocode", "pi", "workbuddy", "opencode", "qwencode", "deepseek_harness"))
     for tool, tool_days in _load_ledger().get("tools", {}).items():
         if not isinstance(tool_days, dict):
             continue
@@ -6785,15 +7116,18 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
               "openclaw": round(v["openclaw"], 2),
               "zcode": round(v["zcode"], 2), "mimocode": round(v["mimocode"], 2), "pi": round(v["pi"], 2),
               "workbuddy": round(v["workbuddy"], 2), "qwencode": round(v["qwencode"], 2),
+              "deepseek_harness": round(v["deepseek_harness"], 2),
               "total": round(v["claude"] + v["codex"] + v["gemini"] + v["grok"] + v["zcode"]
                              + v["mimocode"] + v["pi"] + v["workbuddy"]
                              + v["opencode"] + v["qwencode"] + v["hermes"]
-                             + v["openclaw"], 2),
+                             + v["openclaw"] + v["deepseek_harness"], 2),
               "c_in": v["c_in"], "c_out": v["c_out"], "c_cr": v["c_cr"], "c_cw": v["c_cw"],
               "x_in": v["x_in"], "x_out": v["x_out"], "x_cached": v["x_cached"], "x_reason": v["x_reason"],
               "p_in": v["p_in"], "p_out": v["p_out"], "p_cr": v["p_cr"], "p_cw": v["p_cw"], "p_reason": v["p_reason"],
               "w_in": v["w_in"], "w_out": v["w_out"], "w_cr": v["w_cr"], "w_cw": v["w_cw"],
               "q_in": v["q_in"], "q_out": v["q_out"], "q_cr": v["q_cr"], "q_reason": v["q_reason"],
+              "dsh_in": v["dsh_in"], "dsh_out": v["dsh_out"], "dsh_cr": v["dsh_cr"],
+              "dsh_cw": v["dsh_cw"], "dsh_reason": v["dsh_reason"],
               "g_in": v["g_in"], "g_out": v["g_out"], "g_cr": v["g_cr"], "g_reason": v["g_reason"],
               "tokens": v["tokens"]}
              for dk, v in sorted(days.items())]
@@ -6989,6 +7323,27 @@ def build_wrapped(period="all", refresh=True, _cache=None):
         for model, usage in day.get("models", {}).items():
             name = f"{nice_model(model)} (OpenCode)"
             model_tok[name] = model_tok.get(name, 0) + token_total(usage)
+
+    # --- DeepSeek Harness (reason 是 output 子集，collector 已拆为互斥桶) ---
+    for entry in cache.get("deepseek_harness", {}).values():
+        if not isinstance(entry, dict):
+            continue
+        project = entry.get("project") or "?"
+        for dk, day in entry.get("days", {}).items():
+            if cutoff and dk < cutoff:
+                continue
+            tok = token_total(day)
+            day_tokens[dk] = day_tokens.get(dk, 0) + tok
+            day_cost[dk] = day_cost.get(dk, 0.0) + day.get("cost", 0)
+            weekday[date.fromisoformat(dk).weekday()] += tok
+            add_hours(dk, day.get("hours"))
+            if project != "?":
+                pt = proj_tok.setdefault(project, [0, 0.0])
+                pt[0] += tok; pt[1] += day.get("cost", 0)
+                day_projs.setdefault(dk, set()).add(project)
+            for model, usage in day.get("models", {}).items():
+                name = f"{nice_model(model)} (DeepSeek Harness)"
+                model_tok[name] = model_tok.get(name, 0) + token_total(usage)
 
     # --- ZCode / MiMoCode ---
     for tool_key, suffix in (("zcode", "ZCode"), ("mimocode", "MiMoCode")):
@@ -7349,6 +7704,26 @@ def projects():
         workbuddy_sessions.setdefault(proj_path, set()).add(record.get("session") or entry.get("sid"))
     for proj_path, session_ids in workbuddy_sessions.items():
         proj_map[proj_path]["sessions"] += len(session_ids)
+
+    # DeepSeek Harness sessions
+    for entry in cache.get("deepseek_harness", {}).values():
+        if not isinstance(entry, dict):
+            continue
+        proj_path = entry.get("proj") or ""
+        if not proj_path:
+            continue
+        p = proj_map.setdefault(proj_path, {"sessions": 0, "tokens": 0, "cost": 0.0,
+                                             "last_active": "", "model_tok": {}, "tools": set()})
+        p["sessions"] += 1
+        p["tools"].add("deepseek_harness")
+        for dk, day in entry.get("days", {}).items():
+            p["tokens"] += token_total(day)
+            p["cost"] += day.get("cost", 0)
+            if dk > p["last_active"]:
+                p["last_active"] = dk
+            for mn, mv in day.get("models", {}).items():
+                name = f"{nice_model(mn)} (DeepSeek Harness)"
+                p["model_tok"][name] = p["model_tok"].get(name, 0) + token_total(mv)
 
     # Grok Build sessions + unified 日志真实 token，直接复用主刷新缓存。
     grok_project_sessions = {}

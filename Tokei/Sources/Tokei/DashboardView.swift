@@ -8,6 +8,7 @@ struct DailyCost: Codable, Identifiable {
     var pi: Double = 0
     var workbuddy: Double?
     var qwencode: Double?
+    var deepseek_harness: Double?
     var total: Double
     var c_in: Int = 0
     var c_out: Int = 0
@@ -30,6 +31,11 @@ struct DailyCost: Codable, Identifiable {
     var q_out: Int?
     var q_cr: Int?
     var q_reason: Int?
+    var dsh_in: Int?
+    var dsh_out: Int?
+    var dsh_cr: Int?
+    var dsh_cw: Int?
+    var dsh_reason: Int?
     var g_in: Int?
     var g_out: Int?
     var g_cr: Int?
@@ -203,6 +209,7 @@ struct DashboardView: View {
         case "workbuddy": return Theme.workbuddy
         case "opencode": return Theme.opencode
         case "qwencode": return Theme.qwencode
+        case "deepseek_harness": return Theme.deepseekHarness
         default: return Theme.claude
         }
     }
@@ -331,6 +338,21 @@ struct DashboardView: View {
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
                     Text(String(format: "$%.2f", d.qwencode ?? 0))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
+                }
+                if (d.dsh_in ?? 0) + (d.dsh_out ?? 0) + (d.dsh_cr ?? 0) +
+                    (d.dsh_cw ?? 0) + (d.dsh_reason ?? 0) > 0 {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Circle().fill(Theme.deepseekHarness).frame(width: 6, height: 6)
+                            Text("DeepSeek Harness").font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Theme.deepseekHarness)
+                        }
+                        Text("\(Fmt.human((d.dsh_in ?? 0) + (d.dsh_out ?? 0) + (d.dsh_cr ?? 0) + (d.dsh_cw ?? 0) + (d.dsh_reason ?? 0))) tok")
+                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
+                        Text(String(format: "$%.2f", d.deepseek_harness ?? 0))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.tSecondary)
+                    }
                 }
                 if (d.g_in ?? 0) + (d.g_out ?? 0) + (d.g_cr ?? 0) + (d.g_reason ?? 0) > 0 {
                     VStack(alignment: .leading, spacing: 3) {
@@ -745,6 +767,7 @@ struct DashboardView: View {
                   pi: lhs.pi + rhs.pi,
                   workbuddy: (lhs.workbuddy ?? 0) + (rhs.workbuddy ?? 0),
                   qwencode: (lhs.qwencode ?? 0) + (rhs.qwencode ?? 0),
+                  deepseek_harness: (lhs.deepseek_harness ?? 0) + (rhs.deepseek_harness ?? 0),
                   total: lhs.total + rhs.total,
                   c_in: lhs.c_in + rhs.c_in,
                   c_out: lhs.c_out + rhs.c_out,
@@ -767,6 +790,11 @@ struct DashboardView: View {
                   q_out: (lhs.q_out ?? 0) + (rhs.q_out ?? 0),
                   q_cr: (lhs.q_cr ?? 0) + (rhs.q_cr ?? 0),
                   q_reason: (lhs.q_reason ?? 0) + (rhs.q_reason ?? 0),
+                  dsh_in: (lhs.dsh_in ?? 0) + (rhs.dsh_in ?? 0),
+                  dsh_out: (lhs.dsh_out ?? 0) + (rhs.dsh_out ?? 0),
+                  dsh_cr: (lhs.dsh_cr ?? 0) + (rhs.dsh_cr ?? 0),
+                  dsh_cw: (lhs.dsh_cw ?? 0) + (rhs.dsh_cw ?? 0),
+                  dsh_reason: (lhs.dsh_reason ?? 0) + (rhs.dsh_reason ?? 0),
                   g_in: (lhs.g_in ?? 0) + (rhs.g_in ?? 0),
                   g_out: (lhs.g_out ?? 0) + (rhs.g_out ?? 0),
                   g_cr: (lhs.g_cr ?? 0) + (rhs.g_cr ?? 0),
@@ -903,6 +931,8 @@ struct DashboardView: View {
         appendTokenModels(usage.workbuddy.ranges.get(key).models, tool: "workbuddy", suffix: "WorkBuddy", to: &out)
         appendTokenModels(usage.opencode.ranges.get(key).models, tool: "opencode", suffix: "OpenCode", to: &out)
         appendTokenModels(usage.qwencode.ranges.get(key).models, tool: "qwencode", suffix: "Qwen Code", to: &out)
+        appendTokenModels(usage.deepseek_harness.ranges.get(key).models, tool: "deepseek_harness",
+                          suffix: "DeepSeek Harness", to: &out)
 
         return out.sorted {
             if ($0.tokens ?? 0) != ($1.tokens ?? 0) { return ($0.tokens ?? 0) > ($1.tokens ?? 0) }
@@ -958,6 +988,7 @@ struct DashboardView: View {
             + tokenUsageTotal(usage.workbuddy.ranges.get(key))
             + tokenUsageTotal(usage.opencode.ranges.get(key))
             + tokenUsageTotal(usage.qwencode.ranges.get(key))
+            + tokenUsageTotal(usage.deepseek_harness.ranges.get(key))
     }
 
     static func usageTotalCost(_ usage: Usage, _ key: RangeKey) -> Double {
@@ -972,6 +1003,7 @@ struct DashboardView: View {
             + usage.workbuddy.ranges.get(key).cost
             + usage.opencode.ranges.get(key).cost
             + usage.qwencode.ranges.get(key).cost
+            + usage.deepseek_harness.ranges.get(key).cost
     }
 
     static func tokenUsageTotal(_ r: TokenUsageRange) -> Int {

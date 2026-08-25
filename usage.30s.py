@@ -1478,17 +1478,10 @@ def _codex_auth_context(auth):
 def fetch_codex_live_limits():
     if os.environ.get("TOKEI_CODEX_LIVE_QUOTA") == "0":
         return None
-    # When the user has switched to a third-party provider (cc Switch, etc.),
-    # the official OpenAI quota endpoint is no longer relevant. Skip it and
-    # clear any stale cached official quota so the dashboard falls back to
-    # showing only token usage/cost.
-    if _codex_is_custom_provider():
-        try:
-            if os.path.exists(CODEX_QUOTA_CACHE):
-                os.remove(CODEX_QUOTA_CACHE)
-        except Exception:
-            pass
-        return None
+    # The subscription quota belongs to the ChatGPT account, not to the
+    # provider currently selected for model requests. A third-party provider
+    # must not hide this account-level data; scan_codex keeps its token usage
+    # separate and only accepts a fresh live snapshot in that mode.
     cached = _cached_codex_live_limits(_CODEX_QUOTA_TTL)
     if cached:
         return cached
@@ -2726,8 +2719,18 @@ def scan_codex(bounds, cache):
                 g_ts = entry["g_ts"]
                 g_limits = entry["g_limits"]
 
-    selected_limits_ts = latest_ts
-    if latest_limits is None and g_limits is not None:
+    custom_provider = _codex_is_custom_provider()
+    # Historical rollout events can contain an official rate-limit snapshot
+    # from before the user switched providers. It is not a valid fallback for
+    # the current account-level quota, so custom-provider mode starts with no
+    # local quota and may only be populated by the live account query below.
+    if custom_provider:
+        latest_limits = None
+        plan_type = None
+        selected_limits_ts = None
+    else:
+        selected_limits_ts = latest_ts
+    if not custom_provider and latest_limits is None and g_limits is not None:
         latest_limits = g_limits
         plan_type = (g_limits or {}).get("plan_type")
         selected_limits_ts = g_ts
@@ -2746,16 +2749,10 @@ def scan_codex(bounds, cache):
     # 窗口翻篇后本机又消耗了多少 —— 用来区分「确实回满了」和「读数已经失真」。
     # now_epoch=0 让映射函数只做槽位归类,不触发过期处理。
     slots = _codex_quota_values(latest_limits, now_epoch=0)
-    limits_consumed = {
+    limits_consumed = None if custom_provider else {
         "p5": _codex_used_since(merged_days, slots["r5"]),
         "pw": _codex_used_since(merged_days, slots["rw"]),
     }
-
-    # For third-party providers the official OpenAI quota is not meaningful,
-    # and stale limits from older sessions must not be shown.
-    if _codex_is_custom_provider():
-        latest_limits = None
-        plan_type = None
 
     cur_total = None
     if cur_file:

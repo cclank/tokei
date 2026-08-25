@@ -467,18 +467,81 @@ class CodexCustomProviderTests(unittest.TestCase):
             self.assertEqual(USAGE._codex_config()["model_provider"], "packycode")
             self.assertTrue(USAGE._codex_is_custom_provider())
 
-    def test_live_quota_skipped_for_custom_provider(self):
+    def test_live_quota_remains_available_for_custom_provider(self):
         self._write_config('model_provider = "custom"\n')
-        # Pre-populate a stale official cache to prove it gets cleared.
-        self.quota_cache_path.write_text(json.dumps({
-            "fetched_at": 1_785_000_000,
-            "limits": {"primary": {"used_percent": 80.0}},
-            "plan": "pro",
-        }))
-        opener = mock.Mock(side_effect=AssertionError("should not call API"))
+        payload = {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 7,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 200,
+                },
+            },
+            "plan_type": "plus",
+        }
+        opener = mock.Mock(return_value=_Response(payload))
         with mock.patch("urllib.request.urlopen", opener):
-            self.assertIsNone(USAGE.fetch_codex_live_limits())
-        self.assertFalse(self.quota_cache_path.exists())
+            limits, plan, _ = USAGE.fetch_codex_live_limits()
+        self.assertEqual(limits["primary"]["used_percent"], 7.0)
+        self.assertEqual(limits["primary"]["window_minutes"], 10080)
+        self.assertEqual(plan, "plus")
+        opener.assert_called_once()
+        self.assertTrue(self.quota_cache_path.exists())
+
+    def test_scan_uses_live_quota_but_not_custom_provider_usage(self):
+        path = Path(self.tmp.name) / "rollout-custom.jsonl"
+        path.write_text("\n".join([
+            json.dumps({
+                "timestamp": "2026-08-25T00:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "custom-provider", "cwd": "/tmp/project"},
+            }),
+            json.dumps({
+                "timestamp": "2026-08-25T00:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 10,
+                            "reasoning_output_tokens": 2,
+                        },
+                    },
+                },
+            }),
+        ]) + "\n")
+        live_limits = {
+            "limit_id": "codex",
+            "plan_type": "plus",
+            "primary": {
+                "used_percent": 7.0,
+                "window_minutes": 10080,
+                "resets_at": 200,
+            },
+            "secondary": None,
+        }
+        bounds = {
+            "today": datetime(2026, 8, 25, tzinfo=timezone.utc),
+            "yesterday": datetime(2026, 8, 24, tzinfo=timezone.utc),
+            "week": datetime(2026, 8, 25, tzinfo=timezone.utc),
+            "last_week": datetime(2026, 8, 18, tzinfo=timezone.utc),
+            "last_week_end": datetime(2026, 8, 25, tzinfo=timezone.utc),
+            "month": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "year": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        }
+        with mock.patch.object(USAGE, "CODEX_DIR", self.tmp.name), \
+                mock.patch.object(USAGE, "CODEX_ARCHIVED_DIR",
+                                  str(Path(self.tmp.name) / "archived_sessions")), \
+                mock.patch.object(USAGE, "_codex_is_custom_provider", return_value=True), \
+                mock.patch.object(
+                    USAGE, "fetch_codex_live_limits",
+                    return_value=(live_limits, "plus", datetime.now().timestamp())):
+            result = USAGE.scan_codex(bounds, {"v": USAGE._SCAN_CACHE_VERSION})
+        self.assertEqual(result["limits"], live_limits)
+        self.assertEqual(result["plan"], "plus")
+        self.assertIsNone(result["limits_consumed"])
 
     def test_reset_cards_survive_for_custom_provider(self):
         # 重置卡挂在 OpenAI 账号上，临时切到第三方中转不会让卡消失；

@@ -58,7 +58,7 @@ class _Response:
 class CodexQuotaValuesTests(unittest.TestCase):
     def setUp(self):
         self.patchers = [
-            mock.patch.object(USAGE, "_codex_is_custom_provider", return_value=False),
+            mock.patch.object(USAGE, "_codex_uses_non_openai_provider", return_value=False),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -434,22 +434,22 @@ class CodexCustomProviderTests(unittest.TestCase):
     def _write_config(self, text):
         self.config_path.write_text(text)
 
-    def test_is_custom_provider_with_explicit_custom(self):
+    def test_uses_non_openai_provider_with_explicit_custom(self):
         self._write_config('model_provider = "custom"\nmodel = "deepseek-v4-flash"\n')
-        self.assertTrue(USAGE._codex_is_custom_provider())
+        self.assertTrue(USAGE._codex_uses_non_openai_provider())
 
-    def test_is_not_custom_provider_with_openai(self):
+    def test_does_not_use_non_openai_provider_with_openai(self):
         self._write_config('model_provider = "openai"\nmodel = "gpt-5.5"\n')
-        self.assertFalse(USAGE._codex_is_custom_provider())
+        self.assertFalse(USAGE._codex_uses_non_openai_provider())
 
-    def test_is_not_custom_provider_without_config(self):
-        self.assertFalse(USAGE._codex_is_custom_provider())
+    def test_does_not_use_non_openai_provider_without_config(self):
+        self.assertFalse(USAGE._codex_uses_non_openai_provider())
 
     def test_declared_but_unused_provider_block_stays_official(self):
         # 只准备了 provider 段、没把 model_provider 指过去的人还在用官方额度，
         # 误判成第三方会把他们的额度卡整块藏掉。
         self._write_config('[model_providers.packycode]\nbase_url = "https://x"\n')
-        self.assertFalse(USAGE._codex_is_custom_provider())
+        self.assertFalse(USAGE._codex_uses_non_openai_provider())
 
     def test_custom_provider_detected_without_tomllib(self):
         # macOS 自带的 /usr/bin/python3 是 3.9，没有 tomllib；模块级 import 会让
@@ -465,10 +465,17 @@ class CodexCustomProviderTests(unittest.TestCase):
 
         with mock.patch.object(builtins, "__import__", side_effect=no_tomllib):
             self.assertEqual(USAGE._codex_config()["model_provider"], "packycode")
-            self.assertTrue(USAGE._codex_is_custom_provider())
+            self.assertTrue(USAGE._codex_uses_non_openai_provider())
 
     def test_live_quota_remains_available_for_custom_provider(self):
-        self._write_config('model_provider = "custom"\n')
+        self._write_config(
+            'model_provider = "custom"\n'
+            '[model_providers.custom]\n'
+            'name = "OpenAI"\n'
+            'requires_openai_auth = true\n'
+            'supports_websockets = true\n'
+            'wire_api = "responses"\n'
+        )
         payload = {
             "rate_limit": {
                 "primary_window": {
@@ -534,7 +541,7 @@ class CodexCustomProviderTests(unittest.TestCase):
         with mock.patch.object(USAGE, "CODEX_DIR", self.tmp.name), \
                 mock.patch.object(USAGE, "CODEX_ARCHIVED_DIR",
                                   str(Path(self.tmp.name) / "archived_sessions")), \
-                mock.patch.object(USAGE, "_codex_is_custom_provider", return_value=True), \
+                mock.patch.object(USAGE, "_codex_uses_non_openai_provider", return_value=True), \
                 mock.patch.object(
                     USAGE, "fetch_codex_live_limits",
                     return_value=(live_limits, "plus", datetime.now().timestamp())):

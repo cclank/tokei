@@ -1429,11 +1429,11 @@ def _codex_config():
     }
 
 
-def _codex_is_custom_provider():
-    """True 表示 Codex 已切到非 OpenAI 的 provider(cc Switch 之类)。
+def _codex_uses_non_openai_provider():
+    """True 表示当前 rollout 用量走非 openai provider。
 
-    只认显式声明:光有 [model_providers.x] 段、但没把 model_provider 指过去的用户
-    仍在用官方额度,误判会把他们的额度卡整块藏掉。
+    这里只描述当前请求路由,不代表 ChatGPT 账号是否有官方订阅额度。
+    账号级额度必须由 auth.json + live quota 接口独立决定。
     """
     provider = _codex_config().get("model_provider")
     return bool(provider) and provider != "openai"
@@ -2719,18 +2719,18 @@ def scan_codex(bounds, cache):
                 g_ts = entry["g_ts"]
                 g_limits = entry["g_limits"]
 
-    custom_provider = _codex_is_custom_provider()
+    non_openai_provider = _codex_uses_non_openai_provider()
     # Historical rollout events can contain an official rate-limit snapshot
     # from before the user switched providers. It is not a valid fallback for
     # the current account-level quota, so custom-provider mode starts with no
     # local quota and may only be populated by the live account query below.
-    if custom_provider:
+    if non_openai_provider:
         latest_limits = None
         plan_type = None
         selected_limits_ts = None
     else:
         selected_limits_ts = latest_ts
-    if not custom_provider and latest_limits is None and g_limits is not None:
+    if not non_openai_provider and latest_limits is None and g_limits is not None:
         latest_limits = g_limits
         plan_type = (g_limits or {}).get("plan_type")
         selected_limits_ts = g_ts
@@ -2749,7 +2749,7 @@ def scan_codex(bounds, cache):
     # 窗口翻篇后本机又消耗了多少 —— 用来区分「确实回满了」和「读数已经失真」。
     # now_epoch=0 让映射函数只做槽位归类,不触发过期处理。
     slots = _codex_quota_values(latest_limits, now_epoch=0)
-    limits_consumed = None if custom_provider else {
+    limits_consumed = None if non_openai_provider else {
         "p5": _codex_used_since(merged_days, slots["r5"]),
         "pw": _codex_used_since(merged_days, slots["rw"]),
     }

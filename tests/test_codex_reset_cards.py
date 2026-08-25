@@ -48,7 +48,7 @@ class CodexResetCardsTests(unittest.TestCase):
         self.patchers = [
             mock.patch.object(USAGE, "CODEX_AUTH", str(self.auth_path)),
             mock.patch.object(USAGE, "CODEX_RESET_CARDS_CACHE", str(self.cache_path)),
-            mock.patch.object(USAGE, "_codex_is_custom_provider", return_value=False),
+            mock.patch.object(USAGE, "_codex_uses_non_openai_provider", return_value=False),
         ]
         for patcher in self.patchers:
             patcher.start()

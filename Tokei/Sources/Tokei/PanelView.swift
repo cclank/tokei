@@ -1959,14 +1959,14 @@ struct PanelView: View {
             HStack(alignment: .top, spacing: 11) {
                 VStack(alignment: .leading, spacing: 11) {
                     settingsAgentsSection
-                    settingsDiagnosticsSection
-                    settingsPricingSection
+                    settingsMenuBarSection
+                    settingsPrivacySection
                 }
                 .frame(width: settingsColumnWidth, alignment: .top)
 
                 VStack(alignment: .leading, spacing: 11) {
-                    settingsMenuBarSection
-                    settingsPrivacySection
+                    settingsDiagnosticsSection
+                    settingsPricingSection
                     settingsSystemSection
                     settingsReminderSection
                     settingsSyncSection
@@ -2375,14 +2375,21 @@ struct PanelView: View {
                         .disabled(store.syncing)
                 }
 
-                HStack(spacing: 8) {
-                    settingsActionButton(icon: "arrow.triangle.2.circlepath", title: store.syncing ? "同步中" : "同步") {
+                HStack(spacing: 6) {
+                    settingsActionButton(
+                        icon: "arrow.triangle.2.circlepath",
+                        title: store.syncing ? "同步中" : "同步",
+                        width: 86
+                    ) {
                         if saveSync() { store.doSync() }
                     }
                     .disabled(store.syncing || syncDir.isEmpty)
 
-                    Spacer()
-                    Text("自动").font(.system(size: 10)).foregroundStyle(Theme.tTertiary)
+                    Spacer(minLength: 6)
+                    Text("自动")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.tTertiary)
+                        .fixedSize(horizontal: true, vertical: false)
                     Toggle("", isOn: $autoSync)
                         .toggleStyle(.switch).controlSize(.mini).labelsHidden()
                         .disabled(store.syncing)
@@ -2398,7 +2405,7 @@ struct PanelView: View {
                             }
                         }
                         .pickerStyle(.segmented)
-                        .frame(width: 112)
+                        .frame(width: 104)
                         .controlSize(.mini)
                         .disabled(store.syncing)
                         .onChange(of: syncInterval) { v in
@@ -2614,7 +2621,12 @@ struct PanelView: View {
         )
     }
 
-    func settingsActionButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+    func settingsActionButton(
+        icon: String,
+        title: String,
+        width: CGFloat? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon).font(.system(size: 9))
@@ -2623,6 +2635,7 @@ struct PanelView: View {
             .foregroundStyle(Theme.tPrimary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
+            .frame(width: width)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.08)))
         }

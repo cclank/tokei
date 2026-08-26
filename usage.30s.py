@@ -5477,6 +5477,7 @@ def _parse_prime_session_file(path):
 
 
 def scan_prime_agent(bounds, cache):
+    ledger_touch("prime_agent")
     fc = cache.setdefault("prime_agent", {})
     B = _empty_token_ranges()
     roots = _prime_agent_session_dirs()
@@ -5515,23 +5516,45 @@ def scan_prime_agent(bounds, cache):
             fc.pop(path, None)
             changed = True
     used = set()
+    live_days = {}
+    live_sessions = {}
+    live_projects = {}
     for path, entry in canonical.values():
+        session = entry.get("sid") or path
+        project = entry.get("proj") or ""
+        project_name = os.path.basename(project.rstrip("/"))
         for event in entry.get("events", []):
             if event.get("key") in used:
                 continue
             used.add(event.get("key"))
-            day = B["all"]
+            day_key = event.get("date")
+            try:
+                date.fromisoformat(day_key)
+            except (TypeError, ValueError):
+                continue
+            day = live_days.setdefault(day_key, _empty_token_day())
             _add_token_usage(day, event.get("in", 0), event.get("out", 0),
                              event.get("cr", 0), event.get("cw", 0), event.get("reason", 0),
                              event.get("cost", 0), event.get("model"))
-            for key in classify_date(date.fromisoformat(event["date"]), bounds):
-                if key == "all":
-                    continue
-                _add_token_usage(B[key], event.get("in", 0), event.get("out", 0),
-                                 event.get("cr", 0), event.get("cw", 0), event.get("reason", 0),
-                                 event.get("cost", 0), event.get("model"))
-                B[key]["sessions"].add(entry.get("sid") or path)
-        B["all"]["sessions"].add(entry.get("sid") or path)
+            hour = event.get("hour")
+            if isinstance(hour, int) and 0 <= hour < 24:
+                day["hours"][hour] += token_total(event)
+            live_sessions.setdefault(day_key, set()).add(session)
+            if project_name:
+                live_projects.setdefault(day_key, set()).add(project_name)
+
+    for day_key, day in live_days.items():
+        day["sessions"] = sorted(live_sessions.get(day_key, set()))
+        day["projects"] = sorted(live_projects.get(day_key, set()))
+
+    for day_key, day in ledger_reconcile("prime_agent", live_days).items():
+        try:
+            day_date = date.fromisoformat(day_key)
+        except (TypeError, ValueError):
+            continue
+        for range_key in classify_date(day_date, bounds):
+            _merge_token_day(B[range_key], day)
+            B[range_key]["sessions"].update(day.get("sessions", []))
     if changed:
         cache["_dirty"] = True
     return {"ranges": B}
@@ -8703,8 +8726,7 @@ def build_wrapped(period="all", refresh=True, _cache=None):
                 continue
             tok = token_total(day)
             day_tokens[dk] = day_tokens.get(dk, 0) + tok
-            total_tokens += tok
-            total_cost += day.get("cost", 0)
+            day_cost[dk] = day_cost.get(dk, 0.0) + day.get("cost", 0)
             weekday[date.fromisoformat(dk).weekday()] += tok
             add_hours(dk, day.get("hours"))
             for mn, mv in day.get("models", {}).items():

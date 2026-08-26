@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from datetime import datetime
@@ -27,13 +28,14 @@ class PrimeAgentUsageTests(unittest.TestCase):
                                  "cacheRead": usage.get("cache_read", 0), "cacheWrite": usage.get("cache_write", 0),
                                  "cost": usage.get("cost", {})}}}
 
-    def scan(self, agent_dir):
+    def scan(self, agent_dir, cache=None):
         with mock.patch.object(USAGE, "PRIME_AGENT_DIR", str(agent_dir)), \
              mock.patch.dict(os.environ, {}, clear=False):
             for key in ("TOKEI_PRIME_AGENT_SESSION_DIR", "PRIME_AGENT_SESSION_DIR",
                         "PRIME_AGENT_CODING_AGENT_SESSION_DIR", "PRIME_AGENT_CODING_AGENT_DIR"):
                 os.environ.pop(key, None)
-            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            if cache is None:
+                cache = {"v": USAGE._SCAN_CACHE_VERSION}
             return USAGE.scan_prime_agent(USAGE.range_bounds(), cache), cache
 
     def test_root_and_nested_children_are_counted_without_attribution_double_count(self):
@@ -101,6 +103,69 @@ class PrimeAgentUsageTests(unittest.TestCase):
                 result = USAGE.scan_prime_agent(USAGE.range_bounds(), {"v": USAGE._SCAN_CACHE_VERSION})
         self.assertEqual(result["ranges"]["all"]["in"], 7)
         self.assertEqual(result["ranges"]["all"]["sessions"], {"custom"})
+
+    def test_ledger_preserves_usage_after_session_cleanup(self):
+        ledger = {"v": USAGE._LEDGER_VERSION, "tools": {}}
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(USAGE, "_load_ledger_from_disk", return_value=ledger):
+            agent_dir = Path(tmp) / "agent"
+            now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+            self.write_session(
+                agent_dir / "sessions" / "session.jsonl",
+                "session-id",
+                "/tmp/prime-project",
+                [self.assistant(now, input=10, output=2, cost={"total": 0.12})],
+            )
+            first, cache = self.scan(agent_dir)
+            first_usage = first["ranges"]["all"]
+
+            stored = ledger["tools"]["prime_agent"]
+            self.assertEqual(len(stored), 1)
+            stored_day = next(iter(stored.values()))
+            self.assertEqual(stored_day["sessions"], ["session-id"])
+            self.assertEqual(stored_day["projects"], ["prime-project"])
+
+            shutil.rmtree(agent_dir / "sessions")
+            second, cache = self.scan(agent_dir, cache=cache)
+
+        second_usage = second["ranges"]["all"]
+        self.assertEqual(USAGE.token_total(second_usage), USAGE.token_total(first_usage))
+        self.assertEqual(second_usage["sessions"], {"session-id"})
+        self.assertEqual(cache["prime_agent"], {})
+
+    def test_wrapped_with_prime_agent_usage_includes_tokens_and_cost(self):
+        today = datetime.now().astimezone().date().isoformat()
+        day = {
+            "in": 10, "out": 2, "cr": 3, "cw": 4, "reason": 1,
+            "cost": 0.12, "hours": [20] + [0] * 23,
+            "models": {
+                "metarouter/gpt-5.6-sol": {
+                    "in": 10, "out": 2, "cr": 3, "cw": 4, "reason": 1,
+                    "cost": 0.12,
+                },
+            },
+        }
+        cache = {
+            "v": USAGE._SCAN_CACHE_VERSION,
+            "_dirty": False,
+            "prime_agent": {
+                "/tmp/prime-session.jsonl": {
+                    "days": {today: day},
+                    "proj": "/tmp/prime-project",
+                    "sid": "session-id",
+                },
+            },
+        }
+        with mock.patch.object(
+            USAGE,
+            "_load_ledger",
+            return_value={"v": USAGE._LEDGER_VERSION, "tools": {}},
+        ):
+            wrapped = USAGE.build_wrapped("1d", refresh=False, _cache=cache)
+
+        self.assertEqual(wrapped["total_tokens"], 20)
+        self.assertEqual(wrapped["total_cost"], 0.12)
+        self.assertEqual(sum(wrapped["hours"]), 20)
 
 
 if __name__ == "__main__":

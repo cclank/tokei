@@ -55,35 +55,52 @@ enum MenuBarDensity: String, CaseIterable, Identifiable {
     }
 }
 
+/// 额度窗口类型，决定菜单栏上画哪个符号。
+enum MenuBarQuotaWindow {
+    case fiveHour
+    case week
+}
+
 /// 菜单栏额度来源（与面板「显示卡片」独立；只控制状态栏显示哪些剩余额度）。
+/// 每一项都是一个具体窗口，`allCases` 的顺序即状态栏的显示优先级。
 enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
-    case claude
-    case codex
+    case claude5h
+    case claudeWeek
+    case claudeFable
+    case codex5h
+    case codexWeek
     case grok
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .claude: return "Claude"
-        case .codex: return "Codex"
+        case .claude5h: return "Claude 5h"
+        case .claudeWeek: return "Claude 周"
+        case .claudeFable: return "Claude Fable"
+        case .codex5h: return "Codex 5h"
+        case .codexWeek: return "Codex 周"
         case .grok: return "Grok"
         }
     }
 
+    /// `claude5h` 与 `codexWeek` 复用已发布的 key：它们存的本来就是这两个窗口，改名会丢掉老用户的开关。
     var defaultsKey: String {
         switch self {
-        case .claude: return "menuBarQuotaClaude"
-        case .codex: return "menuBarQuotaCodex"
+        case .claude5h: return "menuBarQuotaClaude"
+        case .claudeWeek: return "menuBarQuotaClaudeWeek"
+        case .claudeFable: return "menuBarQuotaClaudeFable"
+        case .codex5h: return "menuBarQuotaCodex5h"
+        case .codexWeek: return "menuBarQuotaCodex"
         case .grok: return "menuBarQuotaGrok"
         }
     }
 
-    /// Claude/Codex 默认开，与历史行为一致；Grok 额度是新增来源，默认关，避免抢占状态栏。
+    /// 只有历史上就默认开的两项保持默认开，其余新增窗口默认关，避免抢占状态栏。
     var defaultEnabled: Bool {
         switch self {
-        case .claude, .codex: return true
-        case .grok: return false
+        case .claude5h, .codexWeek: return true
+        case .claudeWeek, .claudeFable, .codex5h, .grok: return false
         }
     }
 
@@ -93,14 +110,97 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         return ud.bool(forKey: defaultsKey)
     }
 
-    static func isEnabled(_ source: MenuBarQuotaSource) -> Bool { source.isEnabled }
+    /// Grok 的窗口随数据在周/月之间变，画不出确定的符号，所以不给它符号。
+    var window: MenuBarQuotaWindow? {
+        switch self {
+        case .claude5h, .codex5h: return .fiveHour
+        case .claudeWeek, .claudeFable, .codexWeek: return .week
+        case .grok: return nil
+        }
+    }
+
+    /// 同家族靠符号区分窗口；Fable 与 Claude 周同为周窗口，只能靠颜色分开，沿用卡片上的橙色。
+    var nsColor: NSColor {
+        switch self {
+        case .claude5h, .claudeWeek: return AppDelegate.claudeColor
+        case .claudeFable: return .systemOrange
+        case .codex5h, .codexWeek: return AppDelegate.codexColor
+        case .grok: return AppDelegate.grokColor
+        }
+    }
+
+    var themeColor: Color {
+        switch self {
+        case .claude5h, .claudeWeek: return Theme.claude
+        case .claudeFable: return .orange
+        case .codex5h, .codexWeek: return Theme.codex
+        case .grok: return Theme.grok
+        }
+    }
+
+    /// 该窗口在 usage.json 里的已用百分比与过期标记；value 为 nil 表示这个账号没有这个窗口。
+    func reading(in usage: Usage) -> (value: Double?, stale: Bool?) {
+        switch self {
+        case .claude5h: return (usage.claude.q5, usage.claude.q5_stale)
+        case .claudeWeek: return (usage.claude.q7, usage.claude.q7_stale)
+        case .claudeFable: return (usage.claude.qf, usage.claude.qf_stale)
+        case .codex5h: return (usage.codex.p5, usage.codex.p5_stale)
+        case .codexWeek: return (usage.codex.pw, usage.codex.pw_stale)
+        case .grok: return (usage.grok.pct, usage.grok.stale)
+        }
+    }
+
+    /// 现在能不能真在状态栏上写出一个数字：账号有这个窗口，读数也没过期。
+    /// 设置页的提示语和预览必须用同一个判断，否则会描述一个状态栏没画的组合。
+    func isRenderable(in usage: Usage) -> Bool {
+        let reading = reading(in: usage)
+        return reading.value != nil && reading.stale != true
+    }
+
+    /// 勾选中且数据新鲜的窗口，按 `allCases` 顺序排好。模型里存的是已用百分比，这里换成剩余。
+    static func metrics(in usage: Usage) -> [MenuBarMetric] {
+        allCases.compactMap { source in
+            guard source.isEnabled, source.isRenderable(in: usage),
+                  let used = source.reading(in: usage).value else { return nil }
+            let remaining = 100 - used
+            return MenuBarMetric(kind: .quota(source),
+                                 value: String(format: "%.0f", remaining),
+                                 remaining: remaining)
+        }
+    }
 }
 
-enum MenuBarMetricKind {
-    case claude
-    case codex
-    case grok
+enum MenuBarMetricKind: Equatable {
+    case quota(MenuBarQuotaSource)
     case total
+
+    var displayName: String {
+        switch self {
+        case .quota(let source): return source.label
+        case .total: return "今日"
+        }
+    }
+
+    var window: MenuBarQuotaWindow? {
+        switch self {
+        case .quota(let source): return source.window
+        case .total: return nil
+        }
+    }
+
+    var nsColor: NSColor {
+        switch self {
+        case .quota(let source): return source.nsColor
+        case .total: return .secondaryLabelColor
+        }
+    }
+
+    var themeColor: Color {
+        switch self {
+        case .quota(let source): return source.themeColor
+        case .total: return Theme.tSecondary
+        }
+    }
 }
 
 struct MenuBarMetric {
@@ -227,6 +327,7 @@ enum MenuBarArtwork {
     }
 
     static func gauge(remaining: Double?, color: NSColor? = nil, active: Bool = false,
+                      window: MenuBarQuotaWindow? = nil,
                       size: CGFloat = 11) -> NSImage {
         let drawColor = color ?? .black
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
@@ -252,7 +353,10 @@ enum MenuBarArtwork {
                            clockwise: true)
             context.strokePath()
 
-            if active {
+            if let window {
+                drawWindowMark(window, in: context, center: center,
+                               scale: scale, color: drawColor)
+            } else if active {
                 context.setFillColor(drawColor.cgColor)
                 context.fillEllipse(in: CGRect(x: center.x - 0.8 * scale,
                                                y: center.y - 0.8 * scale,
@@ -262,6 +366,50 @@ enum MenuBarArtwork {
         }
         image.isTemplate = color == nil
         return image
+    }
+
+    /// 「圆点」样式用的独立窗口符号，不带圆环。
+    static func windowGlyph(_ window: MenuBarQuotaWindow, color: NSColor? = nil,
+                            size: CGFloat = 9) -> NSImage {
+        let drawColor = color ?? .black
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.setAllowsAntialiasing(true)
+            context.setShouldAntialias(true)
+            drawWindowMark(window, in: context,
+                           center: CGPoint(x: size / 2, y: size / 2),
+                           scale: size / 11 * 1.7, color: drawColor)
+            return true
+        }
+        image.isTemplate = color == nil
+        return image
+    }
+
+    /// 沙漏 = 5 小时窗口，横块 = 周窗口。11pt 圆环里只有约 6.5pt 内径，细节全看不见，
+    /// 所以两个符号靠「竖 vs 横」的轮廓区分，而不是靠形状本身画得像不像。
+    private static func drawWindowMark(_ window: MenuBarQuotaWindow, in context: CGContext,
+                                       center: CGPoint, scale: CGFloat, color: NSColor) {
+        context.setFillColor(color.cgColor)
+        switch window {
+        case .fiveHour:
+            let halfWidth = 1.15 * scale
+            let halfHeight = 2.3 * scale
+            let waist = 0.22 * scale
+            context.beginPath()
+            context.move(to: CGPoint(x: center.x - halfWidth, y: center.y + halfHeight))
+            context.addLine(to: CGPoint(x: center.x + halfWidth, y: center.y + halfHeight))
+            context.addLine(to: CGPoint(x: center.x + waist, y: center.y))
+            context.addLine(to: CGPoint(x: center.x + halfWidth, y: center.y - halfHeight))
+            context.addLine(to: CGPoint(x: center.x - halfWidth, y: center.y - halfHeight))
+            context.addLine(to: CGPoint(x: center.x - waist, y: center.y))
+            context.closePath()
+            context.fillPath()
+        case .week:
+            let halfWidth = 2.2 * scale
+            let halfHeight = 1.35 * scale
+            context.fill(CGRect(x: center.x - halfWidth, y: center.y - halfHeight,
+                                width: halfWidth * 2, height: halfHeight * 2))
+        }
     }
 
     static func starTrail(active: Bool = false) -> NSImage {
@@ -478,7 +626,7 @@ enum MenuBarTitleRenderer {
                                         ? NSColor.white.withAlphaComponent(0.72)
                                         : .secondaryLabelColor)
                 }
-                appendValue(metric, color: style == .system ? .white : color(for: metric.kind),
+                appendValue(metric, color: style == .system ? .white : metric.kind.nsColor,
                             to: title)
             }
             return MenuBarPresentation(image: leadingImage, title: title)
@@ -538,18 +686,23 @@ enum MenuBarTitleRenderer {
 
     private static func appendDecorated(_ metric: MenuBarMetric, to title: NSMutableAttributedString,
                                         style: MenuBarStyle) {
-        let familyColor = color(for: metric.kind)
+        let familyColor = metric.kind.nsColor
         switch style {
         case .symbols:
-            appendArtwork(MenuBarArtwork.gauge(remaining: metric.remaining, color: familyColor), to: title)
+            appendArtwork(MenuBarArtwork.gauge(remaining: metric.remaining, color: familyColor,
+                                               window: metric.kind.window), to: title)
             appendSpace(to: title)
             appendValue(metric, color: .labelColor, to: title)
         case .dots:
-            title.append(NSAttributedString(string: "●", attributes: [
-                .font: NSFont.systemFont(ofSize: 7, weight: .bold),
-                .baselineOffset: 1,
-                .foregroundColor: familyColor,
-            ]))
+            if metric.kind.window == .fiveHour {
+                appendArtwork(MenuBarArtwork.windowGlyph(.fiveHour, color: familyColor), to: title)
+            } else {
+                title.append(NSAttributedString(string: "●", attributes: [
+                    .font: NSFont.systemFont(ofSize: 7, weight: .bold),
+                    .baselineOffset: 1,
+                    .foregroundColor: familyColor,
+                ]))
+            }
             appendSpace(to: title)
             appendValue(metric, color: .labelColor, to: title)
         case .compact:
@@ -570,7 +723,8 @@ enum MenuBarTitleRenderer {
 
     private static func iconOnlyImage(style: MenuBarStyle, metric: MenuBarMetric?,
                                       active: Bool) -> NSImage? {
-        let tint = color(for: metric?.kind ?? .total)
+        let kind = metric?.kind ?? .total
+        let tint = kind.nsColor
         if style == .artistic {
             return MenuBarArtwork.starTrail(active: active)
         }
@@ -590,7 +744,7 @@ enum MenuBarTitleRenderer {
         case .color:
             return MenuBarArtwork.signature()
         case .symbols:
-            return MenuBarArtwork.gauge(remaining: metric?.remaining, size: 16)
+            return MenuBarArtwork.gauge(remaining: metric?.remaining, window: kind.window, size: 16)
         case .dots:
             return nil
         case .artistic:
@@ -602,9 +756,15 @@ enum MenuBarTitleRenderer {
 
     private static func appendIconOnlyDot(to title: NSMutableAttributedString,
                                           metric: MenuBarMetric?) {
+        let kind = metric?.kind ?? .total
+        if kind.window == .fiveHour {
+            appendArtwork(MenuBarArtwork.windowGlyph(.fiveHour, color: kind.nsColor, size: 10),
+                          to: title)
+            return
+        }
         title.append(NSAttributedString(string: "●", attributes: [
             .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-            .foregroundColor: color(for: metric?.kind ?? .total),
+            .foregroundColor: kind.nsColor,
         ]))
     }
 
@@ -640,21 +800,30 @@ enum MenuBarTitleRenderer {
         )
         title.append(NSAttributedString(attachment: attachment))
     }
-
-    private static func color(for kind: MenuBarMetricKind) -> NSColor {
-        switch kind {
-        case .claude: return AppDelegate.claudeColor
-        case .codex: return AppDelegate.codexColor
-        case .grok: return AppDelegate.grokColor
-        case .total: return .secondaryLabelColor
-        }
-    }
-
 }
 
 struct MenuBarStylePreview: View {
     var style: MenuBarStyle
     var density: MenuBarDensity
+    var sources: [MenuBarQuotaSource] = [.claude5h, .codexWeek]
+
+    private struct Sample: Identifiable {
+        var source: MenuBarQuotaSource
+        var value: String
+        var id: String { source.rawValue }
+    }
+
+    /// 样本值从高到低排，最后一项就是「单额度」会挑中的那个。
+    private var samples: [Sample] {
+        let values = ["98", "85"]
+        return Array(sources.prefix(values.count)).enumerated().map {
+            Sample(source: $1, value: values[$0])
+        }
+    }
+
+    private var visibleSamples: [Sample] {
+        density == .full ? samples : Array(samples.suffix(1))
+    }
 
     var body: some View {
         HStack(spacing: style == .compact ? 5 : 6) { previewContent }
@@ -665,59 +834,59 @@ struct MenuBarStylePreview: View {
 
     @ViewBuilder
     private var previewContent: some View {
+        if visibleSamples.isEmpty {
+            fallbackMark
+        } else {
+            switch style {
+            case .system, .color:
+                brandMark
+                textSamples
+            case .symbols:
+                ForEach(visibleSamples) { sample in
+                    gauge(sample, showValue: density != .icon)
+                }
+            case .dots:
+                if density == .icon {
+                    Circle().fill(visibleSamples[0].source.themeColor).frame(width: 6, height: 6)
+                } else {
+                    ForEach(visibleSamples) { dot($0) }
+                }
+            case .compact:
+                if density == .icon {
+                    templateImage(MenuBarArtwork.brand())
+                } else {
+                    textSamples
+                }
+            case .artistic:
+                templateImage(MenuBarArtwork.starTrail())
+                textSamples
+            case .palm:
+                Image(nsImage: MenuBarArtwork.palm())
+                textSamples
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fallbackMark: some View {
         switch style {
         case .system, .color:
             brandMark
-            if density == .lowest {
-                value(.codex, "85")
-            } else if density == .full {
-                value(.claude, "98")
-                Text("·").foregroundStyle(Theme.tTertiary)
-                value(.codex, "85")
-            }
-        case .symbols:
-            if density == .icon || density == .lowest {
-                gauge(.codex, "85", showValue: density != .icon)
-            } else {
-                gauge(.claude, "98", showValue: true)
-                gauge(.codex, "85", showValue: true)
-            }
-        case .dots:
-            if density == .icon {
-                Circle().fill(Theme.codex).frame(width: 6, height: 6)
-            } else if density == .lowest {
-                dot(.codex, "85")
-            } else {
-                dot(.claude, "98")
-                dot(.codex, "85")
-            }
-        case .compact:
-            if density == .icon {
-                templateImage(MenuBarArtwork.brand())
-            } else if density == .lowest {
-                value(.codex, "85")
-            } else {
-                value(.claude, "98")
-                Text("·").foregroundStyle(Theme.tTertiary)
-                value(.codex, "85")
-            }
         case .artistic:
             templateImage(MenuBarArtwork.starTrail())
-            if density == .lowest {
-                value(.codex, "85")
-            } else if density == .full {
-                value(.claude, "98")
-                Text("·").foregroundStyle(Theme.tTertiary)
-                value(.codex, "85")
-            }
         case .palm:
             Image(nsImage: MenuBarArtwork.palm())
-            if density == .lowest {
-                value(.codex, "85")
-            } else if density == .full {
-                value(.claude, "98")
-                Text("·").foregroundStyle(Theme.tTertiary)
-                value(.codex, "85")
+        case .symbols, .dots, .compact:
+            templateImage(MenuBarArtwork.brand())
+        }
+    }
+
+    @ViewBuilder
+    private var textSamples: some View {
+        if density != .icon {
+            ForEach(visibleSamples.indices, id: \.self) { index in
+                if index > 0 { Text("·").foregroundStyle(Theme.tTertiary) }
+                value(visibleSamples[index])
             }
         }
     }
@@ -738,48 +907,36 @@ struct MenuBarStylePreview: View {
     }
 
     @ViewBuilder
-    private func gauge(_ kind: MenuBarMetricKind, _ value: String, showValue: Bool) -> some View {
-        let tint = nsColor(kind)
+    private func gauge(_ sample: Sample, showValue: Bool) -> some View {
         let size: CGFloat = density == .icon ? 16 : 11
-        Image(nsImage: MenuBarArtwork.gauge(remaining: Double(value), color: tint, size: size))
+        Image(nsImage: MenuBarArtwork.gauge(remaining: Double(sample.value),
+                                            color: sample.source.nsColor,
+                                            window: sample.source.window,
+                                            size: size))
         if showValue {
-            Text(value).foregroundStyle(Theme.tSecondary)
+            Text(sample.value).foregroundStyle(Theme.tSecondary)
         }
     }
 
-    private func dot(_ kind: MenuBarMetricKind, _ value: String) -> some View {
+    private func dot(_ sample: Sample) -> some View {
         HStack(spacing: 4) {
-            Circle().fill(swiftColor(kind)).frame(width: 5, height: 5)
-            Text(value).foregroundStyle(Theme.tSecondary)
+            if sample.source.window == .fiveHour {
+                Image(nsImage: MenuBarArtwork.windowGlyph(.fiveHour, color: sample.source.nsColor))
+            } else {
+                Circle().fill(sample.source.themeColor).frame(width: 5, height: 5)
+            }
+            Text(sample.value).foregroundStyle(Theme.tSecondary)
         }
     }
 
     @ViewBuilder
-    private func value(_ kind: MenuBarMetricKind, _ value: String) -> some View {
+    private func value(_ sample: Sample) -> some View {
         if style == .system {
-            Text(value).foregroundStyle(.white)
+            Text(sample.value).foregroundStyle(.white)
         } else if style == .artistic || style == .palm {
-            Text(value).foregroundStyle(Theme.tSecondary)
+            Text(sample.value).foregroundStyle(Theme.tSecondary)
         } else {
-            Text(value).foregroundStyle(swiftColor(kind))
-        }
-    }
-
-    private func nsColor(_ kind: MenuBarMetricKind) -> NSColor {
-        switch kind {
-        case .claude: return AppDelegate.claudeColor
-        case .codex: return AppDelegate.codexColor
-        case .grok: return AppDelegate.grokColor
-        case .total: return .secondaryLabelColor
-        }
-    }
-
-    private func swiftColor(_ kind: MenuBarMetricKind) -> Color {
-        switch kind {
-        case .claude: return Theme.claude
-        case .codex: return Theme.codex
-        case .grok: return Theme.grok
-        case .total: return Theme.tSecondary
+            Text(sample.value).foregroundStyle(sample.source.themeColor)
         }
     }
 }

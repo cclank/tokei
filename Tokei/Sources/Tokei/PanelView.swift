@@ -60,9 +60,13 @@ struct PanelView: View {
     @AppStorage("grokLiveQuotaEnabled") private var grokLiveQuotaEnabled = false
     /// 默认关闭：开启后仅查询千问办公桌面端暴露在本机回环地址上的额度接口。
     @AppStorage("qwenWorkQuotaEnabled") private var qwenWorkQuotaEnabled = false
-    /// 菜单栏额度来源（与显示卡片独立）。Grok 默认关，避免新额度源抢占状态栏。
-    @AppStorage(MenuBarQuotaSource.claude.defaultsKey) private var menuBarQuotaClaude = true
-    @AppStorage(MenuBarQuotaSource.codex.defaultsKey) private var menuBarQuotaCodex = true
+    /// 菜单栏额度来源（与显示卡片独立），每项是一个具体窗口。
+    /// 只有历史上就默认开的 Claude 5h 与 Codex 周保持默认开，其余窗口默认关，避免抢占状态栏。
+    @AppStorage(MenuBarQuotaSource.claude5h.defaultsKey) private var menuBarQuotaClaude5h = true
+    @AppStorage(MenuBarQuotaSource.claudeWeek.defaultsKey) private var menuBarQuotaClaudeWeek = false
+    @AppStorage(MenuBarQuotaSource.claudeFable.defaultsKey) private var menuBarQuotaClaudeFable = false
+    @AppStorage(MenuBarQuotaSource.codex5h.defaultsKey) private var menuBarQuotaCodex5h = false
+    @AppStorage(MenuBarQuotaSource.codexWeek.defaultsKey) private var menuBarQuotaCodexWeek = true
     @AppStorage(MenuBarQuotaSource.grok.defaultsKey) private var menuBarQuotaGrok = false
     @State private var copyFeedback = false
     @State private var copiedToolID: String?
@@ -1867,25 +1871,36 @@ struct PanelView: View {
 
     @State private var updateSpin = false
 
+    private var updateRing: some View {
+        Circle()
+            .strokeBorder(
+                AngularGradient(colors: [.cyan, .blue, .purple, .cyan],
+                               center: .center),
+                lineWidth: 2
+            )
+            .frame(width: 26, height: 26)
+    }
+
     @ViewBuilder
     private var updatePill: some View {
         switch updater.state {
         case .available(let tag, _, _):
             Button { updater.performUpdate() } label: {
                 ZStack {
-                    Circle()
-                        .strokeBorder(
-                            AngularGradient(colors: [.cyan, .blue, .purple, .cyan],
-                                           center: .center),
-                            lineWidth: 2
-                        )
-                        .frame(width: 26, height: 26)
-                        .rotationEffect(.degrees(updateSpin ? 360 : 0))
-                        .onAppear {
-                            withAnimation(.linear(duration: 2.5).repeatForever(autoreverses: false)) {
-                                updateSpin = true
+                    // 面板关着时退化成静态圆环。这棵视图树永不释放,
+                    // repeatForever 会一直驱动 CoreAnimation 显示周期空烧 CPU。
+                    if store.popoverVisible {
+                        updateRing
+                            .rotationEffect(.degrees(updateSpin ? 360 : 0))
+                            .onAppear {
+                                withAnimation(.linear(duration: 2.5).repeatForever(autoreverses: false)) {
+                                    updateSpin = true
+                                }
                             }
-                        }
+                            .onDisappear { updateSpin = false }
+                    } else {
+                        updateRing
+                    }
                     Image(systemName: "arrow.up")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
@@ -2012,6 +2027,46 @@ struct PanelView: View {
         }
     }
 
+    /// 窗口 → 开关的唯一映射。@AppStorage 只能是独立属性，所有读写都从这里走。
+    private func menuBarQuotaBinding(_ source: MenuBarQuotaSource) -> Binding<Bool> {
+        switch source {
+        case .claude5h: return $menuBarQuotaClaude5h
+        case .claudeWeek: return $menuBarQuotaClaudeWeek
+        case .claudeFable: return $menuBarQuotaClaudeFable
+        case .codex5h: return $menuBarQuotaCodex5h
+        case .codexWeek: return $menuBarQuotaCodexWeek
+        case .grok: return $menuBarQuotaGrok
+        }
+    }
+
+    /// 状态栏真会画出来的那几项。和 `metrics(in:)` 共用一个谓词，
+    /// 提示语和预览才不会宣布一个状态栏根本没画的组合。
+    private var menuBarQuotaSelectedSources: [MenuBarQuotaSource] {
+        MenuBarQuotaSource.allCases.filter {
+            guard menuBarQuotaBinding($0).wrappedValue else { return false }
+            guard let usage = store.usage else { return true }
+            return $0.isRenderable(in: usage)
+        }
+    }
+
+    /// 6 个开关拼成一个值，菜单栏刷新只挂一个 onChange。
+    private var menuBarQuotaDigest: String {
+        MenuBarQuotaSource.allCases
+            .map { menuBarQuotaBinding($0).wrappedValue ? "1" : "0" }
+            .joined()
+    }
+
+    private var menuBarQuotaHint: String {
+        let selected = menuBarQuotaSelectedSources
+        if selected.isEmpty { return "全部关闭，状态栏只留图标。" }
+        let shown = selected.prefix(2).map(\.label).joined(separator: " · ")
+        if selected.count > 2 {
+            let hidden = selected.dropFirst(2).map(\.label).joined(separator: "、")
+            return "双额度显示：\(shown)；\(hidden) 放不下。"
+        }
+        return "双额度显示：\(shown)。"
+    }
+
     var settingsMenuBarSection: some View {
         settingsSection("menubar.rectangle", "菜单栏") {
             settingsStackedValue("样式") {
@@ -2042,13 +2097,19 @@ struct PanelView: View {
             settingsStackedValue("额度来源") {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
                                     GridItem(.flexible(), spacing: 7)], spacing: 7) {
-                    settingsRow("Claude", tint: Theme.claude, isOn: $menuBarQuotaClaude)
-                    settingsRow("Codex", tint: Theme.codex, isOn: $menuBarQuotaCodex)
-                    settingsRow("Grok", tint: Theme.grok, isOn: $menuBarQuotaGrok)
+                    ForEach(MenuBarQuotaSource.allCases) { source in
+                        settingsRow(source.label, tint: source.themeColor,
+                                    isOn: menuBarQuotaBinding(source))
+                    }
                 }
             }
 
-            Text("只影响状态栏剩余额度，与「显示卡片」无关。双额度最多显示前两项；单额度只显示一项。全部关闭时状态栏只留图标，不再显示用量数字。")
+            Text(menuBarQuotaHint)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Theme.tSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口、或者读数已过期，状态栏会跳过它。")
                 .font(.system(size: 8.5))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2057,7 +2118,8 @@ struct PanelView: View {
                 Spacer()
                 MenuBarStylePreview(
                     style: MenuBarStyle(rawValue: menuBarStyle) ?? .system,
-                    density: MenuBarDensity(rawValue: menuBarDensity) ?? .full
+                    density: MenuBarDensity(rawValue: menuBarDensity) ?? .full,
+                    sources: Array(menuBarQuotaSelectedSources.prefix(2))
                 )
                 Spacer()
             }
@@ -2068,13 +2130,7 @@ struct PanelView: View {
         .onChange(of: menuBarDensity) { _ in
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
-        .onChange(of: menuBarQuotaClaude) { _ in
-            (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
-        }
-        .onChange(of: menuBarQuotaCodex) { _ in
-            (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
-        }
-        .onChange(of: menuBarQuotaGrok) { _ in
+        .onChange(of: menuBarQuotaDigest) { _ in
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
     }
@@ -2858,7 +2914,9 @@ struct PanelView: View {
         return lines.joined(separator: "\n")
     }
 
-    static let buildVersion = "2026.0615"
+    static var buildVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "TokeiBuildDate") as? String ?? "未打包"
+    }
 
     static var skillPath: String {
         return "https://raw.githubusercontent.com/cclank/tokei/main/skills/tokei-setup.md"

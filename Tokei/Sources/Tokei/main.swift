@@ -15,6 +15,9 @@ final class Store: ObservableObject {
     @Published var syncDetail = ""
     @Published var syncFailStreak = 0
     @Published var peerLoadIssues: [PeerLoadIssue] = []
+    // popover 的视图树启动时建好后就不再释放,面板关上也还活着。
+    // 动画类视图得靠这个标志判断自己是不是真的能被看见。
+    @Published var popoverVisible = false
 
     let syncManager = SyncManager()
     let quotaHistory = QuotaHistoryStore.shared
@@ -216,7 +219,7 @@ final class Store: ObservableObject {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let store = Store()
     var statusItem: NSStatusItem!
     var popover = NSPopover()
@@ -249,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = host
         popover.behavior = .applicationDefined
         popover.animates = true
+        popover.delegate = self
 
         // 启动时先把 Qoder IDE / Grok / 千问办公额度开关落盘到 config.json,
         // 确保随后的 refresh() 触发的 Python 扫描能读到正确配置。
@@ -300,28 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let u = store.usage {
             let ud = UserDefaults.standard
-            // 菜单栏额度来源与「显示卡片」独立：卡片可开，但状态栏只显示用户勾选的来源。
-            if MenuBarQuotaSource.claude.isEnabled,
-               u.claude.q5_stale != true,
-               let q5 = u.claude.q5 {
-                let remaining = 100 - q5
-                metrics.append(.init(kind: .claude, value: String(format: "%.0f", remaining),
-                                     remaining: remaining))
-            }
-            if MenuBarQuotaSource.codex.isEnabled,
-               u.codex.pw_stale != true,
-               let quota = u.codex.pw {
-                let remaining = 100 - quota
-                metrics.append(.init(kind: .codex, value: String(format: "%.0f", remaining),
-                                     remaining: remaining))
-            }
-            if MenuBarQuotaSource.grok.isEnabled,
-               u.grok.stale != true,
-               let pct = u.grok.pct {
-                let remaining = 100 - pct
-                metrics.append(.init(kind: .grok, value: String(format: "%.0f", remaining),
-                                     remaining: remaining))
-            }
+            // 菜单栏额度来源与「显示卡片」独立：卡片可开，但状态栏只显示用户勾选的窗口。
+            metrics = MenuBarQuotaSource.metrics(in: u)
             if metrics.isEmpty {
                 // 用户把额度来源全部关掉时：只保留图标，不再回退显示今日 token 总量。
                 let anyQuotaSourceOn = MenuBarQuotaSource.allCases.contains { $0.isEnabled }
@@ -388,13 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         b.contentTintColor = nil
         fitStatusItemWidth(b)
         var summaryParts = displayedMetrics.map { metric in
-            let name: String
-            switch metric.kind {
-            case .claude: name = "Claude"
-            case .codex: name = "Codex"
-            case .grok: name = "Grok"
-            case .total: name = "今日"
-            }
+            let name = metric.kind.displayName
             if metric.remaining != nil {
                 return "\(name) 剩余 \(metric.value)%"
             }
@@ -463,6 +441,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        store.popoverVisible = true
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        store.popoverVisible = false
     }
 }
 

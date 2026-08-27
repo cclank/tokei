@@ -6996,10 +6996,17 @@ def _claude_cache_records():
         _path_candidates("TOKEI_CLAUDE_CACHE_DIR", CLAUDE_CACHE, *CLAUDE_CACHE_DIRS))
     records = {}
     for cache_dir in cache_dirs:
+        # realpath 会对路径每一级都 lstat 一遍。这一万个文件共享同一个目录前缀,
+        # 逐个 realpath 等于把同样的目录解析重复一万次,所以前缀只解析一次。
+        real_dir = os.path.realpath(cache_dir)
         for path in glob.glob(os.path.join(cache_dir, "*_0")):
             try:
-                real = os.path.realpath(path)
-                st = os.stat(real)
+                if os.path.islink(path):
+                    real = os.path.realpath(path)
+                    st = os.stat(real)
+                else:
+                    real = os.path.join(real_dir, os.path.basename(path))
+                    st = os.stat(path)
                 records[real] = {
                     "path": real,
                     "mtime_ns": st.st_mtime_ns,

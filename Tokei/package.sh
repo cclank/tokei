@@ -9,6 +9,14 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 
+# 只记录本次打包日期，不把它混入正式版本号或 CFBundleVersion。
+# 允许测试和可复现打包显式指定日期。
+BUILD_DATE="${TOKEI_BUILD_DATE:-$(date '+%Y.%m.%d')}"
+if [[ ! "$BUILD_DATE" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
+    echo "构建日期格式无效，应为 YYYY.MM.DD: $BUILD_DATE" >&2
+    exit 1
+fi
+
 swift build -c release
 
 APP="Tokei.app"
@@ -40,6 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.tokei.app</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>TokeiBuildDate</key><string>${BUILD_DATE}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Tokei</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>

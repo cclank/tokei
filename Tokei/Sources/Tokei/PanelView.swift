@@ -1971,17 +1971,18 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 12) {
             settingsHeader
 
+            settingsAgentsSection
+
             HStack(alignment: .top, spacing: 11) {
                 VStack(alignment: .leading, spacing: 11) {
-                    settingsAgentsSection
                     settingsMenuBarSection
-                    settingsPrivacySection
+                    settingsDiagnosticsSection
+                    settingsPricingSection
                 }
                 .frame(width: settingsColumnWidth, alignment: .top)
 
                 VStack(alignment: .leading, spacing: 11) {
-                    settingsDiagnosticsSection
-                    settingsPricingSection
+                    settingsPrivacySection
                     settingsSystemSection
                     settingsReminderSection
                     settingsSyncSection
@@ -2167,6 +2168,7 @@ struct PanelView: View {
     var settingsAgentsSection: some View {
         settingsSection("square.grid.2x2", "显示卡片") {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
+                                GridItem(.flexible(), spacing: 7),
                                 GridItem(.flexible(), spacing: 7)], spacing: 7) {
                 settingsRow("Claude", tint: Theme.claude, isOn: $showClaude)
                 settingsRow("Codex", tint: Theme.codex, isOn: $showCodex)

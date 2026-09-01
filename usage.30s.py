@@ -6673,7 +6673,7 @@ def _openclaw_agent_db_paths(sqlite_module):
             columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_databases)")}
             if "path" not in columns:
                 continue
-            root = os.path.dirname(os.path.dirname(os.path.abspath(registry_path)))
+            root = os.path.dirname(os.path.realpath(os.path.abspath(OPENCLAW_AGENTS)))
             paths = []
             seen = set()
             for (raw_path,) in conn.execute("SELECT path FROM agent_databases"):

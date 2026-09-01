@@ -328,6 +328,33 @@ class OpenClawTaskTests(unittest.TestCase):
         self.assertNotIn("vendor/example-message-model", models)
         self.assertIn("unknown", models)
 
+    def test_relative_agent_path_uses_openclaw_root_when_registry_is_overridden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            openclaw_root = fixture / "custom-openclaw-root"
+            state_db = fixture / "registry-copy.sqlite"
+            agent_db = (openclaw_root / "agents" / "example-agent" / "agent"
+                        / "openclaw-agent.sqlite")
+            now = datetime.now().astimezone().replace(microsecond=0)
+            created_ms = int(now.timestamp() * 1000)
+            self.create_database(state_db, created_ms, [], with_tasks=False)
+            self.add_agent_registry(state_db, [
+                "agents/example-agent/agent/openclaw-agent.sqlite",
+            ])
+            event = self.usage_event(
+                "event-custom-root", now,
+                {"input": 9, "output": 0, "totalTokens": 9,
+                 "cost": {"total": 0}},
+            )
+            self.create_agent_database(
+                agent_db, [("session-custom-root", event, created_ms)])
+
+            result, _ = self.scan(
+                state_db, fixture / "missing.sqlite", openclaw_root / "agents",
+            )
+
+        self.assertEqual(result["ranges"]["today"]["in"], 9)
+
     def test_pricing_fallback_treats_reasoning_as_separate_output(self):
         now = datetime.now().astimezone().replace(microsecond=0)
         event = self.usage_event(

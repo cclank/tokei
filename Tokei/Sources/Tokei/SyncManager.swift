@@ -611,7 +611,7 @@ final class SyncManager {
             var d = dst.get(pair.dst), s = src.get(pair.src)
             d.tasks += s.tasks; d.completed += s.completed; d.failed += s.failed
             d.in += s.in; d.out += s.out; d.cr += s.cr; d.cw += s.cw
-            d.cost += s.cost; d.sessions += s.sessions
+            d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
             dst.set(pair.dst, d)

@@ -188,7 +188,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | z.ai / GLM | macOS Keychain API Key + Global/BigModel CN quota / model-usage API（卡片默认关闭） |
 | Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl`（含真实 token + billing 额度）+ `sessions/*/*/{summary,signals}.json`；可选实时账单接口（设置里默认关闭） |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` |
-| OpenClaw | `~/.openclaw/agents/*/sessions/*.jsonl` + `~/.openclaw/state/openclaw.sqlite` |
+| OpenClaw | `~/.openclaw/state/openclaw.sqlite` 动态发现 agent SQLite；兼容旧版 `agents/*/sessions/*.jsonl` |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` |
 | Prime Agent | `~/.prime/agent/sessions/*.jsonl` + `session-artifacts/**/**/*.jsonl` |
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` |

@@ -412,7 +412,7 @@ struct PanelView: View {
             ToolCardItem(id: "mimocode", name: "MiMoCode", visible: showMimoCode, active: mr.sessions > 0,
                          tint: Theme.mimocode, content: AnyView(tokenUsageBlock(title: "MiMoCode", mr, tint: Theme.mimocode, modelsOpen: $mimocodeModelsOpen, toolID: "mimocode"))),
             ToolCardItem(id: "openclaw", name: "OpenClaw", visible: showOpenClaw,
-                         active: lr.tasks > 0 || lr.in + lr.out + lr.cr + lr.cw > 0,
+                         active: lr.tasks > 0 || lr.in + lr.out + lr.cr + lr.cw + lr.reason > 0,
                          tint: Theme.openclaw, content: AnyView(openclawBlock(lr, modelsOpen: $openClawModelsOpen))),
             ToolCardItem(id: "pi", name: "Pi", visible: showPi, active: pr.sessions > 0,
                          tint: Theme.pi, content: AnyView(tokenUsageBlock(title: "Pi Coding Agent", pr, tint: Theme.pi, modelsOpen: $piModelsOpen, toolID: "pi"))),
@@ -1449,8 +1449,8 @@ struct PanelView: View {
     func openclawBlock(_ r: OpenClawRange, modelsOpen: Binding<Bool>) -> some View {
         VStack(alignment: .leading, spacing: 11) {
             cardHead("OpenClaw", tint: Theme.openclaw, sessions: r.sessions, toolID: "openclaw")
-            if r.in + r.out + r.cr + r.cw > 0 {
-                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw), caption: "\(sel.label) 总量", tint: Theme.openclaw)
+            if r.in + r.out + r.cr + r.cw + r.reason > 0 {
+                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw + r.reason), caption: "\(sel.label) 总量", tint: Theme.openclaw)
                 metricGrid([.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost))],
                     hit: r.hit, extra: {
                     var items: [Metric] = [
@@ -1458,6 +1458,7 @@ struct PanelView: View {
                         .init("arrow.up", "输出", Fmt.human(r.out)),
                         .init("bolt.fill", "缓存读", Fmt.human(r.cr)),
                     ]
+                    if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
                     if r.tasks > 0 { items.append(.init("checklist", "任务", "\(r.tasks)")) }
                     return items
                 }(), tint: Theme.openclaw)

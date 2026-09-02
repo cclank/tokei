@@ -407,7 +407,7 @@ struct PanelView: View {
                          tint: Theme.zed, presentation: .compactStatus,
                          content: AnyView(providerQuotaBlock(
                             "Zed", quota: u.zed, tint: Theme.zed,
-                            setupHint: "请先在 Zed 中登录 GitHub；Tokei 会无弹窗读取现有 Keychain 登录态。"))),
+                            setupHint: "请先在 Zed 中登录 GitHub，再到设置的「Provider 额度」中授权读取登录态。"))),
             ToolCardItem(id: "sub2api", name: "Sub2API", visible: showSub2API, active: showSub2API,
                          tint: Theme.sub2api, presentation: .compactStatus,
                          content: AnyView(providerQuotaBlock(
@@ -2364,6 +2364,8 @@ struct PanelView: View {
     @State private var providerSettingsResult = ""
     @State private var grokBotAuthorizing = false
     @State private var grokBotAuthorizationResult = ""
+    @State private var zedAuthorizing = false
+    @State private var zedAuthorizationResult = ""
     @AppStorage("syncDir") private var syncDir = ""
     @AppStorage("deviceName") private var deviceName = ""
     @State private var configuredDeviceID: String?
@@ -2631,10 +2633,29 @@ struct PanelView: View {
 
     var settingsProviderQuotaSection: some View {
         settingsSection("key.horizontal.fill", "Provider 额度") {
-            Text("Cursor 复用 Cursor.app 登录态，Zed 复用 Zed Keychain；两者无需在 Tokei 中保存密钥。显示对应卡片即允许查询。")
+            Text("Cursor 复用 Cursor.app 登录态；Zed 首次使用需允许 Tokei 读取其 Keychain 登录态。Tokei 不保存这些登录密钥。")
                 .font(.system(size: 8.5))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if showZed {
+                HStack(spacing: 8) {
+                    settingsActionButton(
+                        icon: "key.fill",
+                        title: zedAuthorizing ? "等待授权…" : "授权 Zed"
+                    ) {
+                        authorizeZedQuota()
+                    }
+                    .disabled(zedAuthorizing)
+                    if zedAuthorizing { ProgressView().controlSize(.mini) }
+                    if !zedAuthorizationResult.isEmpty {
+                        Text(zedAuthorizationResult)
+                            .font(.system(size: 8.5))
+                            .foregroundStyle(Theme.tTertiary)
+                            .lineLimit(2)
+                    }
+                }
+            }
 
             thinDivider
 
@@ -2779,6 +2800,42 @@ struct PanelView: View {
         loadProviderSettings()
         providerSettingsResult = "已清除"
         store.refresh()
+    }
+
+    private func authorizeZedQuota() {
+        guard !zedAuthorizing, let executable = Bundle.main.executableURL else { return }
+        zedAuthorizing = true
+        zedAuthorizationResult = ""
+        DispatchQueue.global(qos: .userInitiated).async {
+            func run(_ argument: String) -> Bool {
+                let process = Process()
+                process.executableURL = executable
+                process.arguments = [argument]
+                process.standardInput = FileHandle.nullDevice
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    return process.terminationStatus == 0
+                } catch {
+                    return false
+                }
+            }
+            let interactiveSucceeded = run("--zed-authorize")
+            let persistentSucceeded = interactiveSucceeded && run("--zed-verify")
+            DispatchQueue.main.async {
+                zedAuthorizing = false
+                if persistentSucceeded {
+                    zedAuthorizationResult = "授权成功，正在刷新 Zed 额度"
+                    store.refresh()
+                } else if interactiveSucceeded {
+                    zedAuthorizationResult = "仅允许了本次读取，请重新授权并选择“始终允许”"
+                } else {
+                    zedAuthorizationResult = "未授权，或 Zed 尚未登录"
+                }
+            }
+        }
     }
 
     private static func validSub2APIBaseURL(_ value: String) -> Bool {

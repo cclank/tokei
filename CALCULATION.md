@@ -16,7 +16,7 @@ Tokei 主要读取本地 AI 工具日志，统计 token 用量与成本。额度
 | QoderWork | `~/Library/Application Support/QoderWork/data/agents.db` | SQLite, `messages.metadata` |
 | Qoder CLI | `~/.qoder/projects/**/*.jsonl` | JSONL, 会话/调用/工具/时长；文本量估算 Token |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` | SQLite, `session_model_usage*` 用量表，回退 `sessions` 表 |
-| OpenClaw | `~/.openclaw/agents/*/sessions/*.jsonl` + `~/.openclaw/state/openclaw.sqlite` | JSONL 用量 + SQLite 任务 |
+| OpenClaw | `~/.openclaw/state/openclaw.sqlite` + agent SQLite；兼容旧 JSONL | SQLite/JSONL 用量 + SQLite 任务 |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` | JSONL, `message.usage` |
 | Prime Agent | `~/.prime/agent/sessions/*.jsonl` + `session-artifacts/**/**/*.jsonl` | JSONL, assistant `message.usage` |
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` | JSONL, `message.usage` / `providerData.usage` |
@@ -158,9 +158,16 @@ Dashboard、Wrapped 或项目 token 总量。
 
 **Qoder** — `inputTokens` / `outputTokens` 目前全为 0,仅 `durationMs` 和 `contextUsageRatio` 有值。
 
-**OpenClaw** — Session JSONL 的 `message.usage` 提供输入、输出、缓存读写和成本；
-`state/openclaw.sqlite` 的 `task_runs` 提供任务状态。旧版
-`~/.openclaw/tasks/runs.sqlite` 仍作为兼容回退。
+**OpenClaw** — 新版从 `state/openclaw.sqlite` 的 `agent_databases` 动态发现每个 agent 的
+`openclaw-agent.sqlite`，只读取 `transcript_events.event_json` 中 role 为 assistant 且带
+`message.usage` 的原始事件。输入、输出、缓存读写、推理和成本分别使用
+`input` / `output` / `cacheRead` / `cacheWrite` / `reasoningTokens` / `cost`；日期以事件时间为准，
+模型依次使用 `message.responseModel`、`message.model` 和 `session_windows.model`。未知模型保留原名且
+不套用其他模型价格。
+
+旧版 `agents/*/sessions/*.jsonl` 继续兼容；SQLite 与 JSONL 中相同 session 只保留记录更完整的一份，
+`.trajectory.jsonl`、全文索引和非 usage 事件不参与统计。`state/openclaw.sqlite` 的 `task_runs`
+仍提供任务状态，旧版 `~/.openclaw/tasks/runs.sqlite` 作为任务统计回退。
 
 ---
 

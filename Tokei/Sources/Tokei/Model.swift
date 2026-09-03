@@ -603,6 +603,7 @@ struct OpenClawRange: Codable {
     var out: Int
     var cr: Int
     var cw: Int
+    var reason: Int = 0
     var cost: Double
     var sessions: Int
     var models: [TokenModelStat]
@@ -617,6 +618,7 @@ struct OpenClawRange: Codable {
         out = try c.decodeIfPresent(Int.self, forKey: .out) ?? 0
         cr = try c.decodeIfPresent(Int.self, forKey: .cr) ?? 0
         cw = try c.decodeIfPresent(Int.self, forKey: .cw) ?? 0
+        reason = try c.decodeIfPresent(Int.self, forKey: .reason) ?? 0
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []

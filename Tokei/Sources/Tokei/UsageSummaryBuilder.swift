@@ -275,10 +275,11 @@ enum UsageSummaryBuilder {
             let r = usage.openclaw.ranges.get(range)
             let line = Line(
                 id: "openclaw", name: "OpenClaw", cost: r.cost,
-                tokens: r.in + r.out + r.cr + r.cw, sessions: r.sessions,
+                tokens: r.in + r.out + r.cr + r.cw + r.reason, sessions: r.sessions,
                 calls: r.tasks > 0 ? r.tasks : nil,
                 input: r.in, output: r.out, cacheRead: r.cr, cacheWrite: r.cw,
-                reason: nil, hit: r.hit > 0 ? r.hit : nil, extra: nil
+                reason: r.reason > 0 ? r.reason : nil,
+                hit: r.hit > 0 ? r.hit : nil, extra: nil
             )
             if !line.isEmpty { lines.append(line) }
         }

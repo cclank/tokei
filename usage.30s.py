@@ -702,8 +702,8 @@ def ledger_flush():
             for dk, day in days.items():
                 kept = stored.get(dk)
                 if (kept is None
-                        or _ledger_cost_version(day) > _ledger_cost_version(kept)
-                        or (_ledger_cost_version(day) == _ledger_cost_version(kept)
+                        or _ledger_record_version(day) > _ledger_record_version(kept)
+                        or (_ledger_record_version(day) == _ledger_record_version(kept)
                             and _ledger_day_total(day) > _ledger_day_total(kept))):
                     stored[dk] = day
         _save_ledger(fresh)
@@ -744,8 +744,17 @@ def _ledger_day_total(day):
                and k != "cost" and not k.startswith("_"))
 
 
-def _ledger_cost_version(day):
-    value = day.get("_cost_version", 0) if isinstance(day, dict) else 0
+def _ledger_record_version(day):
+    """Return the schema version for a persisted daily record.
+
+    ``_cost_version`` is retained for existing collectors.  New parsers can use
+    the broader ``_ledger_version`` when a deduplication or token-accounting
+    change must replace an older high-water value, even when the new total is
+    lower.
+    """
+    if not isinstance(day, dict):
+        return 0
+    value = day.get("_ledger_version", day.get("_cost_version", 0))
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
 
 
@@ -782,8 +791,8 @@ def ledger_reconcile(tool, live_days):
     max_day = (date.today() + timedelta(days=1)).isoformat()
     for dk, live in live_days.items():
         kept = stored.get(dk)
-        kept_version = _ledger_cost_version(kept)
-        live_version = _ledger_cost_version(live)
+        kept_version = _ledger_record_version(kept)
+        live_version = _ledger_record_version(live)
         if (kept and kept_version > live_version
                 or (kept and kept_version == live_version
                     and _ledger_day_total(kept) > _ledger_day_total(live))):
@@ -907,7 +916,7 @@ def _empty_hermes():
 
 def _empty_openclaw():
     ranges = {k: {"tasks": 0, "completed": 0, "failed": 0,
-                  "in": 0, "out": 0, "cr": 0, "cw": 0,
+                  "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0,
                   "cost": 0.0, "sessions": set(), "models": {}} for k in RANGE_KEYS}
     return {"ranges": ranges}
 
@@ -6993,8 +7002,13 @@ def scan_hermes(bounds, cache):
 
 
 # ---------- OpenClaw ----------
-# SQLite: ~/.openclaw/state/openclaw.sqlite（新版）或 ~/.openclaw/tasks/runs.sqlite（旧版）
-# Session JSONL: ~/.openclaw/agents/*/sessions/*.jsonl — token 用量
+# 全局 SQLite: ~/.openclaw/state/openclaw.sqlite（任务 + agent DB 注册表）
+# Agent SQLite: agent_databases.path -> transcript_events.event_json（新版 token 用量）
+# Session JSONL: ~/.openclaw/agents/*/sessions/*.jsonl（旧版 token 用量）
+_OPENCLAW_PARSER_VERSION = 1
+_OPENCLAW_LEDGER_VERSION = 1
+
+
 def _openclaw_db_paths():
     return [path for path in _path_candidates(
         "TOKEI_OPENCLAW_DB", OPENCLAW_STATE_DB, OPENCLAW_DB) if os.path.isfile(path)]
@@ -7047,6 +7061,256 @@ def _scan_openclaw_db(db_path, sqlite_module):
         conn.close()
 
 
+def _openclaw_agent_db_paths(sqlite_module):
+    """Discover agent databases from the global registry.
+
+    OpenClaw stores registry paths relative to ``~/.openclaw`` on current
+    releases.  Absolute paths remain supported for compatible installations.
+    The boolean result distinguishes an authoritative empty registry from a
+    transient read failure so cached agent data is not discarded on lock/I/O
+    errors.
+    """
+    read_failed = False
+    for registry_path in _openclaw_db_paths():
+        conn = None
+        try:
+            conn = _openclaw_connect(registry_path, sqlite_module)
+            found = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_databases'"
+            ).fetchone()
+            if not found:
+                continue
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_databases)")}
+            if "path" not in columns:
+                continue
+            root = os.path.dirname(os.path.realpath(os.path.abspath(OPENCLAW_AGENTS)))
+            paths = []
+            seen = set()
+            for (raw_path,) in conn.execute("SELECT path FROM agent_databases"):
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    continue
+                expanded = os.path.expandvars(os.path.expanduser(raw_path.strip()))
+                resolved = expanded if os.path.isabs(expanded) else os.path.join(root, expanded)
+                resolved = os.path.realpath(os.path.abspath(resolved))
+                key = os.path.normcase(resolved)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(resolved)
+            return True, paths
+        except Exception:
+            read_failed = True
+        finally:
+            if conn is not None:
+                conn.close()
+    return not read_failed, []
+
+
+def _openclaw_number(value):
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _openclaw_cost_number(value):
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        return max(float(value or 0), 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _openclaw_datetime(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = float(value) / 1000 if value > 10_000_000_000 else float(value)
+        try:
+            return datetime.fromtimestamp(seconds).astimezone()
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        parsed = parse_ts(value)
+        return parsed.astimezone() if parsed else None
+    return None
+
+
+def _openclaw_usage_record(event, created_at=None, session_model=None):
+    if not isinstance(event, dict):
+        return None
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return None
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    # The persisted event timestamp is authoritative. created_at mirrors it on
+    # current databases and is the stable fallback when optional JSON fields are
+    # absent; message.timestamp can precede persistence by several seconds.
+    occurred_at = (_openclaw_datetime(event.get("timestamp"))
+                   or _openclaw_datetime(created_at)
+                   or _openclaw_datetime(message.get("timestamp")))
+    if occurred_at is None:
+        return None
+
+    inp = _openclaw_number(usage.get("input"))
+    out = _openclaw_number(usage.get("output"))
+    cr = _openclaw_number(usage.get("cacheRead"))
+    cw = _openclaw_number(usage.get("cacheWrite"))
+    reason = _openclaw_number(usage.get("reasoningTokens"))
+
+    raw_model = next((candidate.strip() for candidate in (
+        message.get("responseModel"), message.get("model"), session_model
+    ) if isinstance(candidate, str) and candidate.strip()), "")
+    model = _model_identity_id(raw_model) or raw_model or "unknown"
+
+    cost_obj = usage.get("cost")
+    if isinstance(cost_obj, dict):
+        cost = _openclaw_cost_number(cost_obj.get("total"))
+        if cost <= 0:
+            cost = sum(_openclaw_cost_number(cost_obj.get(field)) for field in (
+                "input", "output", "cacheRead", "cacheWrite"))
+    else:
+        cost = _openclaw_cost_number(cost_obj)
+    pricing_id = _exact_pricing_id(model)
+    if cost <= 0 and pricing_id:
+        price = _raw_price(pricing_id)
+        cost = (inp / 1e6 * price["in"] + (out + reason) / 1e6 * price["out"]
+                + cr / 1e6 * price["cache_read"] + cw / 1e6 * price["cache_write"])
+
+    return {"date": occurred_at.date().isoformat(), "hour": occurred_at.hour,
+            "in": inp, "out": out, "cr": cr, "cw": cw, "reason": reason,
+            "cost": cost, "model": model}
+
+
+def _openclaw_add_record(days, record):
+    day = days.setdefault(record["date"], _empty_token_day())
+    _add_token_usage(day, record["in"], record["out"], record["cr"], record["cw"],
+                     record["reason"], record["cost"], record["model"])
+    day["hours"][record["hour"]] += token_total(record)
+
+
+def _openclaw_event_key(event, raw_event):
+    event_id = event.get("id") if isinstance(event, dict) else None
+    if isinstance(event_id, str) and event_id:
+        return "id:" + event_id
+    material = raw_event if isinstance(raw_event, str) else json.dumps(
+        event, sort_keys=True, separators=(",", ":"))
+    return "hash:" + hashlib.sha256(
+        material.encode("utf-8", errors="surrogatepass")
+    ).hexdigest()
+
+
+def _scan_openclaw_agent_db(db_path, sqlite_module):
+    conn = _openclaw_connect(db_path, sqlite_module)
+    try:
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if "transcript_events" not in tables:
+            raise sqlite_module.OperationalError("missing transcript_events")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(transcript_events)")}
+        if not {"session_id", "seq", "event_json", "created_at"}.issubset(columns):
+            raise sqlite_module.OperationalError("incompatible transcript_events")
+
+        session_models = {}
+        if "session_windows" in tables:
+            window_columns = {row[1] for row in conn.execute(
+                "PRAGMA table_info(session_windows)"
+            )}
+            if {"session_id", "model"}.issubset(window_columns):
+                session_models = {str(session_id): model for session_id, model in conn.execute(
+                    "SELECT session_id, model FROM session_windows"
+                )}
+
+        sessions = {}
+        seen_events = {}
+        for session_id, seq, raw_event, created_at in conn.execute(
+                "SELECT session_id, seq, event_json, created_at "
+                "FROM transcript_events ORDER BY session_id, seq"):
+            try:
+                event = json.loads(raw_event)
+            except (TypeError, ValueError):
+                continue
+            session_key = str(session_id)
+            event_key = _openclaw_event_key(event, raw_event)
+            session_seen = seen_events.setdefault(session_key, set())
+            if event_key in session_seen:
+                continue
+            session_seen.add(event_key)
+            record = _openclaw_usage_record(
+                event, created_at, session_models.get(session_key))
+            if record is None:
+                continue
+            session = sessions.setdefault(session_key, {"days": {}, "events": 0})
+            _openclaw_add_record(session["days"], record)
+            session["events"] += 1
+        return sessions
+    finally:
+        conn.close()
+
+
+def _scan_openclaw_jsonl(path):
+    session_id = os.path.basename(path)[:-6]
+    days = {}
+    events = 0
+    seen = set()
+    with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if '"usage"' not in line and '"type"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if (event.get("type") == "session" and isinstance(event.get("id"), str)
+                    and event["id"]):
+                session_id = event["id"]
+            event_key = _openclaw_event_key(event, line)
+            if event_key in seen:
+                continue
+            seen.add(event_key)
+            record = _openclaw_usage_record(event)
+            if record is None:
+                continue
+            _openclaw_add_record(days, record)
+            events += 1
+    return session_id, {"days": days, "events": events}
+
+
+def _openclaw_session_score(copy, source):
+    token_count = sum(_ledger_token_sum(day) for day in copy.get("days", {}).values())
+    return token_count, int(copy.get("events", 0)), 1 if source == "sqlite" else 0
+
+
+def _openclaw_selected_sessions(tool_cache):
+    selected = {}
+    for entry_key, entry in tool_cache.items():
+        if entry_key.startswith("_") or not isinstance(entry, dict):
+            continue
+        if entry.get("parser_version") != _OPENCLAW_PARSER_VERSION:
+            continue
+        source = entry.get("source")
+        if source == "sqlite":
+            copies = (entry.get("sessions") or {}).items()
+        elif source == "jsonl":
+            copies = [(entry.get("session_id") or entry_key, {
+                "days": entry.get("days", {}), "events": entry.get("events", 0)})]
+        else:
+            continue
+        for session_id, copy in copies:
+            if not isinstance(copy, dict):
+                continue
+            session_key = str(session_id)
+            score = _openclaw_session_score(copy, source)
+            previous = selected.get(session_key)
+            if previous is None or score > previous[0]:
+                selected[session_key] = (score, copy)
+    return {session_id: copy for session_id, (_, copy) in selected.items()}
+
+
 def scan_openclaw(bounds, cache):
     import sqlite3 as _sq
     ledger_touch("openclaw")
@@ -7072,7 +7336,7 @@ def scan_openclaw(bounds, cache):
         return ks
 
     B = {k: {"tasks": 0, "completed": 0, "failed": 0,
-             "in": 0, "out": 0, "cr": 0, "cw": 0,
+             "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0,
              "cost": 0.0, "sessions": set(), "models": {}} for k in RANGE_KEYS}
 
     # --- Part 1: SQLite task counts ---
@@ -7104,110 +7368,93 @@ def scan_openclaw(bounds, cache):
         fc.pop("_db", None)
         changed = True
 
-    # --- Part 2: Session JSONL token usage ---
-    live_days = {}
-    if os.path.isdir(OPENCLAW_AGENTS):
-        stale = {k for k in fc if not k.startswith("_")}
-        for f in glob.glob(os.path.join(OPENCLAW_AGENTS, "*", "sessions", "*.jsonl")):
-            if f.endswith(".trajectory.jsonl"):
-                continue
-            stale.discard(f)
+    # --- Part 2: dynamically discovered agent SQLite usage ---
+    registry_ok, agent_db_paths = _openclaw_agent_db_paths(_sq)
+    active_sqlite_keys = set()
+    for agent_db_path in agent_db_paths:
+        entry_key = "sqlite:" + os.path.realpath(agent_db_path)
+        active_sqlite_keys.add(entry_key)
+        sig = _sqlite_signature(agent_db_path)
+        entry = fc.get(entry_key)
+        needs_scan = (not entry or entry.get("parser_version") != _OPENCLAW_PARSER_VERSION
+                      or entry.get("path") != agent_db_path or entry.get("sig") != sig)
+        if sig and needs_scan:
             try:
-                st = os.stat(f)
-            except OSError:
+                sessions = _scan_openclaw_agent_db(agent_db_path, _sq)
+            except Exception:
                 continue
-            sig = f"{st.st_mtime}:{st.st_size}"
-            entry = fc.get(f)
-            if not entry or entry.get("sig") != sig:
-                days = {}
-                try:
-                    with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-                        for line in fh:
-                            if '"usage"' not in line:
-                                continue
-                            try:
-                                o = json.loads(line)
-                            except Exception:
-                                continue
-                            msg = o.get("message", {})
-                            if msg.get("role") != "assistant":
-                                continue
-                            u = msg.get("usage")
-                            if not u:
-                                continue
-                            dt = parse_ts(o.get("timestamp", ""))
-                            if dt is None:
-                                continue
-                            dt = dt.astimezone()
-                            inp = u.get("input", 0) or 0
-                            out = u.get("output", 0) or 0
-                            cr = u.get("cacheRead", 0) or 0
-                            cw = u.get("cacheWrite", 0) or 0
-                            if inp == 0 and out == 0:
-                                continue
-                            model = msg.get("model", "")
-                            model_id = _model_identity_id(model)
-                            pricing_id = _exact_pricing_id(model_id)
-                            cost_obj = u.get("cost")
-                            raw_cost = float((cost_obj or {}).get("total", 0) or 0)
-                            if raw_cost > 0:
-                                cost = raw_cost
-                            elif pricing_id:
-                                p = _raw_price(pricing_id)
-                                cost = inp / 1e6 * p["in"] + out / 1e6 * p["out"] + cr / 1e6 * p["cache_read"] + cw / 1e6 * p["cache_write"]
-                            else:
-                                cost = 0.0
-                            dk = dt.date().isoformat()
-                            day = days.setdefault(dk, {"in": 0, "out": 0, "cr": 0, "cw": 0,
-                                                       "cost": 0.0, "models": {},
-                                                       "hours": [0] * 24})
-                            day["in"] += inp; day["out"] += out
-                            day["cr"] += cr; day["cw"] += cw; day["cost"] += cost
-                            day["hours"][dt.hour] += inp + out + cr + cw
-                            mn = model_id or model or "unknown"
-                            mm = day["models"].setdefault(
-                                mn, {"in": 0, "out": 0, "cr": 0, "cw": 0,
-                                     "reason": 0, "cost": 0.0})
-                            mm["in"] += inp; mm["out"] += out
-                            mm["cr"] += cr; mm["cw"] += cw; mm["cost"] += cost
-                except OSError:
-                    continue
-                fc[f] = {"sig": sig, "days": days}
+            fc[entry_key] = {"source": "sqlite", "path": agent_db_path, "sig": sig,
+                             "parser_version": _OPENCLAW_PARSER_VERSION,
+                             "sessions": sessions}
+            changed = True
+    if registry_ok:
+        for entry_key, entry in list(fc.items()):
+            if (isinstance(entry, dict) and entry.get("source") == "sqlite"
+                    and entry_key not in active_sqlite_keys):
+                fc.pop(entry_key, None)
                 changed = True
 
-        for p in stale:
-            fc.pop(p, None)
+    # --- Part 3: legacy JSONL usage, excluding trajectory logs ---
+    jsonl_files = set()
+    if os.path.isdir(OPENCLAW_AGENTS):
+        jsonl_files = {
+            path for path in glob.glob(
+                os.path.join(OPENCLAW_AGENTS, "*", "sessions", "*.jsonl"))
+            if not path.endswith(".trajectory.jsonl")
+        }
+    for path in sorted(jsonl_files):
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        sig = f"{stat.st_mtime_ns}:{stat.st_size}"
+        entry = fc.get(path)
+        if (entry and entry.get("source") == "jsonl"
+                and entry.get("parser_version") == _OPENCLAW_PARSER_VERSION
+                and entry.get("sig") == sig):
+            continue
+        try:
+            session_id, copy = _scan_openclaw_jsonl(path)
+        except OSError:
+            continue
+        fc[path] = {"source": "jsonl", "sig": sig,
+                    "parser_version": _OPENCLAW_PARSER_VERSION,
+                    "session_id": session_id, "days": copy["days"],
+                    "events": copy["events"]}
+        changed = True
+
+    for entry_key, entry in list(fc.items()):
+        if entry_key.startswith("_") or not isinstance(entry, dict):
+            continue
+        is_jsonl = entry.get("source") == "jsonl" or (
+            entry.get("source") is None and entry_key.endswith(".jsonl"))
+        if is_jsonl and entry_key not in jsonl_files:
+            fc.pop(entry_key, None)
             changed = True
 
-        for f, entry in fc.items():
-            if f.startswith("_"):
-                continue
-            for dk, day in entry.get("days", {}).items():
-                try:
-                    d = date.fromisoformat(dk)
-                except ValueError:
-                    continue
-                agg = live_days.setdefault(
-                    dk, {"in": 0, "out": 0, "cr": 0, "cw": 0,
-                         "cost": 0.0, "models": {}, "hours": [0] * 24})
-                agg["in"] += day["in"]; agg["out"] += day["out"]
-                agg["cr"] += day["cr"]; agg["cw"] += day["cw"]; agg["cost"] += day["cost"]
-                for mn, mv in day["models"].items():
-                    mm = agg["models"].setdefault(
-                        mn, {"in": 0, "out": 0, "cr": 0, "cw": 0,
-                             "reason": 0, "cost": 0.0})
-                    for key in TOKEN_FIELDS:
-                        mm[key] += mv.get(key, 0)
-                    mm["cost"] += mv.get("cost", 0)
-                for hour, amount in enumerate((day.get("hours") or [])[:24]):
-                    agg["hours"][hour] += amount
-                # 会话数只能来自现存日志(被清日志无从归属)
-                for k in _day_keys(d):
-                    B[k]["sessions"].add(f)
-    else:
-        for p in [key for key in fc if not key.startswith("_")]:
-            fc.pop(p, None)
-            changed = True
+    # Select one complete copy per logical session across SQLite/JSONL sources.
+    live_days = {}
+    live_sessions = {}
+    for session_id, copy in _openclaw_selected_sessions(fc).items():
+        for day_key, day in copy.get("days", {}).items():
+            agg = live_days.setdefault(day_key, _empty_token_day())
+            _merge_live_token_day(agg, day)
+            live_sessions.setdefault(day_key, set()).add(session_id)
+    for day in live_days.values():
+        day["_ledger_version"] = _OPENCLAW_LEDGER_VERSION
+
+    if fc.get("_selected_days") != live_days:
+        fc["_selected_days"] = live_days
+        changed = True
+
+    # 会话数只来自现存 session 副本；账本无法可靠恢复被清日志的归属。
+    for day_key, session_ids in live_sessions.items():
+        try:
+            day_date = date.fromisoformat(day_key)
+        except ValueError:
+            continue
+        for range_key in _day_keys(day_date):
+            B[range_key]["sessions"].update(session_ids)
 
     for dk, day in ledger_reconcile("openclaw", live_days).items():
         try:
@@ -7218,6 +7465,7 @@ def scan_openclaw(bounds, cache):
             b = B[k]
             b["in"] += day.get("in", 0); b["out"] += day.get("out", 0)
             b["cr"] += day.get("cr", 0); b["cw"] += day.get("cw", 0)
+            b["reason"] += day.get("reason", 0)
             b["cost"] += day.get("cost", 0)
             for mn, mv in (day.get("models") or {}).items():
                 mm = b["models"].setdefault(
@@ -9610,7 +9858,7 @@ def compute():
         hit = (b["cr"] / denom * 100) if denom else 0.0
         return {"tasks": b["tasks"], "completed": b["completed"], "failed": b["failed"],
                 "hit": hit, "in": b["in"], "out": b["out"], "cr": b["cr"], "cw": b["cw"],
-                "cost": b["cost"], "sessions": len(b["sessions"]),
+                "reason": b["reason"], "cost": b["cost"], "sessions": len(b["sessions"]),
                 "models": _format_token_models(b["models"])}
 
     hranges = {k: hermes_range(hm["ranges"][k]) for k in RANGE_KEYS}
@@ -10648,23 +10896,20 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
                 for key in TOKEN_FIELDS:
                     model[key] += mv.get(key, 0)
 
-    for entry_key, entry in cache.get("openclaw", {}).items():
-        if entry_key.startswith("_") or not isinstance(entry, dict):
+    for dk, day in cache.get("openclaw", {}).get("_selected_days", {}).items():
+        if cutoff and dk < cutoff:
             continue
-        for dk, day in entry.get("days", {}).items():
-            if cutoff and dk < cutoff:
-                continue
-            d = days.setdefault(dk, _empty())
-            d["openclaw"] += day.get("cost", 0)
-            _add_day_tokens(d, dk, "openclaw", token_total(day))
-            for mn, mv in day.get("models", {}).items():
-                name = f"{nice_model(mn)} (OpenClaw)"
-                model = models.setdefault(
-                    name, {"cost": 0.0, "in": 0, "out": 0, "cr": 0, "cw": 0,
-                           "reason": 0, "tool": "openclaw"})
-                model["cost"] += mv.get("cost", 0)
-                for key in TOKEN_FIELDS:
-                    model[key] += mv.get(key, 0)
+        d = days.setdefault(dk, _empty())
+        d["openclaw"] += day.get("cost", 0)
+        _add_day_tokens(d, dk, "openclaw", token_total(day))
+        for mn, mv in day.get("models", {}).items():
+            name = f"{nice_model(mn)} (OpenClaw)"
+            model = models.setdefault(
+                name, {"cost": 0.0, "in": 0, "out": 0, "cr": 0, "cw": 0,
+                       "reason": 0, "tool": "openclaw"})
+            model["cost"] += mv.get("cost", 0)
+            for key in TOKEN_FIELDS:
+                model[key] += mv.get(key, 0)
 
     for fp, entry in cache.get("qoder", {}).items():
         model_name = entry.get("model") or "QoderWork"
@@ -10972,21 +11217,18 @@ def build_wrapped(period="all", refresh=True, _cache=None):
                 name = f"{nice_model(model)} (Hermes)"
                 model_tok[name] = model_tok.get(name, 0) + token_total(usage)
 
-    # --- OpenClaw (in + out + cr + cw) ---
-    for f, entry in cache.get("openclaw", {}).items():
-        if not isinstance(entry, dict):
+    # --- OpenClaw (in + out + cr + cw + reason) ---
+    for dk, day in cache.get("openclaw", {}).get("_selected_days", {}).items():
+        if cutoff and dk < cutoff:
             continue
-        for dk, day in entry.get("days", {}).items():
-            if cutoff and dk < cutoff:
-                continue
-            tok = token_total(day)
-            day_tokens[dk] = day_tokens.get(dk, 0) + tok
-            day_cost[dk] = day_cost.get(dk, 0.0) + day.get("cost", 0)
-            weekday[date.fromisoformat(dk).weekday()] += tok
-            add_hours(dk, day.get("hours"))
-            for model, usage in day.get("models", {}).items():
-                name = f"{nice_model(model)} (OpenClaw)"
-                model_tok[name] = model_tok.get(name, 0) + token_total(usage)
+        tok = token_total(day)
+        day_tokens[dk] = day_tokens.get(dk, 0) + tok
+        day_cost[dk] = day_cost.get(dk, 0.0) + day.get("cost", 0)
+        weekday[date.fromisoformat(dk).weekday()] += tok
+        add_hours(dk, day.get("hours"))
+        for model, usage in day.get("models", {}).items():
+            name = f"{nice_model(model)} (OpenClaw)"
+            model_tok[name] = model_tok.get(name, 0) + token_total(usage)
 
     # --- OpenCode (in + out + cr + cw + reason) ---
     for dk, day in _iter_cached_token_days(cache.get("opencode", {})):

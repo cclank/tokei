@@ -1331,7 +1331,7 @@ struct DashboardView: View {
     }
 
     static func openClawTotal(_ r: OpenClawRange) -> Int {
-        r.in + r.out + r.cr + r.cw
+        r.in + r.out + r.cr + r.cw + r.reason
     }
 
     static func tokenModelTotal(_ m: TokenModelStat) -> Int {

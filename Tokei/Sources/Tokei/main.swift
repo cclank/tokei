@@ -530,6 +530,10 @@ if GrokBotQuotaBridge.runIfRequested() {
     exit(0)
 }
 
+if ProviderCredentialStore.runIfRequested() {
+    exit(0)
+}
+
 if LoginItemCommandLine.runIfRequested() {
     exit(0)
 }

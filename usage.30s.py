@@ -5676,7 +5676,8 @@ def _zed_plan_name(raw):
     names = {
         "zed_free": "Zed Free", "zed_pro": "Zed Pro",
         "zed_pro_trial": "Zed Pro Trial", "zed_student": "Zed Student",
-        "zed_business": "Zed Business",
+        "zed_business": "Zed Business", "student": "Student",
+        "vip": "VIP", "zed_vip": "Zed VIP",
     }
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -5724,9 +5725,37 @@ def _normalize_zed_quota(payload, updated=None):
     details = []
     if isinstance(user.get("name"), str) and user["name"].strip():
         details.append({"label": "账号", "value": user["name"].strip()})
+    organization_plans = payload.get("plans_by_organization")
+    organization_plans = organization_plans if isinstance(organization_plans, dict) else {}
+    default_organization_id = payload.get("default_organization_id")
+    default_organization_id = str(default_organization_id) \
+        if isinstance(default_organization_id, (str, int)) \
+        and not isinstance(default_organization_id, bool) else None
+    plan_names = []
+    for organization in payload.get("organizations", []):
+        if not isinstance(organization, dict):
+            continue
+        organization_id = organization.get("id")
+        organization_id = str(organization_id) \
+            if isinstance(organization_id, (str, int)) \
+            and not isinstance(organization_id, bool) else None
+        name = organization.get("name")
+        name = name.strip() if isinstance(name, str) and name.strip() else None
+        if not organization_id or not name:
+            continue
+        plan_name = _zed_plan_name(organization_plans.get(organization_id))
+        if not plan_name:
+            continue
+        if plan_name not in plan_names:
+            plan_names.append(plan_name)
+        detail = {"label": name, "value": plan_name}
+        if organization_id == default_organization_id:
+            detail["secondary"] = "当前组织"
+        details.append(detail)
+    displayed_plan = " + ".join(plan_names) if plan_names else _zed_plan_name(plan.get("plan_v3"))
     return {
-        "available": bool(windows or plan),
-        "plan": _zed_plan_name(plan.get("plan_v3")),
+        "available": bool(windows or plan or plan_names),
+        "plan": displayed_plan,
         "account": user.get("github_login"),
         "windows": windows,
         "details": details,
@@ -5749,7 +5778,11 @@ def fetch_zed_quota():
         return cached
     try:
         payload = _provider_json_request(
-            connection["api_url"], headers={"Authorization": f"{user_id} {token}"})
+            connection["api_url"], headers={
+                "Authorization": f"{user_id} {token}",
+                # Zed Cloud rejects urllib's default Python-urllib/... user agent.
+                "User-Agent": "Tokei/1.0",
+            })
         quota = _normalize_zed_quota(payload)
         _save_provider_quota_cache("zed", marker, quota)
         return quota

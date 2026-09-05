@@ -26,6 +26,7 @@ Tokei 主要读取本地 AI 工具日志，统计 token 用量与成本。额度
 | Qwen Code | `${QWEN_RUNTIME_DIR:-~/.qwen}/usage/token-usage-*.jsonl` + `~/.qwen/usage_record.jsonl` | JSONL,逐请求记录 + 会话汇总 |
 | 千问办公（QwenWork） | `~/.qwenworkcn/mcp-adaptor.config` + `.status.json` 文件元数据 + 官方桌面端 `127.0.0.1` MCP | JSON-RPC，`qw_query` / `qwenwork.usage`（默认关闭） |
 | Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl`；兼容旧版 `${KIMI_SHARE_DIR:-~/.kimi}/sessions/*/*/wire.jsonl` | JSONL, protocol 1.5 `usage.record` / protocol 1 `StatusUpdate.token_usage` |
+| Kimi Code(额度) | `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json` → `api.kimi.com/coding/v1/usages` | 本机登录态只读查询，见 §5 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | SQLite, `model_usage` Token 明细 |
 | MiMoCode | `$XDG_DATA_HOME/mimocode/mimocode*.db`，macOS 使用 `~/Library/Application Support/mimocode/` | SQLite, OpenCode-compatible `message` 数据 |
 
@@ -300,6 +301,36 @@ Pi 优先使用会话 JSONL 中的 `usage.cost.total`；OpenCode 优先读取 SQ
 ID、邀请信息或个人资料；每天最多自动查询一次，最近一张卡到期后立即更新，失败后
 6 小时再试。未登录或仅使用 API Key 时不请求；401/403 静默隐藏或沿用未过期缓存，
 Codex 刷新登录 Token 后立即重试。
+
+### Kimi Code(usages)
+
+使用 Kimi Code CLI 已有的本机登录态只读查询 `https://api.kimi.com/coding/v1/usages`:
+- `p5` — 5 小时滚动窗口已用百分比,取 `limits[]` 中 `window` 折算为 300 分钟的那条
+  (`TIME_UNIT_MINUTE`/`TIME_UNIT_HOUR` 均按同一口径折算,不假设接口固定用哪种单位)
+- `pw` — 订阅周期额度已用百分比,取顶层 `usage`
+- `r5` / `rw` — 各自的 `resetTime`
+- `plan` — `user.membership.level`
+
+接口把额度数字写成字符串(`"limit": "100"`),解析时统一转数值;`used` 缺失时按
+`limit - remaining` 推算。顶层 `usage` 不带 `window` 字段,接口没有说明该额度是周还是月,
+因此界面只显示"订阅额度剩余"和它给出的重置时刻,不替接口命名周期。
+
+**凭据只读、绝不代刷。** access_token 由 CLI 写在
+`${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json`,有效期很短(实测约 30 分钟)。
+Tokei 只读 `access_token`,从不使用同一文件中的 `refresh_token`:OAuth 刷新令牌通常带
+rotation,由 Tokei 抢先刷新会顶掉 Kimi Code 自己的登录态。因此凭据过期时直接跳过这次
+请求(发出去也必然 401),转为使用缓存并标记读数已过期。
+
+额度过期的判定有两条,命中任一即标 `p5_stale` / `pw_stale`,卡片改为显示"额度读数已过期"
+并附上读数时间:
+- 窗口的 `resetTime` 已经过去 —— 这份读数不再代表当前窗口
+- 读数本身超过 30 分钟未更新 —— 通常是 CLI 长时间未使用,登录态已过期
+
+Codex 在窗口翻篇后若本机零消耗会判定"确实回满",Kimi 不套用这条:Kimi 额度按调用次数
+计量,本机 token 日志无法反推它的真实消耗,谎报满额比承认不知道危险得多。
+
+成功查询缓存 5 分钟;网络失败后 5 分钟内不再重试,避免每轮 30 秒刷新都白等超时。
+可用 `TOKEI_KIMI_LIVE_QUOTA=0` 完全关闭该查询,关闭后 token 用量统计不受影响。
 
 ### Grok Build(credits)
 

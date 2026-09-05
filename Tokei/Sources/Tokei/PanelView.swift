@@ -83,6 +83,8 @@ struct PanelView: View {
     @AppStorage(MenuBarQuotaSource.claudeFable.defaultsKey) private var menuBarQuotaClaudeFable = false
     @AppStorage(MenuBarQuotaSource.codex5h.defaultsKey) private var menuBarQuotaCodex5h = false
     @AppStorage(MenuBarQuotaSource.codexWeek.defaultsKey) private var menuBarQuotaCodexWeek = true
+    @AppStorage(MenuBarQuotaSource.kimi5h.defaultsKey) private var menuBarQuotaKimi5h = false
+    @AppStorage(MenuBarQuotaSource.kimiSubscription.defaultsKey) private var menuBarQuotaKimiSubscription = false
     @AppStorage(MenuBarQuotaSource.grok.defaultsKey) private var menuBarQuotaGrok = false
     @State private var copyFeedback = false
     @State private var copiedToolID: String?
@@ -490,8 +492,9 @@ struct PanelView: View {
                              u.qwenwork.remaining != nil || !u.qwenwork.segments.isEmpty ||
                              u.qwenwork.shared != nil,
                          tint: Theme.qwenwork, content: AnyView(qwenWorkBlock(u.qwenwork))),
-            ToolCardItem(id: "kimicode", name: "Kimi Code", visible: showKimiCode, active: kcr.sessions > 0,
-                         tint: Theme.kimicode, content: AnyView(tokenUsageBlock(title: "Kimi Code", kcr, tint: Theme.kimicode, modelsOpen: $kimiCodeModelsOpen, showsCost: false, toolID: "kimicode"))),
+            ToolCardItem(id: "kimicode", name: "Kimi Code", visible: showKimiCode,
+                         active: kcr.sessions > 0 || u.kimicode.hasQuota || u.kimicode.hasStaleQuota,
+                         tint: Theme.kimicode, content: AnyView(kimiCodeBlock(u.kimicode, kcr))),
         ]
     }
 
@@ -673,6 +676,69 @@ struct PanelView: View {
                     source: "Codex 本地状态",
                     updated: nil,
                     tint: Theme.codex
+                )
+            }
+        }
+    }
+
+    // MARK: - Kimi Code 卡片
+    // 额度来自官方 usages 接口,登录态由 Kimi Code CLI 自己刷新(有效期很短),
+    // 因此这里必须能表达"读数已过期",而不是把上一次的百分比一直显示下去。
+    @ViewBuilder
+    func kimiCodeBlock(_ x: KimiCodeStat, _ r: TokenUsageRange) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            cardHead("Kimi Code", tint: Theme.kimicode, sessions: r.sessions, toolID: "kimicode")
+            if r.sessions > 0 {
+                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw + r.reason),
+                             caption: "\(sel.label) 总量", tint: Theme.kimicode)
+                metricGrid([], hit: r.hit, extra: tokenUsageMetrics(r), tint: Theme.kimicode)
+                if !r.models.isEmpty {
+                    tokenModelDisclosure(r.models, open: $kimiCodeModelsOpen, tint: Theme.kimicode)
+                }
+            } else if x.hasQuota {
+                usageEmptyHint
+            } else {
+                emptyHint
+            }
+            if x.hasQuota || x.hasStaleQuota {
+                thinDivider
+            }
+            if let p5 = x.p5, x.p5_stale != true {
+                quotaRow(title: "5h 剩余", pct: 100 - p5, reset: x.r5, tint: Theme.kimicode)
+            }
+            if let pw = x.pw, x.pw_stale != true {
+                // 接口只给了这一档的重置时刻,没有说周期是周还是月,所以标题不写周期名。
+                quotaRow(title: "订阅额度剩余", pct: 100 - pw, reset: x.rw, tint: Theme.kimicode)
+            }
+            if x.hasStaleQuota {
+                quotaStateNotice(
+                    title: "额度读数已过期",
+                    detail: "Kimi Code 的登录态很快到期,过期后 Tokei 不再查询官方额度,也不会代它刷新。在 Kimi Code 里发一条消息即可让它自行刷新,额度随后恢复更新。",
+                    source: "api.kimi.com",
+                    updated: x.q_updated,
+                    tint: Theme.kimicode,
+                    warning: true
+                )
+            }
+            if let plan = x.plan, !plan.isEmpty {
+                HStack {
+                    Text("plan").font(.system(size: 11)).foregroundStyle(Theme.tTertiary)
+                    Spacer()
+                    Text(plan.replacingOccurrences(of: "LEVEL_", with: ""))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.tSecondary)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(Theme.kimicode.opacity(0.16)))
+                }
+            }
+            if r.sessions > 0 && !x.hasQuota && !x.hasStaleQuota {
+                thinDivider
+                quotaStateNotice(
+                    title: "暂未获取到额度数据",
+                    detail: "用量统计不受影响；登录 Kimi Code 后会自动展示官方额度。",
+                    source: "Kimi Code 本地登录态",
+                    updated: nil,
+                    tint: Theme.kimicode
                 )
             }
         }
@@ -2448,6 +2514,8 @@ struct PanelView: View {
         case .claudeFable: return $menuBarQuotaClaudeFable
         case .codex5h: return $menuBarQuotaCodex5h
         case .codexWeek: return $menuBarQuotaCodexWeek
+        case .kimi5h: return $menuBarQuotaKimi5h
+        case .kimiSubscription: return $menuBarQuotaKimiSubscription
         case .grok: return $menuBarQuotaGrok
         }
     }

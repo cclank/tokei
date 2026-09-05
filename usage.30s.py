@@ -9260,6 +9260,266 @@ def _kimi_roots():
     return roots
 
 
+# ---------- Kimi Code 官方额度 ----------
+# 凭据由 Kimi Code CLI 自己写入并刷新;Tokei 只读、绝不代刷 —— refresh_token 通常带
+# rotation,抢刷会顶掉 CLI 自己的登录态。access_token 有效期很短(实测约 30 分钟),
+# 过期时直接走缓存并标 stale:显示一个过期读数比承认不知道危险得多(同 issue #63)。
+KIMI_QUOTA_CACHE = _writable_path("kimi_quota_cache.json")
+_KIMI_QUOTA_TTL = 300
+_KIMI_QUOTA_FALLBACK_TTL = 300
+_KIMI_QUOTA_STALE_AFTER = 1800
+_KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages"
+_KIMI_USAGE_HOST = "api.kimi.com"
+_KIMI_USAGE_MAX_RESPONSE_BYTES = 256 * 1024
+_KIMI_FIVE_HOUR_MINUTES = 300
+_KIMI_TIME_UNITS = {
+    "TIME_UNIT_MINUTE": 1,
+    "TIME_UNIT_HOUR": 60,
+    "TIME_UNIT_DAY": 60 * 24,
+    "TIME_UNIT_WEEK": 60 * 24 * 7,
+}
+
+
+def _kimi_epoch_seconds(value):
+    """expires_at 可能按秒也可能按毫秒写。"""
+    if isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    return num / 1000.0 if num > 1e11 else num
+
+
+def _kimi_amount(value):
+    """接口把额度数字写成字符串("100"),直接参与运算会 TypeError。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _kimi_credential_files():
+    return [os.path.join(root, "credentials", "kimi-code.json")
+            for root in _kimi_roots()]
+
+
+def _kimi_auth_context(now_epoch=None):
+    """只读 CLI 写好的 access_token;过期时标记出来,由调用方决定不发请求。"""
+    now = now_epoch if now_epoch is not None else datetime.now().timestamp()
+    for path in _kimi_credential_files():
+        creds = _load_json(path, {})
+        if not isinstance(creds, dict):
+            continue
+        token = creds.get("access_token")
+        if not isinstance(token, str) or not token:
+            continue
+        expires_at = _kimi_epoch_seconds(creds.get("expires_at"))
+        return {
+            "access_token": token,
+            "expires_at": expires_at,
+            "expired": bool(expires_at is not None and now >= expires_at),
+            "auth_key": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        }
+    return {}
+
+
+def _kimi_window_minutes(window):
+    if not isinstance(window, dict):
+        return None
+    duration = _kimi_amount(window.get("duration"))
+    unit = _KIMI_TIME_UNITS.get(window.get("timeUnit"))
+    if duration is None or unit is None:
+        return None
+    return int(round(duration * unit))
+
+
+def _kimi_slot(detail):
+    """detail = {limit, used, remaining, resetTime} → 已用百分比 + 重置时刻。"""
+    if not isinstance(detail, dict):
+        return None
+    limit = _kimi_amount(detail.get("limit"))
+    used = _kimi_amount(detail.get("used"))
+    remaining = _kimi_amount(detail.get("remaining"))
+    if used is None and limit is not None and remaining is not None:
+        used = limit - remaining
+    if limit is None or limit <= 0 or used is None:
+        return None
+    slot = {"used_percent": max(0.0, min(100.0, 100.0 * used / limit))}
+    reset = _iso_to_epoch(detail.get("resetTime"))
+    if reset is not None:
+        slot["resets_at"] = reset
+    return slot
+
+
+def _kimi_live_to_limits(data):
+    """limits[] 里 300 分钟那条是 5h 滚动窗口;顶层 usage 是订阅周期额度。
+
+    顶层 usage 不带 window,接口没说周期是周还是月,所以只透传它给的 resetTime,
+    界面也只说"订阅额度",不替接口编一个周期名。
+    """
+    if not isinstance(data, dict):
+        return None
+    five_hour = None
+    for item in data.get("limits") or []:
+        if not isinstance(item, dict):
+            continue
+        if _kimi_window_minutes(item.get("window")) == _KIMI_FIVE_HOUR_MINUTES:
+            five_hour = _kimi_slot(item.get("detail"))
+            break
+    subscription = _kimi_slot(data.get("usage"))
+    if not five_hour and not subscription:
+        return None
+    user = data.get("user") if isinstance(data.get("user"), dict) else {}
+    membership = user.get("membership") if isinstance(user.get("membership"), dict) else {}
+    return {
+        "limit_id": "kimicode",
+        "five_hour": five_hour,
+        "subscription": subscription,
+        "plan": membership.get("level"),
+        "user_id": user.get("userId"),
+    }
+
+
+def _kimi_limits_have_active_window(limits, now_epoch=None):
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
+    for key in ("five_hour", "subscription"):
+        slot = (limits or {}).get(key) or {}
+        reset = slot.get("resets_at")
+        try:
+            if reset is not None and float(reset) > now:
+                return True
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return False
+
+
+def _cached_kimi_live_limits(max_age, allow_active_window=False):
+    cached = _load_json(KIMI_QUOTA_CACHE, {})
+    fetched_at = cached.get("fetched_at")
+    limits = cached.get("limits")
+    if not fetched_at or not limits:
+        return None
+    try:
+        fetched_at = float(fetched_at)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    age = datetime.now().timestamp() - fetched_at
+    if age > max_age and not (
+            allow_active_window and _kimi_limits_have_active_window(limits)):
+        return None
+    return limits, cached.get("plan"), fetched_at
+
+
+def fetch_kimi_live_limits():
+    if os.environ.get("TOKEI_KIMI_LIVE_QUOTA") == "0":
+        return None
+    cached = _cached_kimi_live_limits(_KIMI_QUOTA_TTL)
+    if cached:
+        return cached
+    auth = _kimi_auth_context()
+    token = auth.get("access_token")
+    if not token:
+        return None
+    auth_key = auth.get("auth_key")
+    if auth.get("expired"):
+        # CLI 还没来得及刷新。发出去必然 401,不如省掉这次请求,让 stale 说明读数已旧。
+        return _cached_kimi_live_limits(
+            _KIMI_QUOTA_FALLBACK_TTL, allow_active_window=True)
+    cache_state = _load_json(KIMI_QUOTA_CACHE, {})
+    last_failure = cache_state.get("last_failure_at", 0)
+    if cache_state.get("auth_key") not in (None, auth_key):
+        last_failure = 0
+    try:
+        failure_is_recent = (
+            bool(last_failure)
+            and datetime.now().timestamp() - float(last_failure) < 300)
+    except (TypeError, ValueError, OverflowError):
+        failure_is_recent = False
+    if failure_is_recent:
+        return _cached_kimi_live_limits(
+            _KIMI_QUOTA_FALLBACK_TTL, allow_active_window=True)
+    try:
+        import urllib.request
+        from urllib.parse import urlparse
+        req = urllib.request.Request(_KIMI_USAGE_URL)
+        req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "Tokei")
+        req.add_unredirected_header("Authorization", "Bearer " + token)
+        with urllib.request.urlopen(req, timeout=3) as res:
+            final_url = urlparse(res.geturl())
+            if final_url.scheme != "https" or final_url.hostname != _KIMI_USAGE_HOST:
+                raise ValueError("unexpected Kimi usage redirect")
+            raw = res.read(_KIMI_USAGE_MAX_RESPONSE_BYTES + 1)
+        if len(raw) > _KIMI_USAGE_MAX_RESPONSE_BYTES:
+            raise ValueError("Kimi usage response is too large")
+        limits = _kimi_live_to_limits(json.loads(raw))
+        if not limits:
+            raise ValueError("invalid Kimi usage response")
+        plan = limits.get("plan")
+        fetched_at = datetime.now().timestamp()
+        _atomic_write_json(KIMI_QUOTA_CACHE, {
+            "fetched_at": fetched_at,
+            "limits": limits,
+            "plan": plan,
+            "user_id": limits.get("user_id"),
+            "auth_key": auth_key,
+            "source": "live",
+        })
+        return limits, plan, fetched_at
+    except Exception:
+        try:
+            state = _load_json(KIMI_QUOTA_CACHE, {})
+            if state.get("limits") and state.get("user_id") \
+                    and cache_state.get("user_id") \
+                    and state.get("user_id") != cache_state.get("user_id"):
+                state = {}
+            state["last_failure_at"] = datetime.now().timestamp()
+            state["auth_key"] = auth_key
+            _atomic_write_json(KIMI_QUOTA_CACHE, state)
+        except Exception:
+            pass
+    return _cached_kimi_live_limits(
+        _KIMI_QUOTA_FALLBACK_TTL, allow_active_window=True)
+
+
+def _kimi_quota_values(limits, now_epoch=None, updated_at=None):
+    """→ p5/pw + 重置时刻 + stale,字段语义与 Codex 卡片保持一致。
+
+    两种 stale:窗口已经翻篇(读数必然失真),或读数本身太旧(CLI 久未刷新 token)。
+    Kimi 的额度单位是调用次数而非 token,没法像 Codex 那样用本机消耗反推"确实回满了",
+    所以翻篇一律标 stale —— 宁可说不知道,也不谎报满额。
+    """
+    values = {"p5": None, "pw": None, "r5": None, "rw": None,
+              "p5_stale": False, "pw_stale": False}
+    mapping = (("five_hour", "p5", "r5"), ("subscription", "pw", "rw"))
+    for slot_key, pct_key, reset_key in mapping:
+        slot = (limits or {}).get(slot_key) or {}
+        if not slot:
+            continue
+        values[pct_key] = slot.get("used_percent")
+        values[reset_key] = slot.get("resets_at")
+
+    now = now_epoch if now_epoch is not None else int(datetime.now().timestamp())
+    try:
+        updated_age = (now - float(updated_at)) if updated_at else None
+    except (TypeError, ValueError, OverflowError):
+        updated_age = None
+    for _, pct_key, reset_key in mapping:
+        if values[pct_key] is None:
+            continue
+        reset = values[reset_key]
+        if reset and now > float(reset):
+            values[pct_key + "_stale"] = True
+        elif updated_age is not None and updated_age > _KIMI_QUOTA_STALE_AFTER:
+            values[pct_key + "_stale"] = True
+    return values
+
+
 def _kimi_wire_groups():
     """按会话产出 (agent_wires, root_wire);定深有界遍历,不碰 server/events 等镜像目录。
 
@@ -10049,6 +10309,9 @@ def compute():
     grok_quota = _safe_scan("grok_quota", scan_grok_quota, lambda: {}, errors) or {}
     qwenwork_quota = _safe_scan(
         "qwenwork_quota", scan_qwenwork_quota, lambda: {}, errors) or {}
+    kimi_live = _safe_scan("kimi_quota", fetch_kimi_live_limits, lambda: None, errors)
+    kimi_limits, kimi_plan, kimi_updated = kimi_live if kimi_live else (None, None, None)
+    kimi_quota = _kimi_quota_values(kimi_limits, updated_at=kimi_updated)
     provider_quotas = scan_provider_quotas(errors)
     _cache_dashboard_days(
         cache, _CURSOR_PROVIDER_DAYS_CACHE_KEY,
@@ -10165,6 +10428,11 @@ def compute():
         },
         "kimicode": {
             "ranges": kimiranges,
+            "p5": kimi_quota["p5"], "pw": kimi_quota["pw"],
+            "r5": kimi_quota["r5"], "rw": kimi_quota["rw"],
+            "q_updated": int(kimi_updated) if kimi_updated else None,
+            "p5_stale": kimi_quota["p5_stale"], "pw_stale": kimi_quota["pw_stale"],
+            "plan": kimi_plan,
         },
     }
     if errors:

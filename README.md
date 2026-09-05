@@ -51,7 +51,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 | **千问办公（QwenWork）** | 套餐与加购积分余额、团队共享资源包 |
 | **Qoder** | Token、调用次数、配额 |
 | **QoderWork** | Token、调用次数、配额 |
-| **Kimi Code** | Token（输入/输出/缓存）、会话、模型、项目 |
+| **Kimi Code** | Token（输入/输出/缓存）、会话、模型、项目、配额（5h / 订阅周期） |
 
 ## 功能一览
 
@@ -97,6 +97,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 ### 隐私优先
 - 核心 Token、成本和项目统计均在本机完成，不向 Tokei 服务上传使用数据；Cursor 与 z.ai 还可读取对应 Provider 返回的账号级 Token/模型摘要
 - Codex 额度使用本机 Codex 登录态读取官方接口；重置卡每天最多自动查询一次
+- Kimi Code 额度使用 Kimi Code CLI 已有的本机登录态读取官方接口。Tokei 只读 `access_token`，从不使用同目录的 `refresh_token` 代为刷新（避免顶掉 CLI 自己的登录态）；登录态过期时直接跳过查询，卡片改为标注读数已过期而不是继续显示旧百分比。可用 `TOKEI_KIMI_LIVE_QUOTA=0` 关闭
 - Grok 实时额度默认关闭，可选择只读本地日志
 - Grok Bot 本地活动直接读取会话快照，快照不含 Token、模型和成本，Tokei 不按文本量估算。官方用量查询默认关闭；用户明确授权后，Tokei 临时解密 Grok Bot 当前登录态，只查询 `sand` 客户端的官方 Token、模型、成本和额度。登录 Token 只在内存中使用
 - 千问办公额度默认关闭；开启后仅调用官方桌面端的 `127.0.0.1` MCP，由已运行并登录的千问办公查询官方额度
@@ -205,7 +206,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | 千问办公（QwenWork） | `~/.qwenworkcn/mcp-adaptor.config` + `.status.json` 文件元数据 + 官方桌面端 `127.0.0.1` MCP（默认关闭；需客户端运行且已登录） |
 | Qoder | `~/.qodo-ai/sessions/*.jsonl` |
 | QoderWork | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` |
-| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl`；兼容旧版 `${KIMI_SHARE_DIR:-~/.kimi}/sessions/*/*/wire.jsonl` |
+| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl`；兼容旧版 `${KIMI_SHARE_DIR:-~/.kimi}/sessions/*/*/wire.jsonl`；额度用本机登录态查 `api.kimi.com/coding/v1/usages` |
 | Qoder Desktop | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` |
 | QoderWork | `~/Library/Application Support/QoderWork/data/agents.db` |
 | Qoder CLI | `~/.qoder/projects/**/*.jsonl` |

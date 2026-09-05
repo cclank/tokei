@@ -14,6 +14,7 @@ final class AppDelegate {
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
     static let codexColor  = NSColor(red: 0.42, green: 0.68, blue: 0.98, alpha: 1)
     static let grokColor   = NSColor(red: 0.65, green: 0.68, blue: 0.75, alpha: 1)
+    static let kimicodeColor = NSColor(red: 0.20, green: 0.78, blue: 0.66, alpha: 1)
 }
 
 @main
@@ -36,7 +37,7 @@ struct MenuBarQuotaSourceCheck {
     private static func checkSourceIdentity() throws {
         let order = MenuBarQuotaSource.allCases.map(\.rawValue)
         try expect(order == ["claude5h", "claudeWeek", "claudeFable",
-                             "codex5h", "codexWeek", "grok"],
+                             "codex5h", "codexWeek", "kimi5h", "kimiSubscription", "grok"],
                    "quota source order changed: \(order)")
 
         // 这两个 key 已经发布过，存的本来就是这两个窗口的开关。
@@ -54,7 +55,7 @@ struct MenuBarQuotaSourceCheck {
         // 标签必须写清是哪个窗口，这是用户能分辨谁是谁的前提。
         let labels = MenuBarQuotaSource.allCases.map(\.label)
         try expect(labels == ["Claude 5h", "Claude 周", "Claude Fable",
-                              "Codex 5h", "Codex 周", "Grok"],
+                              "Codex 5h", "Codex 周", "Kimi 5h", "Kimi 订阅", "Grok"],
                    "window labels changed: \(labels)")
 
         let defaultOn = MenuBarQuotaSource.allCases.filter(\.defaultEnabled).map(\.rawValue)
@@ -62,7 +63,7 @@ struct MenuBarQuotaSourceCheck {
                    "only the two historically-on windows may default on: \(defaultOn)")
 
         let windows = MenuBarQuotaSource.allCases.map(\.window)
-        try expect(windows == [.fiveHour, .week, .week, .fiveHour, .week, nil],
+        try expect(windows == [.fiveHour, .week, .week, .fiveHour, .week, .fiveHour, nil, nil],
                    "window kinds changed")
     }
 
@@ -116,18 +117,19 @@ struct MenuBarQuotaSourceCheck {
 
         let usage = try decodeFixture(fixtureJSON)
         let used = MenuBarQuotaSource.allCases.map { $0.reading(in: usage).value }
-        try expect(used == [20, 40, 10, 88, 35, 25], "reading mapped to the wrong field: \(used)")
+        try expect(used == [20, 40, 10, 88, 35, 15, 55, 25], "reading mapped to the wrong field: \(used)")
 
         // 模型里存已用百分比，状态栏显示剩余，别把 100-x 丢了。
         let metrics = MenuBarQuotaSource.metrics(in: usage)
-        try expect(metrics.map(\.value) == ["80", "60", "90", "12", "65", "75"],
+        try expect(metrics.map(\.value) == ["80", "60", "90", "12", "65", "85", "45", "75"],
                    "remaining conversion or order wrong: \(metrics.map(\.value))")
 
         // 账号没有这个窗口 → 整项不出现。
         var missingFable = usage
         missingFable.claude.qf = nil
         try expect(MenuBarQuotaSource.metrics(in: missingFable).map(\.kind.displayName)
-                    == ["Claude 5h", "Claude 周", "Codex 5h", "Codex 周", "Grok"],
+                    == ["Claude 5h", "Claude 周", "Codex 5h", "Codex 周",
+                        "Kimi 5h", "Kimi 订阅", "Grok"],
                    "a nil window must drop out entirely")
 
         // 数据过期 → 也不出现，别在状态栏上挂个陈旧数字。
@@ -337,6 +339,19 @@ struct MenuBarQuotaSourceCheck {
           "month": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
           "year": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}
         }
+      },
+      "kimicode": {
+        "ranges": {
+          "today": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "yesterday": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "week": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "last_week": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "month": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "year": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}
+        },
+        "p5": 15,
+        "pw": 55,
+        "plan": "LEVEL_INTERMEDIATE"
       }
     }
     """

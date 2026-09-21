@@ -254,6 +254,38 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(unlimited["windows"][0]["used_pct"], 0.0)
         self.assertEqual(unlimited["windows"][0]["detail"], "Unlimited")
 
+    def test_zed_lists_plans_for_each_organization(self):
+        payload = {
+            "user": {"github_login": "octocat", "name": "Octo Cat"},
+            "default_organization_id": 10,
+            "organizations": [
+                {"id": 10, "name": "Octo's Organization", "is_personal": True},
+                {"id": 20, "name": "Zed VIP", "is_personal": False},
+            ],
+            "plans_by_organization": {
+                "10": "zed_student",
+                "20": "zed_vip",
+            },
+            "plan": {
+                "plan_v3": "zed_student",
+                "usage": {"edit_predictions": {"used": 2, "limit": {"limited": 10}}},
+            },
+        }
+
+        quota = USAGE._normalize_zed_quota(payload)
+
+        self.assertEqual(quota["plan"], "Zed Student + Zed VIP")
+        self.assertEqual(quota["details"], [
+            {"label": "账号", "value": "Octo Cat"},
+            {
+                "label": "Octo's Organization",
+                "value": "Zed Student",
+                "secondary": "当前组织",
+            },
+            {"label": "Zed VIP", "value": "Zed VIP"},
+        ])
+        self.assertEqual(quota["windows"][0]["used_pct"], 20.0)
+
     def test_zed_settings_reject_cross_origin_credentials(self):
         trusted = USAGE._zed_connection_settings({
             "credentials_url": "zed-preview-key",
@@ -283,6 +315,7 @@ class ProviderQuotaTests(unittest.TestCase):
         def request(url, **kwargs):
             self.assertEqual(url, "https://cloud.zed.dev/client/users/me")
             self.assertEqual(kwargs["headers"]["Authorization"], "42 zed-token")
+            self.assertEqual(kwargs["headers"]["User-Agent"], "Tokei/1.0")
             return payload
 
         with tempfile.TemporaryDirectory() as tmp:

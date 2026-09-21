@@ -57,6 +57,7 @@ final class QuotaDetailRepository: ObservableObject {
 
     private let fileURL: URL
     private var loadedAt: Date?
+    private var forcedReloadPending = false
     private let freshness: TimeInterval = 30
 
     init(fileURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -71,7 +72,10 @@ final class QuotaDetailRepository: ObservableObject {
         if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < freshness {
             return
         }
-        guard !refreshing else { return }
+        if refreshing {
+            forcedReloadPending = forcedReloadPending || force
+            return
+        }
         refreshing = true
 
         DispatchQueue.global(qos: .utility).async {
@@ -91,6 +95,10 @@ final class QuotaDetailRepository: ObservableObject {
                 } else {
                     fputs("Tokei quota detail failed: exit=\(result.exitCode) "
                           + "timeout=\(result.timedOut)\n", stderr)
+                }
+                if self.forcedReloadPending {
+                    self.forcedReloadPending = false
+                    self.load(force: true)
                 }
             }
         }

@@ -13,6 +13,35 @@ def event(ts, day, total, last, cost):
 
 
 class CodexDedupedDaysTests(unittest.TestCase):
+    def test_legacy_model_cache_without_credits_accepts_new_events(self):
+        first = event(
+            "2026-07-10T00:00:00+00:00",
+            "2026-07-10",
+            (100, 80, 5, 2),
+            (100, 80, 5, 2),
+            1.0,
+        ) + ["openai/gpt-5.4"]
+        second = event(
+            "2026-07-10T01:00:00+00:00",
+            "2026-07-10",
+            (150, 120, 8, 3),
+            (50, 40, 3, 1),
+            0.5,
+        ) + ["openai/gpt-5.4"]
+
+        days = {}
+        USAGE._codex_add_event(days, first)
+        days["2026-07-10"]["models"]["openai/gpt-5.4"].pop("credits")
+
+        USAGE._codex_add_event(days, second)
+
+        usage = days["2026-07-10"]["models"]["openai/gpt-5.4"]
+        self.assertEqual(usage["in"], 30)
+        self.assertEqual(usage["out"], 8)
+        self.assertEqual(usage["cr"], 120)
+        self.assertEqual(usage["reason"], 3)
+        self.assertEqual(usage["credits"], 0.0)
+
     def test_replayed_parent_snapshot_is_counted_once(self):
         parent = event(
             "2026-07-10T00:00:00+00:00",
@@ -455,13 +484,16 @@ class CodexScanDedupTests(unittest.TestCase):
             USAGE._CODEX_PARSER_VERSION,
         )
 
-    def test_parser_upgrade_reuses_nonempty_model_v2_cache(self):
+    def test_parser_upgrade_rescans_nonempty_model_v2_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sessions = root / "sessions"
             sessions.mkdir()
             path = sessions / "rollout-cached.jsonl"
-            path.write_text("{}\n", encoding="utf-8")
+            path.write_text(self.session_meta("cached") + "\n" +
+                            self.turn_context("2024-01-08T00:00:00Z", "gpt-5.4") + "\n" +
+                            self.token_count("2024-01-08T00:01:00Z", (100, 80, 5, 2),
+                                             (100, 80, 5, 2)) + "\n", encoding="utf-8")
             source_path = str(path.resolve())
             st = path.stat()
             cached_event = event(
@@ -502,10 +534,11 @@ class CodexScanDedupTests(unittest.TestCase):
                     "dedupe_open": True,
                     "canonical": True,
                 }
-                with mock.patch.object(USAGE, "_iter_codex_usage_records") as iterator:
+                with mock.patch.object(USAGE, "_iter_codex_usage_records",
+                                       wraps=USAGE._iter_codex_usage_records) as iterator:
                     result = USAGE.scan_codex(self.bounds(), cache)
 
-        iterator.assert_not_called()
+        iterator.assert_called_once()
         usage = result["ranges"]["all"]
         self.assertEqual(usage["in"], 100)
         self.assertEqual(usage["cached"], 80)

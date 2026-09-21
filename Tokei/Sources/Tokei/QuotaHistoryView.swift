@@ -50,6 +50,7 @@ struct QuotaHistoryView: View {
     private static let collapsedCycleLimit = 8
 
     @ObservedObject var history: QuotaHistoryStore
+    let onLoad: () -> Void
     @ObservedObject private var detail = QuotaDetailRepository.shared
     @State private var tool: QuotaHistoryTool = .claude
     @State private var span: QuotaHistorySpan = .day
@@ -88,7 +89,7 @@ struct QuotaHistoryView: View {
             }
             footnote
         }
-        .onAppear { detail.load() }
+        .onAppear(perform: onLoad)
     }
 
     @ViewBuilder
@@ -112,7 +113,7 @@ struct QuotaHistoryView: View {
         Text(span.showsDailyTokens
              ? "长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。"
              : "额度曲线来自本机定时快照；模型标记来自同一分钟内本地会话 token 增量，仅表示相关活动，不等同于官方逐模型扣费归因。")
-            .font(.system(size: 9.5))
+            .font(.system(size: Theme.fontSize(9.5)))
             .foregroundStyle(Theme.tTertiary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -136,7 +137,7 @@ struct QuotaHistoryView: View {
             if cycleTool == nil {
                 ForEach(missingTools, id: \.self) { tool in
                     Text(missingHint(tool))
-                        .font(.system(size: 9))
+                        .font(.system(size: Theme.fontSize(9)))
                         .foregroundStyle(Theme.tTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -148,10 +149,10 @@ struct QuotaHistoryView: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("一个周额度用了多少")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: Theme.fontSize(14), weight: .bold))
                     .foregroundStyle(Theme.tPrimary)
                 Text(cycleSubtitle)
-                    .font(.system(size: 9.5))
+                    .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
             }
             Spacer()
@@ -224,11 +225,11 @@ struct QuotaHistoryView: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(cycleName(cycle.tool)) 周额度")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: Theme.fontSize(12), weight: .bold))
                     .foregroundStyle(cycleTint(cycle.tool))
                 Spacer()
                 Text("\(Fmt.countdown(cycle.end)) 后回满")
-                    .font(.system(size: 9.5))
+                    .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
             }
             if let used = cycle.used_pct {
@@ -237,30 +238,30 @@ struct QuotaHistoryView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("这个周期已经用了")
-                        .font(.system(size: 9.5))
+                        .font(.system(size: Theme.fontSize(9.5)))
                         .foregroundStyle(Theme.tTertiary)
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text((cycle.approx ? "≈" : "") + Fmt.human(cycle.tokens))
-                            .font(.system(size: 25, weight: .bold, design: .rounded))
+                            .font(.system(size: Theme.fontSize(25), weight: .bold, design: .rounded))
                             .foregroundStyle(Theme.tPrimary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
                         Text("tokens")
-                            .font(.system(size: 10))
+                            .font(.system(size: Theme.fontSize(10)))
                             .foregroundStyle(Theme.tTertiary)
                     }
                     Text(Fmt.grouped(cycle.tokens))
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
                 Spacer()
                 if let projected = cycle.projectedTotal {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("照这个用法，整个周期约")
-                            .font(.system(size: 9.5))
+                            .font(.system(size: Theme.fontSize(9.5)))
                             .foregroundStyle(Theme.tTertiary)
                         Text(Fmt.human(projected))
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .font(.system(size: Theme.fontSize(17), weight: .bold, design: .rounded))
                             .foregroundStyle(Theme.tSecondary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
@@ -271,7 +272,7 @@ struct QuotaHistoryView: View {
                 Text(cycle.deviceBreakdown
                         .map { "\($0.name) \(Fmt.human($0.tokens))" }
                         .joined(separator: "  ·  "))
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: Theme.fontSize(9), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -293,7 +294,7 @@ struct QuotaHistoryView: View {
             }
             .frame(height: 7)
             Text(String(format: "已用 %.0f%%", used))
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced))
                 .foregroundStyle(Theme.tSecondary)
                 .frame(width: 62, alignment: .trailing)
         }
@@ -313,22 +314,22 @@ struct QuotaHistoryView: View {
         let hiddenCount = max(0, cycles.count - Self.collapsedCycleLimit)
         return VStack(alignment: .leading, spacing: 6) {
             Text(compactTitle ? "过去几个周期" : "\(cycleName(tool)) 过去几个周期")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: Theme.fontSize(11), weight: .semibold))
                 .foregroundStyle(Theme.tSecondary)
             if uneven {
                 Text("不足 7 天的是重置时间被提前重锚，额度提前回满，长度不一样不能直接比。")
-                    .font(.system(size: 9))
+                    .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(visibleCycles) { cycle in
                 HStack(spacing: 8) {
                     Text("\(Fmt.day(cycle.start)) → \(Fmt.day(cycle.end))")
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                         .frame(width: 92, alignment: .leading)
                     Text(String(format: "%.1f天", cycle.durationDays))
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                         .frame(width: 38, alignment: .trailing)
                     GeometryReader { geometry in
@@ -341,11 +342,11 @@ struct QuotaHistoryView: View {
                     }
                     .frame(height: 7)
                     Text((cycle.approx ? "≈" : "") + Fmt.human(cycle.tokens))
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: Theme.fontSize(11), weight: .semibold, design: .rounded))
                         .foregroundStyle(Theme.tSecondary)
                         .frame(width: 52, alignment: .trailing)
                     Text(cycle.used_pct.map { String(format: "用到%.0f%%", $0) } ?? "—")
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                         .frame(width: 52, alignment: .trailing)
                 }
@@ -365,7 +366,7 @@ struct QuotaHistoryView: View {
                         Text(expanded ? "收起更早周期" : "查看更早的 \(hiddenCount) 个周期")
                         Spacer(minLength: 0)
                     }
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.system(size: Theme.fontSize(9.5), weight: .semibold))
                     .foregroundStyle(cycleTint(tool).opacity(0.9))
                     .contentShape(Rectangle())
                 }
@@ -395,7 +396,7 @@ struct QuotaHistoryView: View {
         HStack {
             Spacer()
             Text(text)
-                .font(.system(size: 11))
+                .font(.system(size: Theme.fontSize(11)))
                 .foregroundStyle(Theme.tTertiary)
             Spacer()
         }
@@ -438,15 +439,15 @@ struct QuotaHistoryView: View {
     private func dailyStat(_ title: String, _ tokens: Int, _ tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 9.5))
+                .font(.system(size: Theme.fontSize(9.5)))
                 .foregroundStyle(Theme.tTertiary)
             Text(Fmt.human(tokens))
-                .font(.system(size: 19, weight: .bold, design: .rounded))
+                .font(.system(size: Theme.fontSize(19), weight: .bold, design: .rounded))
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             Text(Fmt.grouped(tokens))
-                .font(.system(size: 9, design: .monospaced))
+                .font(.system(size: Theme.fontSize(9), design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -457,10 +458,10 @@ struct QuotaHistoryView: View {
     private var dailyEmpty: some View {
         VStack(spacing: 8) {
             Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 24))
+                .font(.system(size: Theme.fontSize(24)))
                 .foregroundStyle(Theme.codex.opacity(0.8))
             Text("账本里还没有这个区间的用量")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: Theme.fontSize(12), weight: .semibold))
                 .foregroundStyle(Theme.tSecondary)
         }
         .frame(maxWidth: .infinity)
@@ -471,10 +472,10 @@ struct QuotaHistoryView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("额度轨迹")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: Theme.fontSize(14), weight: .bold))
                     .foregroundStyle(Theme.tPrimary)
                 Text(span.showsDailyTokens ? "按天聚合 · 真实 token 消耗" : "按分钟聚合 · 剩余额度")
-                    .font(.system(size: 9.5))
+                    .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
             }
             Spacer()
@@ -510,20 +511,20 @@ struct QuotaHistoryView: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text("采样点")
-                    .font(.system(size: 9.5))
+                    .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
                 Text("\(projection.points.count)")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.tPrimary)
             }
             Spacer()
             if let largest = projection.dropEvents.max(by: { $0.drop < $1.drop }) {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("最大区间下降")
-                        .font(.system(size: 9.5))
+                        .font(.system(size: Theme.fontSize(9.5)))
                         .foregroundStyle(Theme.tTertiary)
                     Text(String(format: "-%.1f%% / %dmin", largest.drop, largest.durationMinutes))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(12), weight: .semibold, design: .monospaced))
                         .foregroundStyle(seriesColor(for: largest.window))
                 }
             }
@@ -533,10 +534,10 @@ struct QuotaHistoryView: View {
     private func quotaSummary(title: String, value: Double?, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 9.5))
+                .font(.system(size: Theme.fontSize(9.5)))
                 .foregroundStyle(Theme.tTertiary)
             Text(value.map { String(format: "%.1f%%", $0) } ?? "—")
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                 .foregroundStyle(value.map { $0 <= 15 ? Color.red : tint } ?? Theme.tTertiary)
         }
     }
@@ -558,13 +559,13 @@ struct QuotaHistoryView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "chart.xyaxis.line")
-                .font(.system(size: 24))
+                .font(.system(size: Theme.fontSize(24)))
                 .foregroundStyle(tool.tint.opacity(0.8))
             Text("正在开始记录额度轨迹")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: Theme.fontSize(12), weight: .semibold))
                 .foregroundStyle(Theme.tSecondary)
             Text("Tokei 每 30 秒刷新，曲线按分钟聚合。保持应用运行后，这里会逐步出现数据。")
-                .font(.system(size: 10))
+                .font(.system(size: Theme.fontSize(10)))
                 .foregroundStyle(Theme.tTertiary)
                 .multilineTextAlignment(.center)
         }
@@ -575,29 +576,29 @@ struct QuotaHistoryView: View {
     private func changesSection(_ projection: QuotaHistoryProjection) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最近额度变化")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: Theme.fontSize(12), weight: .bold))
                 .foregroundStyle(Theme.tPrimary)
             if projection.dropEvents.isEmpty {
                 Text("当前时间范围内还没有检测到额度下降")
-                    .font(.system(size: 10))
+                    .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.tTertiary)
             } else {
                 ForEach(Array(projection.dropEvents.prefix(8))) { event in
                     HStack(spacing: 8) {
                         Text(Self.timeFormatter.string(from: event.timestamp))
-                            .font(.system(size: 9.5, design: .monospaced))
+                            .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tTertiary)
                             .frame(width: 40, alignment: .leading)
                         Text(event.window)
-                            .font(.system(size: 9.5, weight: .semibold))
+                            .font(.system(size: Theme.fontSize(9.5), weight: .semibold))
                             .foregroundStyle(tool.tint)
                             .frame(width: 42, alignment: .leading)
                         Text(String(format: "-%.1f%%", event.drop))
-                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .font(.system(size: Theme.fontSize(10.5), weight: .semibold, design: .monospaced))
                             .foregroundStyle(Theme.tPrimary)
                             .frame(width: 54, alignment: .trailing)
                         Text("\(event.durationMinutes) 分钟")
-                            .font(.system(size: 9.5))
+                            .font(.system(size: Theme.fontSize(9.5)))
                             .foregroundStyle(Theme.tTertiary)
                         activityText(event.activity)
                         Spacer()
@@ -610,11 +611,11 @@ struct QuotaHistoryView: View {
     private func activitySection(_ projection: QuotaHistoryProjection) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("模型活动标记")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: Theme.fontSize(12), weight: .bold))
                 .foregroundStyle(Theme.tPrimary)
             if projection.activityEvents.isEmpty {
                 Text("尚未检测到该工具的模型 token 增量")
-                    .font(.system(size: 10))
+                    .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.tTertiary)
             } else {
                 ForEach(Array(projection.activityEvents.prefix(8))) { event in
@@ -622,7 +623,7 @@ struct QuotaHistoryView: View {
                         Text(Self.timeFormatter.string(
                             from: Date(timeIntervalSince1970: TimeInterval(event.timestamp))
                         ))
-                            .font(.system(size: 9.5, design: .monospaced))
+                            .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tTertiary)
                             .frame(width: 40, alignment: .leading)
                         activityText(event.activity)
@@ -635,7 +636,7 @@ struct QuotaHistoryView: View {
 
     private func activityText(_ activity: [QuotaModelActivity]) -> some View {
         Text(activity.map { "\($0.model) +\(Fmt.human($0.tokenDelta))" }.joined(separator: " · "))
-            .font(.system(size: 9.5, design: .monospaced))
+            .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             .foregroundStyle(Theme.tSecondary)
             .lineLimit(1)
     }
@@ -726,7 +727,7 @@ private struct QuotaDailyChart: View {
             AxisMarks(values: .stride(by: .day, count: axisStrideDays)) { _ in
                 AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
                 AxisValueLabel(format: .dateTime.month(.twoDigits).day(.twoDigits))
-                    .font(.system(size: 8.5, design: .monospaced))
+                    .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
             }
         }
@@ -738,7 +739,7 @@ private struct QuotaDailyChart: View {
                         Text(Fmt.human(tokens))
                     }
                 }
-                .font(.system(size: 8.5, design: .monospaced))
+                .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
             }
         }
@@ -782,13 +783,13 @@ private struct QuotaDailyChart: View {
     private func hoverBubble(_ point: QuotaDailyPoint, plot: CGRect) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(point.d)
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(.system(size: Theme.fontSize(9.5), weight: .semibold, design: .monospaced))
                 .foregroundStyle(Theme.tPrimary)
             hoverRow("Claude Code", point.c, Theme.claude)
             hoverRow("Codex", point.x, Theme.codex)
             hoverRow("Grok", point.g, Theme.grok)
             Text("合计 \(Fmt.grouped(point.total))")
-                .font(.system(size: 8.5, design: .monospaced))
+                .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
         }
         .padding(.horizontal, 7)
@@ -813,11 +814,11 @@ private struct QuotaDailyChart: View {
                 .fill(tint)
                 .frame(width: 5, height: 5)
             Text(title)
-                .font(.system(size: 9))
+                .font(.system(size: Theme.fontSize(9)))
                 .foregroundStyle(Theme.tSecondary)
             Spacer(minLength: 4)
             Text(Fmt.human(tokens))
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(.system(size: Theme.fontSize(9.5), weight: .semibold, design: .monospaced))
                 .foregroundStyle(Theme.tPrimary)
         }
     }
@@ -879,7 +880,7 @@ private struct QuotaHistoryChart: View {
                         ? .dateTime.month(.twoDigits).day(.twoDigits)
                         : .dateTime.hour().minute()
                 )
-                    .font(.system(size: 8.5, design: .monospaced))
+                    .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
             }
         }
@@ -891,7 +892,7 @@ private struct QuotaHistoryChart: View {
                         Text("\(number)%")
                     }
                 }
-                .font(.system(size: 8.5, design: .monospaced))
+                .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
             }
         }
@@ -944,7 +945,7 @@ private struct QuotaHistoryChart: View {
                     .position(x: hover.x, y: plot.midY)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(Self.timeFormatter.string(from: hover.sample.timestamp))
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(9.5), weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.tPrimary)
                     ForEach(hover.sample.rows) { row in
                         HStack(spacing: 4) {
@@ -952,12 +953,12 @@ private struct QuotaHistoryChart: View {
                                 .fill(colors[row.window] ?? Theme.claude)
                                 .frame(width: 5, height: 5)
                             Text(row.window)
-                                .font(.system(size: 9))
+                                .font(.system(size: Theme.fontSize(9)))
                                 .foregroundStyle(Theme.tSecondary)
                                 .lineLimit(1)
                             Spacer(minLength: 4)
                             Text(String(format: "%.1f%%", row.remaining))
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                .font(.system(size: Theme.fontSize(9.5), weight: .semibold, design: .monospaced))
                                 .foregroundStyle(Theme.tPrimary)
                         }
                     }
@@ -967,7 +968,7 @@ private struct QuotaHistoryChart: View {
                                 .map { "\($0.model) +\(Fmt.human($0.tokenDelta))" }
                                 .joined(separator: " · ")
                         )
-                        .font(.system(size: 8.5, design: .monospaced))
+                        .font(.system(size: Theme.fontSize(8.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                         .lineLimit(1)
                     }

@@ -32,17 +32,17 @@ class DeepSeekHarnessTests(unittest.TestCase):
         weekend = datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc)
 
         self.assertEqual(USAGE._deepseek_official_price("deepseek-v4-pro", before_change), {
-            "in": 0.435, "out": 0.87, "cache_read": 0.003625, "cache_write": 0.0,
+            "in": 3.0, "out": 6.0, "cache_read": 0.025, "cache_write": 0.0,
         })
         self.assertEqual(USAGE._deepseek_official_price("deepseek-v4-pro-0813", weekday_peak), {
-            "in": 1.32, "out": 3.96, "cache_read": 0.044, "cache_write": 0.0,
+            "in": 9.0, "out": 27.0, "cache_read": 0.30, "cache_write": 0.0,
         })
         self.assertEqual(USAGE._deepseek_official_price("deepseek-v4-pro", weekday_off_peak), {
-            "in": 0.66, "out": 1.98, "cache_read": 0.022, "cache_write": 0.0,
+            "in": 4.5, "out": 13.5, "cache_read": 0.15, "cache_write": 0.0,
         })
         self.assertEqual(
             USAGE._deepseek_official_price("deepseek-v4-flash-vision-exp", weekend),
-            {"in": 0.22, "out": 0.66, "cache_read": 0.007, "cache_write": 0.0},
+            {"in": 1.5, "out": 4.5, "cache_read": 0.05, "cache_write": 0.0},
         )
 
     def test_usage_record_prices_the_request_at_its_utc_timestamp(self):
@@ -58,7 +58,7 @@ class DeepSeekHarnessTests(unittest.TestCase):
 
         record = USAGE._deepseek_harness_usage_record(event)
 
-        self.assertAlmostEqual(record["cost"], 1.32 + 3.96 + 0.044, places=12)
+        self.assertAlmostEqual(record["cost_cny"], 9.0 + 27.0 + 0.30, places=12)
 
     def test_card_uses_harness_inclusive_input_and_output_labels(self):
         source = (Path(__file__).resolve().parents[1] / "Tokei" / "Sources" / "Tokei"
@@ -110,7 +110,7 @@ class DeepSeekHarnessTests(unittest.TestCase):
             }
             cache = {"v": USAGE._SCAN_CACHE_VERSION}
             with mock.patch.object(USAGE, "DEEPSEEK_HARNESS_DIR", tmp), \
-                 mock.patch.object(USAGE, "ledger_reconcile", side_effect=lambda _tool, days: days):
+                 mock.patch.object(USAGE, "ledger_reconcile", side_effect=lambda _tool, days, sources=None: days):
                 result = USAGE.scan_deepseek_harness(bounds, cache)
                 with mock.patch.object(
                     USAGE, "_deepseek_harness_usage_record",
@@ -133,7 +133,7 @@ class DeepSeekHarnessTests(unittest.TestCase):
             datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc),
         )
         self.assertAlmostEqual(
-            all_usage["cost"],
+            all_usage["cost_cny"],
             (100 * price["in"] + 40 * price["out"] + 1_000 * price["cache_read"]
              + 5 * price["cache_write"]) / 1_000_000,
             places=12,
@@ -152,8 +152,8 @@ class DeepSeekHarnessTests(unittest.TestCase):
             record = USAGE._deepseek_harness_usage_record(event)
 
         self.assertAlmostEqual(
-            record["cost"],
-            (100 * 0.435 + 40 * 0.87 + 1_000 * 0.003625) / 1_000_000,
+            record["cost_cny"],
+            (100 * 3 + 40 * 6 + 1_000 * 0.025) / 1_000_000,
             places=12,
         )
 

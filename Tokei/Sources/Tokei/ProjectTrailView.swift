@@ -8,6 +8,7 @@ struct TrailProject: Codable, Identifiable {
     var last_active: String
     var sessions: Int
     var tokens: Int
+    var cost_cny: Double? = nil
     var cost: Double
     var top_model: String
     var tools: [String]
@@ -75,7 +76,7 @@ struct ProjectTrailView: View {
                 searchBar
                 Button { loadData() } label: {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: Theme.fontSize(10), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(Color.primary.opacity(0.06)))
@@ -88,7 +89,7 @@ struct ProjectTrailView: View {
                 HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
                     .frame(height: 120)
             } else if filtered.isEmpty {
-                HStack { Spacer(); Text("无匹配项目").font(.system(size: 11)).foregroundStyle(Theme.tTertiary); Spacer() }
+                HStack { Spacer(); Text("无匹配项目").font(.system(size: Theme.fontSize(11))).foregroundStyle(Theme.tTertiary); Spacer() }
                     .frame(height: 80)
             } else {
                 let grouped = Dictionary(grouping: filtered, by: { group(for: $0) })
@@ -109,16 +110,16 @@ struct ProjectTrailView: View {
     var searchBar: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: Theme.fontSize(10), weight: .medium))
                 .foregroundStyle(Theme.tTertiary)
             TextField("搜索项目…", text: $query)
-                .font(.system(size: 11))
+                .font(.system(size: Theme.fontSize(11)))
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.tPrimary)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 10)).foregroundStyle(Theme.tTertiary)
+                        .font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                 }
                 .buttonStyle(.plain)
             }
@@ -131,10 +132,10 @@ struct ProjectTrailView: View {
     func sectionHeader(_ title: String, dormant: Bool = false) -> some View {
         HStack(spacing: 5) {
             if dormant {
-                Text("💤").font(.system(size: 10))
+                Text("💤").font(.system(size: Theme.fontSize(10)))
             }
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: Theme.fontSize(11), weight: .semibold))
                 .foregroundStyle(dormant ? Theme.tTertiary : Theme.tSecondary)
         }
         .padding(.top, 4)
@@ -145,10 +146,10 @@ struct ProjectTrailView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Image(systemName: "folder.fill")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: Theme.fontSize(10), weight: .medium))
                         .foregroundStyle(Theme.claude.opacity(0.8))
                     Text(p.name)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: Theme.fontSize(12), weight: .semibold))
                         .foregroundStyle(Theme.tPrimary)
                         .lineLimit(1)
                     ForEach(p.tools, id: \.self) { t in
@@ -156,22 +157,22 @@ struct ProjectTrailView: View {
                     }
                 }
                 Text(abbreviatePath(p.path))
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: Theme.fontSize(9), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 HStack(spacing: 6) {
                     Text(Fmt.relativeDate(p.last_active))
-                        .font(.system(size: 9)).foregroundStyle(Theme.tTertiary)
-                    Text("·").foregroundStyle(Theme.tTertiary).font(.system(size: 9))
+                        .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
+                    Text("·").foregroundStyle(Theme.tTertiary).font(.system(size: Theme.fontSize(9)))
                     Text("\(p.sessions) sessions")
-                        .font(.system(size: 9)).foregroundStyle(Theme.tTertiary)
-                    Text("·").foregroundStyle(Theme.tTertiary).font(.system(size: 9))
-                    Text("$\(Int(p.cost))")
-                        .font(.system(size: 9, weight: .medium)).foregroundStyle(Theme.tSecondary)
+                        .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
+                    Text("·").foregroundStyle(Theme.tTertiary).font(.system(size: Theme.fontSize(9)))
+                    Text(nativeMoney(p.cost, p.cost_cny))
+                        .font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
                     if !p.top_model.isEmpty {
                         Text(p.top_model)
-                            .font(.system(size: 8, design: .monospaced))
+                            .font(.system(size: Theme.fontSize(8), design: .monospaced))
                             .foregroundStyle(Theme.tTertiary)
                             .lineLimit(1)
                     }
@@ -188,7 +189,7 @@ struct ProjectTrailView: View {
                                     HStack(spacing: 3) {
                                         Circle().fill(.green).frame(width: 5, height: 5)
                                         Text("localhost:\(port)")
-                                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                            .font(.system(size: Theme.fontSize(9), weight: .medium, design: .monospaced))
                                             .foregroundStyle(Theme.hermes)
                                             .lineLimit(1)
                                     }
@@ -206,7 +207,7 @@ struct ProjectTrailView: View {
             Spacer(minLength: 4)
             Button { togglePin(p.path) } label: {
                 Image(systemName: pinned.contains(p.path) ? "star.fill" : "star")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: Theme.fontSize(10), weight: .medium))
                     .foregroundStyle(pinned.contains(p.path) ? Theme.qoder : Theme.tTertiary)
             }
             .buttonStyle(.plain)
@@ -238,7 +239,7 @@ struct ProjectTrailView: View {
         fmt.dateFormat = "yyyy-MM-dd"
         let earliestStr = earliest.map { fmt.string(from: $0) } ?? "?"
         return Text("共 \(projects.count) 个项目 · 最远 \(earliestStr)")
-            .font(.system(size: 9)).foregroundStyle(Theme.tTertiary)
+            .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
     }
@@ -257,6 +258,7 @@ struct ProjectTrailView: View {
         case "prime_agent": return Theme.primeAgent
         case "workbuddy": return Theme.workbuddy
         case "workbuddy_ai": return Theme.workbuddyAI
+        case "codebuddy": return Theme.codebuddy
         case "deepseek_harness": return Theme.deepseekHarness
         default: return Theme.tTertiary
         }

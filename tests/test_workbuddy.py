@@ -136,7 +136,7 @@ class WorkBuddyScanTests(unittest.TestCase):
                 cache = {"v": USAGE._SCAN_CACHE_VERSION}
                 with mock.patch.object(USAGE, "ledger_touch"), \
                      mock.patch.object(USAGE, "ledger_reconcile",
-                                       side_effect=lambda _tool, days: days):
+                                       side_effect=lambda _tool, days, sources=None: days):
                     domestic_result = USAGE.scan_workbuddy(bounds, cache)
                     international_result = USAGE.scan_workbuddy_ai(bounds, cache)
             finally:

@@ -154,7 +154,7 @@ class QwenCodeScanTests(unittest.TestCase):
         self.assertEqual(usage["in"], 200)
         self.assertEqual(len(usage["sessions"]), 1)
 
-    def test_summary_is_last_wins_and_request_log_overrides_same_session(self):
+    def test_latest_summary_fills_missing_requests_without_double_counting_cache(self):
         summaries = [
             summary_record("session-1", 100),
             summary_record("session-1", 500),
@@ -166,9 +166,9 @@ class QwenCodeScanTests(unittest.TestCase):
             result, _ = self.scan(tmp, summary_records=summaries, request_records=requests)
 
         usage = result["ranges"]["all"]
-        self.assertEqual(usage["in"], 190)
+        self.assertEqual(usage["in"], 570)
         self.assertEqual(usage["cr"], 20)
-        self.assertEqual(USAGE.token_total(usage), 210)
+        self.assertEqual(USAGE.token_total(usage), 590)
         self.assertEqual(len(usage["sessions"]), 2)
 
     def test_missing_sources_clear_stale_cache(self):

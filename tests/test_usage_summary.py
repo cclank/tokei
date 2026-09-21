@@ -18,6 +18,7 @@ class UsageSummaryBuilderTests(unittest.TestCase):
                     "-parse-as-library",
                     str(TOKEI_SRC / "Model.swift"),
                     str(TOKEI_SRC / "Design.swift"),
+                    str(TOKEI_SRC / "PanelTypography.swift"),
                     str(TOKEI_SRC / "UsageSummaryBuilder.swift"),
                     str(TOKEI_SRC / "UsageShareImage.swift"),
                     str(ROOT / "tests/swift/UsageSummaryBuilderCheck.swift"),

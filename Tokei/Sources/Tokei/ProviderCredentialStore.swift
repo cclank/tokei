@@ -63,6 +63,20 @@ enum ProviderCredentialStore {
         case value(String)
     }
 
+    static func runIfRequested() -> Bool {
+        if CommandLine.arguments.contains("--zed-authorize") {
+            let ok = zedCredentials(allowInteraction: true) != nil
+            print(ok ? "ok" : "unavailable")
+            exit(ok ? 0 : 2)
+        }
+        if CommandLine.arguments.contains("--zed-verify") {
+            let ok = zedCredentials() != nil
+            print(ok ? "ok" : "unavailable")
+            exit(ok ? 0 : 2)
+        }
+        return false
+    }
+
     static func token(for provider: ProviderSecret) -> String? {
         switch tokenLookup(for: provider, service: service) {
         case .value(let value): return value
@@ -183,7 +197,9 @@ enum ProviderCredentialStore {
         }
     }
 
-    private static func zedCredentials() -> (userID: String, accessToken: String)? {
+    private static func zedCredentials(
+        allowInteraction: Bool = false
+    ) -> (userID: String, accessToken: String)? {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/zed/settings.json")
         let settings = (try? Data(contentsOf: url))
@@ -200,19 +216,26 @@ enum ProviderCredentialStore {
             .first ?? "https://zed.dev"
 
         if let credentials = queryZedCredentials(
-            itemClass: kSecClassInternetPassword, attribute: kSecAttrServer, value: serviceURL
+            itemClass: kSecClassInternetPassword,
+            attribute: kSecAttrServer,
+            value: serviceURL,
+            allowInteraction: allowInteraction
         ) {
             return credentials
         }
         return queryZedCredentials(
-            itemClass: kSecClassGenericPassword, attribute: kSecAttrService, value: serviceURL
+            itemClass: kSecClassGenericPassword,
+            attribute: kSecAttrService,
+            value: serviceURL,
+            allowInteraction: allowInteraction
         )
     }
 
     private static func queryZedCredentials(
         itemClass: CFTypeRef,
         attribute: CFString,
-        value: String
+        value: String,
+        allowInteraction: Bool
     ) -> (userID: String, accessToken: String)? {
         var query: [String: Any] = [
             kSecClass as String: itemClass,
@@ -221,10 +244,17 @@ enum ProviderCredentialStore {
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
         ]
-        applyNoUI(to: &query)
+        if !allowInteraction {
+            applyNoUI(to: &query)
+        }
         var result: AnyObject?
-        let status = withoutKeychainUI {
-            SecItemCopyMatching(query as CFDictionary, &result)
+        let status: OSStatus
+        if allowInteraction {
+            status = SecItemCopyMatching(query as CFDictionary, &result)
+        } else {
+            status = withoutKeychainUI {
+                SecItemCopyMatching(query as CFDictionary, &result)
+            }
         }
         guard status == errSecSuccess,
               let item = result as? [String: Any],

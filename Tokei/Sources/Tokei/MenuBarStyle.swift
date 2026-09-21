@@ -69,6 +69,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
     case claudeFable
     case codex5h
     case codexWeek
+    case kimi5h
+    case kimiSubscription
     case grok
 
     var id: String { rawValue }
@@ -80,6 +82,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .claudeFable: return "Claude Fable"
         case .codex5h: return "Codex 5h"
         case .codexWeek: return "Codex 周"
+        case .kimi5h: return "Kimi 5h"
+        case .kimiSubscription: return "Kimi 订阅"
         case .grok: return "Grok"
         }
     }
@@ -92,6 +96,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .claudeFable: return "menuBarQuotaClaudeFable"
         case .codex5h: return "menuBarQuotaCodex5h"
         case .codexWeek: return "menuBarQuotaCodex"
+        case .kimi5h: return "menuBarQuotaKimi5h"
+        case .kimiSubscription: return "menuBarQuotaKimiSubscription"
         case .grok: return "menuBarQuotaGrok"
         }
     }
@@ -100,7 +106,7 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
     var defaultEnabled: Bool {
         switch self {
         case .claude5h, .codexWeek: return true
-        case .claudeWeek, .claudeFable, .codex5h, .grok: return false
+        case .claudeWeek, .claudeFable, .codex5h, .kimi5h, .kimiSubscription, .grok: return false
         }
     }
 
@@ -113,9 +119,9 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
     /// Grok 的窗口随数据在周/月之间变，画不出确定的符号，所以不给它符号。
     var window: MenuBarQuotaWindow? {
         switch self {
-        case .claude5h, .codex5h: return .fiveHour
+        case .claude5h, .codex5h, .kimi5h: return .fiveHour
         case .claudeWeek, .claudeFable, .codexWeek: return .week
-        case .grok: return nil
+        case .kimiSubscription, .grok: return nil
         }
     }
 
@@ -125,6 +131,7 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .claude5h, .claudeWeek: return AppDelegate.claudeColor
         case .claudeFable: return .systemOrange
         case .codex5h, .codexWeek: return AppDelegate.codexColor
+        case .kimi5h, .kimiSubscription: return AppDelegate.kimicodeColor
         case .grok: return AppDelegate.grokColor
         }
     }
@@ -134,6 +141,7 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .claude5h, .claudeWeek: return Theme.claude
         case .claudeFable: return .orange
         case .codex5h, .codexWeek: return Theme.codex
+        case .kimi5h, .kimiSubscription: return Theme.kimicode
         case .grok: return Theme.grok
         }
     }
@@ -146,6 +154,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .claudeFable: return (usage.claude.qf, usage.claude.qf_stale)
         case .codex5h: return (usage.codex.p5, usage.codex.p5_stale)
         case .codexWeek: return (usage.codex.pw, usage.codex.pw_stale)
+        case .kimi5h: return (usage.kimicode.p5, usage.kimicode.p5_stale)
+        case .kimiSubscription: return (usage.kimicode.pw, usage.kimicode.pw_stale)
         case .grok: return (usage.grok.pct, usage.grok.stale)
         }
     }

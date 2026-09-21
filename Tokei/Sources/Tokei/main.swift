@@ -233,6 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }()
     var timer: Timer?
     var globalMouseMonitor: Any?
+    private var popoverResizeObserver: NSObjectProtocol?
+    private var reanchoringPopover = false
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -252,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .applicationDefined
-        popover.animates = true
+        popover.animates = false
         popover.delegate = self
 
         // 启动时先把 Qoder IDE / Grok / 千问办公额度开关落盘到 config.json,
@@ -454,10 +456,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidShow(_ notification: Notification) {
         store.popoverVisible = true
+        popover.contentViewController?.view.window?.animationBehavior = .none
+        observePopoverResize()
     }
 
     func popoverDidClose(_ notification: Notification) {
         store.popoverVisible = false
+        stopObservingPopoverResize()
+    }
+
+    private func observePopoverResize() {
+        stopObservingPopoverResize()
+        guard let window = popover.contentViewController?.view.window else { return }
+        popoverResizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reanchorPopover()
+        }
+    }
+
+    private func stopObservingPopoverResize() {
+        if let popoverResizeObserver {
+            NotificationCenter.default.removeObserver(popoverResizeObserver)
+            self.popoverResizeObserver = nil
+        }
+    }
+
+    private func reanchorPopover() {
+        guard !reanchoringPopover, popover.isShown, let button = statusItem.button else { return }
+        reanchoringPopover = true
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        reanchoringPopover = false
     }
 }
 

@@ -55,6 +55,94 @@ struct DailyCost: Codable, Identifiable {
     var id: String { date }
 }
 
+private struct HeatToolCell: View {
+    let name: String
+    let tint: Color
+    let tokens: Int
+    let cost: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Circle().fill(tint).frame(width: 6, height: 6)
+                Text(name).font(.system(size: 11, weight: .medium)).foregroundStyle(tint)
+            }
+            Text("\(Fmt.human(tokens)) tok")
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
+            Text(String(format: "$%.2f", cost))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
+        }
+    }
+}
+
+private struct HeatDetailCard: View {
+    let day: DailyCost
+    var onClose: () -> Void
+
+    private var waTokens: Int {
+        (day.wa_in ?? 0) + (day.wa_out ?? 0) + (day.wa_cr ?? 0) + (day.wa_cw ?? 0)
+    }
+    private var dTokens: Int {
+        (day.d_in ?? 0) + (day.d_out ?? 0) + (day.d_cr ?? 0) + (day.d_cw ?? 0) + (day.d_reason ?? 0)
+    }
+    private var gTokens: Int {
+        (day.g_in ?? 0) + (day.g_out ?? 0) + (day.g_cr ?? 0) + (day.g_reason ?? 0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(day.date).font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Theme.tPrimary)
+                Spacer()
+                Text(String(format: "$%.2f", day.total))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                        .foregroundStyle(Theme.tTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 12)],
+                      alignment: .leading, spacing: 8) {
+                HeatToolCell(name: "Claude", tint: Theme.claude,
+                             tokens: day.c_in + day.c_out + day.c_cr + day.c_cw, cost: day.claude)
+                HeatToolCell(name: "Codex", tint: Theme.codex,
+                             tokens: day.x_in + day.x_out, cost: day.codex)
+                HeatToolCell(name: "Pi", tint: Theme.pi,
+                             tokens: day.p_in + day.p_out + day.p_cr + day.p_cw + day.p_reason, cost: day.pi)
+                HeatToolCell(name: "Prime Agent", tint: Theme.primeAgent,
+                             tokens: day.pa_in + day.pa_out + day.pa_cr + day.pa_cw + day.pa_reason,
+                             cost: day.prime_agent ?? 0)
+                HeatToolCell(name: "WorkBuddy", tint: Theme.workbuddy,
+                             tokens: (day.w_in ?? 0) + (day.w_out ?? 0) + (day.w_cr ?? 0) + (day.w_cw ?? 0),
+                             cost: day.workbuddy ?? 0)
+                if waTokens > 0 {
+                    HeatToolCell(name: "WorkBuddy Intl.", tint: Theme.workbuddyAI,
+                                 tokens: waTokens, cost: day.workbuddy_ai ?? 0)
+                }
+                if dTokens > 0 {
+                    HeatToolCell(name: "DeepSeek Harness", tint: Theme.deepseekHarness,
+                                 tokens: dTokens, cost: day.deepseek_harness ?? 0)
+                }
+                HeatToolCell(name: "Qwen Code", tint: Theme.qwencode,
+                             tokens: (day.q_in ?? 0) + (day.q_out ?? 0) + (day.q_cr ?? 0) + (day.q_reason ?? 0),
+                             cost: day.qwencode ?? 0)
+                if gTokens > 0 {
+                    HeatToolCell(name: "Grok Build", tint: Theme.grok,
+                                 tokens: gTokens, cost: day.grok ?? 0)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.black.opacity(0.3))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Theme.claude.opacity(0.2), lineWidth: 0.5)))
+    }
+}
+
 struct ModelCost: Codable, Identifiable {
     var name: String
     var cost: Double
@@ -519,130 +607,7 @@ struct DashboardView: View {
     }
 
     func heatDetail(_ d: DailyCost) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(d.date).font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Theme.tPrimary)
-                Spacer()
-                Text(String(format: "$%.2f", d.total))
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Button { selectedCell = nil } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
-                        .foregroundStyle(Theme.tTertiary)
-                }
-                .buttonStyle(.plain)
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 12)],
-                      alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.claude).frame(width: 6, height: 6)
-                        Text("Claude").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.claude)
-                    }
-                    Text("\(Fmt.human(d.c_in + d.c_out + d.c_cr + d.c_cw)) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.claude))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.codex).frame(width: 6, height: 6)
-                        Text("Codex").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.codex)
-                    }
-                    Text("\(Fmt.human(d.x_in + d.x_out)) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.codex))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.pi).frame(width: 6, height: 6)
-                        Text("Pi").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.pi)
-                    }
-                    Text("\(Fmt.human(d.p_in + d.p_out + d.p_cr + d.p_cw + d.p_reason)) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.pi))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.primeAgent).frame(width: 6, height: 6)
-                        Text("Prime Agent").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.primeAgent)
-                    }
-                    Text("\(Fmt.human((d.pa_in) + d.pa_out + d.pa_cr + d.pa_cw + d.pa_reason)) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.prime_agent ?? 0))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.workbuddy).frame(width: 6, height: 6)
-                        Text("WorkBuddy").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.workbuddy)
-                    }
-                    Text("\(Fmt.human((d.w_in ?? 0) + (d.w_out ?? 0) + (d.w_cr ?? 0) + (d.w_cw ?? 0))) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.workbuddy ?? 0))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                if (d.wa_in ?? 0) + (d.wa_out ?? 0) + (d.wa_cr ?? 0) + (d.wa_cw ?? 0) > 0 {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 4) {
-                            Circle().fill(Theme.workbuddyAI).frame(width: 6, height: 6)
-                            Text("WorkBuddy Intl.").font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Theme.workbuddyAI)
-                        }
-                        Text("\(Fmt.human((d.wa_in ?? 0) + (d.wa_out ?? 0) + (d.wa_cr ?? 0) + (d.wa_cw ?? 0))) tok")
-                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                        Text(String(format: "$%.2f", d.workbuddy_ai ?? 0))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Theme.tSecondary)
-                    }
-                }
-                if (d.d_in ?? 0) + (d.d_out ?? 0) + (d.d_cr ?? 0) + (d.d_cw ?? 0) + (d.d_reason ?? 0) > 0 {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 4) {
-                            Circle().fill(Theme.deepseekHarness).frame(width: 6, height: 6)
-                            Text("DeepSeek Harness").font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Theme.deepseekHarness)
-                        }
-                        Text("\(Fmt.human((d.d_in ?? 0) + (d.d_out ?? 0) + (d.d_cr ?? 0) + (d.d_cw ?? 0) + (d.d_reason ?? 0))) tok")
-                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                        Text(String(format: "$%.2f", d.deepseek_harness ?? 0))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Theme.tSecondary)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.qwencode).frame(width: 6, height: 6)
-                        Text("Qwen Code").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.qwencode)
-                    }
-                    Text("\(Fmt.human((d.q_in ?? 0) + (d.q_out ?? 0) + (d.q_cr ?? 0) + (d.q_reason ?? 0))) tok")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                    Text(String(format: "$%.2f", d.qwencode ?? 0))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.tSecondary)
-                }
-                if (d.g_in ?? 0) + (d.g_out ?? 0) + (d.g_cr ?? 0) + (d.g_reason ?? 0) > 0 {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 4) {
-                            Circle().fill(Theme.grok).frame(width: 6, height: 6)
-                            Text("Grok Build").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.grok)
-                        }
-                        Text("\(Fmt.human((d.g_in ?? 0) + (d.g_out ?? 0) + (d.g_cr ?? 0) + (d.g_reason ?? 0))) tok")
-                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.tTertiary)
-                        Text(String(format: "$%.2f", d.grok ?? 0))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Theme.tSecondary)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.black.opacity(0.3))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.claude.opacity(0.2), lineWidth: 0.5)))
+        HeatDetailCard(day: d, onClose: { selectedCell = nil })
     }
 
     var weekStrip: some View {

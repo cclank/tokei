@@ -1321,6 +1321,16 @@ struct PanelView: View {
                             .background(Capsule().fill(Theme.grok.opacity(0.16)))
                     }
                 }
+                if g.auth_expired == true {
+                    quotaStateNotice(
+                        title: "Grok 登录态已过期，显示本地日志",
+                        detail: "实时开关开着，但 access token 已过期，未发起实时请求。跑一次 grok / Grok CLI 续期后自动恢复。",
+                        source: grokQuotaSourceLabel(g.source),
+                        updated: g.q_updated,
+                        tint: Theme.grok,
+                        warning: true
+                    )
+                }
                 grokQuotaStatus(g)
             } else if quotaState == .expired {
                 if hasUsage { thinDivider }
@@ -1348,10 +1358,11 @@ struct PanelView: View {
     func grokQuotaStatus(_ stat: GrokStat) -> some View {
         let sourceLabel = grokQuotaSourceLabel(stat.source)
         let updated = stat.q_updated.map { Fmt.reset($0) } ?? "更新时间未知"
+        let expiredSuffix = (stat.auth_expired == true) ? " · 登录态已过期" : ""
         return HStack(spacing: 5) {
             Image(systemName: "clock")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("额度来源 \(sourceLabel) · \(updated)")
+            Text("额度来源 \(sourceLabel)\(expiredSuffix) · \(updated)")
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }

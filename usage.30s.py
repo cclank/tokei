@@ -253,6 +253,8 @@ _DEFAULT_PRICES = {
     "openai/gpt-5.6-sol":            {"in": 4.0,   "out": 20.0, "cache_read": 0.4,    "cache_write": 5.0},
     "openai/gpt-5.6-terra":          {"in": 2.0,   "out": 12.0, "cache_read": 0.2,    "cache_write": 2.5},
     "openai/gpt-5.6-luna":           {"in": 0.2,   "out": 1.2,  "cache_read": 0.02,   "cache_write": 0.25},
+    "openai/gpt-6-sol":              {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
+    "openai/gpt-6-luna":             {"in": 0.1,   "out": 0.5,  "cache_read": 0.01,   "cache_write": 0.125},
     "openai/gpt-5.5":                {"in": 5.0,   "out": 30.0, "cache_read": 0.5,    "cache_write": 0.0},
     "qwen/qwen3.8-max":              {"in": 2.0,   "out": 6.0,  "cache_read": 0.25,   "cache_write": 2.5},
     "qwen/qwen3.7-max":              {"in": 1.25,  "out": 3.75, "cache_read": 0.25,   "cache_write": 1.5625},
@@ -348,9 +350,17 @@ _BUILTIN_OVERRIDE_MODELS = {
     "openai/gpt-5.6-sol": {
         "in": 4.0, "out": 20.0, "cache_read": 0.4, "cache_write": 5.0,
     },
+    "openai/gpt-6-sol": {
+        "in": 2.0, "out": 10.0, "cache_read": 0.2, "cache_write": 2.5,
+    },
+    "openai/gpt-6-luna": {
+        "in": 0.1, "out": 0.5, "cache_read": 0.01, "cache_write": 0.125,
+    },
 }
 _BUILTIN_OVERRIDE_ALIASES = {
     "gpt-5.6": "openai/gpt-5.6-sol",
+    "gpt-6-sol": "openai/gpt-6-sol",
+    "gpt-6-luna": "openai/gpt-6-luna",
     "qwen3.8-max-0902": "qwen/qwen3.8-max",
     "qwen3.8-max-2026-09-02": "qwen/qwen3.8-max",
     "qwen3.8-max-preview": "qwen/qwen3.8-max",
@@ -426,6 +436,9 @@ _FAMILY = [
     ("opus",     "anthropic/claude-opus-4.8"),
     ("sonnet",   "anthropic/claude-sonnet-5"),
     ("haiku",    "anthropic/claude-haiku-4.5"),
+    ("gpt-6-sol",  "openai/gpt-6-sol"),
+    ("gpt-6-luna", "openai/gpt-6-luna"),
+    ("gpt-6",    "openai/gpt-6-sol"),
     ("gpt-5",    "openai/gpt-5.6-sol"),
     ("qwen",     "qwen/qwen3.8-max"),
     ("deepseek", "deepseek/deepseek-v4-pro"),
@@ -665,6 +678,7 @@ def nice_model(m: str) -> str:
         version = mt.group(1) if mt else ""
         variant_labels = []
         for token, label in (("sol", "Sol"), ("luna", "Luna"), ("terra", "Terra"),
+                             ("astra", "Astra"),
                              ("mini", "Mini"), ("pro", "Pro")):
             if re.search(rf"(?:^|[-_/ ]){token}(?:$|[-_/ ])", s):
                 variant_labels.append(label)

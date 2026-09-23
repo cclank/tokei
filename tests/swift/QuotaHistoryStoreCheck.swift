@@ -99,7 +99,65 @@ struct QuotaHistoryStoreCheck {
         try expect(reloaded.points.count == 1, "points outside retention should be pruned")
 
         try checkProjection()
+        try checkDailyConsumption()
         print("quota history store checks passed")
+    }
+
+    private static func checkDailyConsumption() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        // 两天：day1 82→75（耗 7pp），day2 75→72 再回满到 97（耗 3pp + 1 次 reset）。
+        let day1 = 1_800_000_000 - (1_800_000_000 % 86_400)
+        let points = [
+            codexPoint(day1 + 3600, 82),
+            codexPoint(day1 + 7200, 80),
+            codexPoint(day1 + 10800, 75),
+            codexPoint(day1 + 86_400 + 3600, 75),
+            codexPoint(day1 + 86_400 + 7200, 72),
+            codexPoint(day1 + 86_400 + 10800, 97),
+        ]
+        let rows = QuotaHistoryProjection.dailyConsumption(
+            from: points, tool: .codex, calendar: calendar, completeCoverageHours: 1)
+        try expect(rows.count == 2, "two calendar days should produce two rows")
+        try expect(rows[0].consumed == 3.0, "latest day should consume 3pp (75→72, refill excluded)")
+        try expect(rows[0].resets == 1, "refill should count as one reset")
+        try expect(rows[0].isComplete, "3h coverage should clear a 1h bar")
+        try expect(rows[1].consumed == 7.0, "first day should consume 7pp (82→75)")
+        try expect(rows[1].resets == 0, "no refill on the first day")
+
+        // 上升不抵扣下降：100→90→95→80 计 10+15=25pp。
+        let sawtooth = [
+            codexPoint(day1 + 100, 100),
+            codexPoint(day1 + 200, 90),
+            codexPoint(day1 + 300, 95),
+            codexPoint(day1 + 400, 80),
+        ]
+        let single = QuotaHistoryProjection.dailyConsumption(
+            from: sawtooth, tool: .codex, calendar: calendar)
+        try expect(single.count == 1, "same-day points should merge into one row")
+        try expect(single[0].consumed == 25.0, "refills must not offset consumption")
+        try expect(single[0].resets == 1, "one refill should be counted")
+
+        // 采样不足标不完整。
+        let sparse = [codexPoint(day1 + 100, 90), codexPoint(day1 + 200, 85)]
+        let sparseRows = QuotaHistoryProjection.dailyConsumption(
+            from: sparse, tool: .codex, calendar: calendar)
+        try expect(!sparseRows[0].isComplete, "minutes-apart samples must flag incomplete")
+
+        // 排序：新→旧。
+        try expect(rows[0].dayStart > rows[1].dayStart, "rows should sort newest first")
+    }
+
+    private static func codexPoint(_ timestamp: Int, _ remaining: Double) -> QuotaHistoryPoint {
+        QuotaHistoryPoint(
+            timestamp: timestamp,
+            claudeFiveHourRemaining: nil,
+            claudeWeekRemaining: nil,
+            claudeFableWeekRemaining: nil,
+            codexWeekRemaining: remaining,
+            claudeActivity: [],
+            codexActivity: []
+        )
     }
 
     private static func checkProjection() throws {

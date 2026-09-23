@@ -57,6 +57,24 @@ struct QuotaHoverSample: Identifiable {
     var id: Int { Int(timestamp.timeIntervalSince1970) / 60 }
 }
 
+/// 某自然日本机快照内的周额度消耗（下降量之和，单位百分点）。
+///
+/// 口径（issue #85）：
+/// - 相邻快照剩余额度下降即消耗；上升（回满/重置）不计为负消耗；
+/// - 按系统本地时区划分自然日；
+/// - 当天快照覆盖不足 `completeCoverage`（默认 20 小时）标 `isComplete = false`，
+///   UI 显示"约"，避免把缺失采样误当成 0%。
+struct QuotaDailyConsumption: Identifiable {
+    var dayStart: Date
+    var window: String
+    var consumed: Double
+    var resets: Int
+    var coveredHours: Double
+    var isComplete: Bool
+
+    var id: String { "\(Int(dayStart.timeIntervalSince1970)):\(window)" }
+}
+
 /// Precomputes all chart inputs once per SwiftUI body evaluation.
 ///
 /// This keeps rendering linear in the number of history points. Flat line
@@ -72,6 +90,8 @@ struct QuotaHistoryProjection {
     var dropEvents: [QuotaDropEvent]
     var activityEvents: [QuotaActivityEvent]
     var hoverSamples: [QuotaHoverSample]
+    /// 按自然日汇总的周额度消耗（issue #85），新→旧排序。
+    var dailyConsumption: [QuotaDailyConsumption]
 
     init(points: [QuotaHistoryPoint], tool: QuotaHistoryTool) {
         let windows = tool.windowNames
@@ -169,6 +189,7 @@ struct QuotaHistoryProjection {
         dropEvents = drops.sorted { $0.timestamp > $1.timestamp }
         self.activityEvents = activityEvents.reversed()
         self.hoverSamples = hoverSamples
+        dailyConsumption = Self.dailyConsumption(from: points, tool: tool)
     }
 
     func nearestHoverSample(to date: Date) -> QuotaHoverSample? {
@@ -260,5 +281,70 @@ struct QuotaHistoryProjection {
         default:
             return nil
         }
+    }
+
+    /// 按本地自然日汇总各窗口剩余额度的下降量（issue #85）。
+    ///
+    /// 同一窗口相邻两快照：下降记消耗，上升（回满/重置）记一次 reset 且不抵扣。
+    /// 跨天边沿：以上升/下降实际发生的快照所在天归属（重置发生在当天则分别累计）。
+    static func dailyConsumption(
+        from points: [QuotaHistoryPoint],
+        tool: QuotaHistoryTool,
+        calendar: Calendar = .current,
+        completeCoverageHours: Double = 20
+    ) -> [QuotaDailyConsumption] {
+        struct Accumulator {
+            var consumed = 0.0
+            var resets = 0
+            var firstTimestamp = Int.max
+            var lastTimestamp = Int.min
+            var count = 0
+        }
+        var accumulators: [String: Accumulator] = [:]
+        func key(dayStart: Date, window: String) -> String {
+            "\(Int(dayStart.timeIntervalSince1970)):\(window)"
+        }
+        var dayStarts: [String: Date] = [:]
+        var windows: [String: String] = [:]
+        var previous: [String: Double] = [:]
+        let sorted = points.sorted { $0.timestamp < $1.timestamp }
+        for point in sorted {
+            let date = Date(timeIntervalSince1970: TimeInterval(point.timestamp))
+            let dayStart = calendar.startOfDay(for: date)
+            for window in tool.windowNames {
+                guard let remaining = value(for: window, point: point, tool: tool) else {
+                    continue
+                }
+                let id = key(dayStart: dayStart, window: window)
+                dayStarts[id] = dayStart
+                windows[id] = window
+                var acc = accumulators[id] ?? Accumulator()
+                acc.firstTimestamp = min(acc.firstTimestamp, point.timestamp)
+                acc.lastTimestamp = max(acc.lastTimestamp, point.timestamp)
+                acc.count += 1
+                if let prior = previous[window] {
+                    if remaining < prior {
+                        acc.consumed += prior - remaining
+                    } else if remaining > prior {
+                        acc.resets += 1
+                    }
+                }
+                accumulators[id] = acc
+                previous[window] = remaining
+            }
+        }
+        return accumulators.map { id, acc in
+            let coveredHours = acc.count > 1
+                ? Double(acc.lastTimestamp - acc.firstTimestamp) / 3600
+                : 0
+            return QuotaDailyConsumption(
+                dayStart: dayStarts[id] ?? Date(),
+                window: windows[id] ?? "",
+                consumed: acc.consumed,
+                resets: acc.resets,
+                coveredHours: coveredHours,
+                isComplete: coveredHours >= completeCoverageHours
+            )
+        }.sorted { $0.dayStart > $1.dayStart }
     }
 }

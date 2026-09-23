@@ -3419,10 +3419,14 @@ def _codex_session_meta(path, max_lines=20, max_line_bytes=2 * 1024 * 1024):
                     spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
                     if isinstance(spawn, dict):
                         parent_id = spawn.get("parent_thread_id")
-                return meta.get("id") or meta.get("session_id"), parent_id
+                history_base = meta.get("history_base")
+                if not isinstance(history_base, dict):
+                    history_base = None
+                return (meta.get("id") or meta.get("session_id"), parent_id,
+                        history_base)
     except OSError:
         pass
-    return None, None
+    return None, None, None
 
 
 def _codex_rollout_files():
@@ -3443,7 +3447,10 @@ def _codex_rollout_files():
 
 
 def _codex_canonical_file_cache(file_cache):
-    """Keep resumed segments; discard only copies covered by another segment."""
+    """Keep resumed segments; discard only copies covered by another segment.
+
+    同 session_id 的分页续页(history_base 非空)是互补数据段,不是完整副本:
+    它们按 response_ids 互补保留,不参与 legacy 二选一(issue #96)。"""
     canonical = {}
     groups = {}
     for path, entry in file_cache.items():
@@ -3462,7 +3469,17 @@ def _codex_canonical_file_cache(file_cache):
     for copies in groups.values():
         covered = set()
         legacy_selected = False
-        for path, entry in sorted(copies, key=score, reverse=True):
+        # 分页续页先按 response_ids 互补保留,再对剩余 legacy 条目二选一。
+        paginated = [(p, e) for p, e in copies if e.get("history_base")]
+        legacy = [(p, e) for p, e in copies if not e.get("history_base")]
+        for path, entry in sorted(paginated, key=score, reverse=True):
+            ids = set(entry.get("response_ids") or [])
+            if ids:
+                if ids <= covered:
+                    continue
+                covered.update(ids)
+            canonical[path] = entry
+        for path, entry in sorted(legacy, key=score, reverse=True):
             ids = set(entry.get("response_ids") or [])
             if ids:
                 if ids <= covered:
@@ -3545,7 +3562,7 @@ def scan_codex(bounds, cache):
 
             if append_from is None:
                 events = []
-                session_id, forked_from_id = _codex_session_meta(f)
+                session_id, forked_from_id, history_base = _codex_session_meta(f)
                 file_limits = None; file_limits_ts = None; file_plan = None
                 file_g_limits = None; file_g_ts = None; file_g_plan = None
                 file_r_limits = None; file_r_ts = None
@@ -3732,6 +3749,7 @@ def scan_codex(bounds, cache):
                 "sig": sig, "days": entry.get("days", {}) if isinstance(entry, dict) else {},
                 "deduped_days": deduped_days,
                 "session_id": session_id, "forked_from_id": forked_from_id,
+                "history_base": history_base if append_from is None else entry.get("history_base"),
                 "limits": file_limits, "limits_ts": file_limits_ts, "plan": file_plan,
                 "g_limits": file_g_limits, "g_ts": file_g_ts, "g_plan": file_g_plan,
                 "reserve_limits": file_r_limits, "reserve_limits_ts": file_r_ts,

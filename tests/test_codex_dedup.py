@@ -159,7 +159,7 @@ class CodexDedupedDaysTests(unittest.TestCase):
 
 
 class CodexScanDedupTests(unittest.TestCase):
-    def session_meta(self, sid, forked_from_id=None):
+    def session_meta(self, sid, forked_from_id=None, history_base=None):
         payload = {
             "session_id": forked_from_id or sid,
             "id": sid,
@@ -168,6 +168,8 @@ class CodexScanDedupTests(unittest.TestCase):
         }
         if forked_from_id:
             payload["forked_from_id"] = forked_from_id
+        if history_base is not None:
+            payload["history_base"] = history_base
         return json.dumps({
             "timestamp": "2024-01-08T00:00:00Z",
             "type": "session_meta",
@@ -178,7 +180,7 @@ class CodexScanDedupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-child.jsonl"
             path.write_text(self.session_meta("child", "parent") + "\n", encoding="utf-8")
-            session_id, parent_id = USAGE._codex_session_meta(path)
+            session_id, parent_id, _ = USAGE._codex_session_meta(path)
 
         self.assertEqual(session_id, "child")
         self.assertEqual(parent_id, "parent")
@@ -199,10 +201,118 @@ class CodexScanDedupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-child.jsonl"
             path.write_text(json.dumps(meta) + "\n", encoding="utf-8")
-            session_id, parent_id = USAGE._codex_session_meta(path)
+            session_id, parent_id, _ = USAGE._codex_session_meta(path)
 
         self.assertEqual(session_id, "child")
         self.assertEqual(parent_id, "parent")
+
+    def test_session_meta_reads_history_base(self):
+        meta = {
+            "timestamp": "2024-01-08T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-A",
+                "session_id": "session-A",
+                "history_mode": "paginated",
+                "history_base": {"thread_id": "session-A",
+                                 "end_ordinal_exclusive": 20467},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-page.jsonl"
+            path.write_text(json.dumps(meta) + "\n", encoding="utf-8")
+            session_id, parent_id, history_base = USAGE._codex_session_meta(path)
+
+        self.assertEqual(session_id, "session-A")
+        self.assertIsNone(parent_id)
+        self.assertEqual(history_base, {"thread_id": "session-A",
+                                        "end_ordinal_exclusive": 20467})
+
+    def test_canonical_keeps_complementary_paginated_pages(self):
+        """issue #96:同 session 互补续页按 response_ids 都保留,不整文件二选一。"""
+        file_cache = {
+            "page-A.jsonl": {
+                "session_id": "session-A", "event_count": 51,
+                "last_event_ts": "2026-09-20T01:00:02+00:00", "parsed_size": 1000,
+                "response_ids": ["r%02d" % i for i in range(51)],
+            },
+            "page-B.jsonl": {
+                "session_id": "session-A", "event_count": 37,
+                "last_event_ts": "2026-09-20T02:00:01+00:00", "parsed_size": 500,
+                "history_base": {"thread_id": "session-A",
+                                 "end_ordinal_exclusive": 20467},
+                "response_ids": ["s%02d" % i for i in range(37)],
+            },
+        }
+        self.assertEqual(sorted(USAGE._codex_canonical_file_cache(file_cache)),
+                         ["page-A.jsonl", "page-B.jsonl"])
+
+    def test_canonical_still_drops_fully_covered_paginated_copy(self):
+        """续页是完整副本(ids 被覆盖)时仍只保留一页,不重复计数。"""
+        ids = ["r%02d" % i for i in range(51)]
+        file_cache = {
+            "page-A.jsonl": {
+                "session_id": "session-A", "event_count": 51,
+                "last_event_ts": "2026-09-20T01:00:02+00:00", "parsed_size": 1000,
+                "response_ids": ids,
+            },
+            "page-B.jsonl": {
+                "session_id": "session-A", "event_count": 51,
+                "last_event_ts": "2026-09-20T02:00:01+00:00", "parsed_size": 500,
+                "history_base": {"thread_id": "session-A"},
+                "response_ids": list(ids),
+            },
+        }
+        self.assertEqual(len(USAGE._codex_canonical_file_cache(file_cache)), 1)
+
+    def test_canonical_keeps_paginated_page_without_response_ids(self):
+        """续页无 ids(老解析)时不丢页;有 ids 的前页照常保留。"""
+        file_cache = {
+            "page-A.jsonl": {
+                "session_id": "session-A", "event_count": 2,
+                "last_event_ts": "2026-09-20T01:00:02+00:00", "parsed_size": 1000,
+                "response_ids": ["r00", "r01"],
+            },
+            "page-B.jsonl": {
+                "session_id": "session-A", "event_count": 1,
+                "last_event_ts": "2026-09-20T02:00:01+00:00", "parsed_size": 500,
+                "history_base": {"thread_id": "session-A"},
+            },
+        }
+        self.assertEqual(sorted(USAGE._codex_canonical_file_cache(file_cache)),
+                         ["page-A.jsonl", "page-B.jsonl"])
+
+    def test_scan_counts_both_pages_of_paginated_session(self):
+        """端到端:page-A 累计/增量 100/100、300/200,page-B 350/50,总量应为 350。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            page_a = Path(tmp) / "rollout-page-a.jsonl"
+            page_a.write_text("\n".join([
+                self.session_meta("session-A"),
+                self.turn_context("2024-01-08T00:00:00Z", "gpt-5.5"),
+                self.token_count("2024-01-08T00:01:00Z", (100, 0, 0, 0), (100, 0, 0, 0)),
+                self.token_count("2024-01-08T00:02:00Z", (300, 0, 0, 0), (200, 0, 0, 0)),
+            ]) + "\n", encoding="utf-8")
+            page_b = Path(tmp) / "rollout-page-b.jsonl"
+            page_b.write_text("\n".join([
+                self.session_meta("session-A", history_base={"thread_id": "session-A",
+                                                             "end_ordinal_exclusive": 2}),
+                self.turn_context("2024-01-08T00:03:00Z", "gpt-5.5"),
+                self.token_count("2024-01-08T00:04:00Z", (350, 0, 0, 0), (50, 0, 0, 0)),
+            ]) + "\n", encoding="utf-8")
+            old_dir = USAGE.CODEX_DIR
+            old_archive_dir = USAGE.CODEX_ARCHIVED_DIR
+            USAGE.CODEX_DIR = tmp
+            USAGE.CODEX_ARCHIVED_DIR = str(Path(tmp) / "archived_sessions")
+            try:
+                with mock.patch.object(USAGE, "fetch_codex_live_limits", return_value=None):
+                    result = USAGE.scan_codex(self.bounds(), {"v": USAGE._SCAN_CACHE_VERSION})
+            finally:
+                USAGE.CODEX_DIR = old_dir
+                USAGE.CODEX_ARCHIVED_DIR = old_archive_dir
+
+        usage = result["ranges"]["all"]
+        self.assertEqual(usage["in"], 350)
+        self.assertEqual(usage["models"]["openai/gpt-5.5"]["in"], 350)
 
     def token_count(self, ts, total, last, ordinal=None, rate_limits=None):
         record = {"timestamp": ts}

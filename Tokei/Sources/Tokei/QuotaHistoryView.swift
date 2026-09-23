@@ -47,6 +47,11 @@ private struct QuotaHistoryFrame {
 }
 
 struct QuotaHistoryView: View {
+    static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd"
+        return formatter
+    }()
     private static let collapsedCycleLimit = 8
 
     @ObservedObject var history: QuotaHistoryStore
@@ -105,14 +110,64 @@ struct QuotaHistoryView: View {
                 }
             }
         }
+        dailyConsumptionSection(frame.projection)
         changesSection(frame.projection)
         activitySection(frame.projection)
+    }
+
+    /// 按天汇总的额度消耗（issue #85）：每天消耗了周额度的多少个百分点。
+    @ViewBuilder
+    private func dailyConsumptionSection(_ projection: QuotaHistoryProjection) -> some View {
+        let rows = projection.dailyConsumption.filter { $0.window == dailyConsumptionWindow }
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("每天用了多少额度")
+                    .font(.system(size: Theme.fontSize(12), weight: .bold))
+                    .foregroundStyle(Theme.tPrimary)
+                let maxConsumed = max(rows.map(\.consumed).max() ?? 0, 0.05)
+                ForEach(Array(rows.prefix(7))) { row in
+                    HStack(spacing: 8) {
+                        Text(Self.dayFormatter.string(from: row.dayStart))
+                            .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
+                            .foregroundStyle(Theme.tTertiary)
+                            .frame(width: 36, alignment: .leading)
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(seriesColor(for: row.window).opacity(row.isComplete ? 0.85 : 0.4))
+                                .frame(width: max(2, proxy.size.width * CGFloat(row.consumed / maxConsumed)))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(width: 90, height: 8)
+                        Text((row.isComplete ? "" : "约 ") + String(format: "%.1f%%", row.consumed))
+                            .font(.system(size: Theme.fontSize(10.5), weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.tPrimary)
+                            .frame(width: 62, alignment: .trailing)
+                        if row.resets > 0 {
+                            Text("回满×\(row.resets)")
+                                .font(.system(size: Theme.fontSize(9)))
+                                .foregroundStyle(Theme.tTertiary)
+                        }
+                        if !row.isComplete {
+                            Text("采样不全")
+                                .font(.system(size: Theme.fontSize(9)))
+                                .foregroundStyle(Theme.tTertiary)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+        }
+    }
+
+    /// 每日消耗默认看的窗口：Codex 看周，Claude 看周 · 全部。
+    private var dailyConsumptionWindow: String {
+        tool == .codex ? "周" : "周 · 全部"
     }
 
     private var footnote: some View {
         Text(span.showsDailyTokens
              ? "长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。"
-             : "额度曲线来自本机定时快照；模型标记来自同一分钟内本地会话 token 增量，仅表示相关活动，不等同于官方逐模型扣费归因。")
+             : "额度曲线来自本机定时快照；每日消耗是当天剩余额度下降量之和（回满不抵扣），采样不足 20 小时的天标“约”；模型标记来自同一分钟内本地会话 token 增量，仅表示相关活动，不等同于官方逐模型扣费归因。")
             .font(.system(size: Theme.fontSize(9.5)))
             .foregroundStyle(Theme.tTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -692,6 +747,8 @@ private struct QuotaDailyChart: View {
 
     @State private var hover: QuotaDailyPoint?
 
+    private static let dayFormatter: DateFormatter = QuotaHistoryView.dayFormatter
+
     private struct Bar: Identifiable {
         var id: String { "\(day.timeIntervalSince1970)-\(tool)" }
         var day: Date
@@ -822,12 +879,6 @@ private struct QuotaDailyChart: View {
                 .foregroundStyle(Theme.tPrimary)
         }
     }
-
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 }
 
 /// Owns hover state so pointer movement redraws only the chart, not the parent

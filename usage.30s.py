@@ -462,6 +462,7 @@ def _normalize(model: str):
     if "/" in m:
         return m                                      # 已是 OpenRouter 格式
     if m.startswith("claude"):
+        m = re.sub(r"-(\d+)-(\d+)-(\d{8})$", r"-\1.\2-\3", m)  # claude-opus-5-5-20260921 → claude-opus-5.5-20260921
         m = re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)    # claude-opus-4-8 → claude-opus-4.8
         return "anthropic/" + m
     if re.match(r"(gpt|o\d|chatgpt)", m):
@@ -532,6 +533,18 @@ def _known_id_or_raw(model: str):
     return s
 
 
+def _strip_snapshot_date(model_id: str):
+    """anthropic/claude-opus-5.5-20260921 → anthropic/claude-opus-5.5(日期快照归一到基础版)。
+    也处理 -latest 后缀(claude-opus-5.5-latest → claude-opus-5.5)。"""
+    m = (model_id or "").strip()
+    stripped = re.sub(r"-\d{8}$", "", m)
+    if stripped == m:
+        stripped = re.sub(r"-latest$", "", m, flags=re.IGNORECASE)
+    if stripped != m and (stripped in _OV_MODELS or stripped in _PRICING_DB or stripped in _DEFAULT_PRICES):
+        return stripped
+    return None
+
+
 def _model_identity_id(model: str):
     """Resolve only exact catalog identities; never guess an unknown model family."""
     s = (model or "").strip()
@@ -549,6 +562,9 @@ def _model_identity_id(model: str):
         slug = entry.get("canonical_slug")
         if isinstance(slug, str) and _normalize(slug) == norm:
             return model_id
+    dated = _strip_snapshot_date(norm) if norm else None
+    if dated:
+        return dated
     return s
 
 
@@ -565,11 +581,15 @@ def _has_known_price(model: str):
 
 def _pricing_id(model: str):
     canonical = _known_id_or_raw(model)
+    # 家族回退可能把日期快照误判(如 opus 快照 → opus-4.8 兜底),先试日期归一。
+    normalized = _normalize(model)
+    dated = _strip_snapshot_date(normalized) if normalized else None
+    if dated:
+        return dated
     if canonical and (canonical in _OV_MODELS or canonical in _PRICING_DB or canonical in _DEFAULT_PRICES):
         return canonical
     # ZCode currently reports GLM-5.2, whose public price is not listed yet.
     # Use the documented GLM-5.1 equivalent until the pricing feed adds 5.2.
-    normalized = _normalize(model)
     if normalized == "z-ai/glm-5.2" and "z-ai/glm-5.1" in _PRICING_DB:
         return "z-ai/glm-5.1"
     return None
@@ -627,9 +647,17 @@ def _cached_entry_has_pricing_change(entry, changed_models):
 
 def _raw_price(model: str):
     """统一查价 → {in,out,cache_read,cache_write,write1h?}。<synthetic>→全 0。"""
-    cid = _resolve_id(model)
-    if cid is None:
-        return {"in": 0.0, "out": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+    norm = _normalize(model)
+    dated = _strip_snapshot_date(norm) if norm else None
+    if dated:
+        cid = dated
+    else:
+        cid = _resolve_id(model)
+        if cid is None:
+            return {"in": 0.0, "out": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+        redated = _strip_snapshot_date(cid)
+        if redated:
+            cid = redated
     p = dict(_DEFAULT_PRICES.get(cid, {}))            # 内置兜底打底
     p.update(_PRICING_DB.get(cid, {}))                # OpenRouter 基准
     p.update(_OV_MODELS.get(cid, {}))                 # 本地覆盖优先
@@ -668,7 +696,7 @@ def nice_model(m: str) -> str:
     s = m.lower()
     for key, disp in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")):
         if key in s:
-            mt = re.search(r"(\d+)-(\d+)", s)
+            mt = re.search(r"(\d+)[-.](\d)(?![\d])", s)
             return f"{disp} {mt.group(1)}.{mt.group(2)}" if mt else disp
     if "gpt" in s:
         # Luna Reserve 的内部标识,展示为 Luna Reserve 而不是裸 GPT。

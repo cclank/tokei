@@ -349,6 +349,9 @@ struct GrokStat: Codable {
     var source: String?
     var q_updated: Int?
     var stale: Bool?
+    /// Grok 登录态过期：实时开关开着但实际是本地值（issue #89）。
+    var auth_expired: Bool?
+    var auth_mtime: Double?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -362,6 +365,8 @@ struct GrokStat: Codable {
         source = try c.decodeIfPresent(String.self, forKey: .source)
         q_updated = try c.decodeIfPresent(Int.self, forKey: .q_updated)
         stale = try c.decodeIfPresent(Bool.self, forKey: .stale)
+        auth_expired = try c.decodeIfPresent(Bool.self, forKey: .auth_expired)
+        auth_mtime = try c.decodeIfPresent(Double.self, forKey: .auth_mtime)
     }
 }
 

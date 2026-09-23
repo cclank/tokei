@@ -66,7 +66,7 @@ final class DataLoader {
     }
 
     private struct ClaudeQuotaState: Codable, Equatable {
-        var version = 2
+        var version = 3
         var candidate: ClaudeQuotaCandidate?
         var snapshot: ClaudeQuotaSnapshot?
         var scanModified: TimeInterval = -1
@@ -78,6 +78,8 @@ final class DataLoader {
     private static let claudeQuotaFullScanInterval = 6 * 60 * 60
     private static let claudeQuotaRetryScanInterval = 5 * 60
     private static let claudeCacheFileLimit = 16 * 1024 * 1024
+    /// 水位线只认不超过当前时间的 mtime（留 5 分钟容差）；未来文件只读一次（issue #71）。
+    private static let claudeQuotaFutureSkew: TimeInterval = 5 * 60
     private static let claudeQuotaScanLock = NSLock()
     private static let zstdMagic = Data([0x28, 0xb5, 0x2f, 0xfd])
     private static let deepSeekPreparationLock = NSLock()
@@ -131,7 +133,7 @@ final class DataLoader {
     private static func loadClaudeQuotaState() -> ClaudeQuotaState {
         guard let data = try? Data(contentsOf: claudeQuotaStateURL),
               let state = try? JSONDecoder().decode(ClaudeQuotaState.self, from: data),
-              state.version == 2 else { return ClaudeQuotaState() }
+              state.version == 3 else { return ClaudeQuotaState() }
         return state
     }
 
@@ -233,7 +235,13 @@ final class DataLoader {
             return (record, snapshot)
         }
 
+        let horizon = Double(nowEpoch) + claudeQuotaFutureSkew
         for record in changed {
+            // 未来时间戳文件跳过内容解析：签名已在 scanBoundary，只读一次。
+            if record.modified > horizon {
+                inspected.insert(record.url.path)
+                continue
+            }
             if let value = inspect(record) {
                 selected = value
                 break
@@ -321,8 +329,15 @@ final class DataLoader {
         }
 
         if let newest = records.first {
-            state.scanModified = newest.modified
-            state.scanBoundary = records.prefix { $0.modified == newest.modified }.map(\.signature)
+            let horizon = Double(nowEpoch) + claudeQuotaFutureSkew
+            let past = records.filter { $0.modified <= horizon }
+            let base = past.isEmpty ? records : past
+            let newestModified = base[0].modified
+            state.scanModified = newestModified
+            var boundary = base.prefix { $0.modified == newestModified }.map(\.signature)
+            // 未来时间戳文件只读一次，不再每轮重复读取，也不参与水位线。
+            boundary += records.filter { $0.modified > horizon && !inspected.contains($0.url.path) }.map(\.signature)
+            state.scanBoundary = boundary
         } else {
             state.scanModified = 0
             state.scanBoundary = []

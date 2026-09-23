@@ -199,6 +199,66 @@ class ClaudeQuotaCacheTests(unittest.TestCase):
         self.assertEqual(result, fallback)
         scan.assert_called_once_with()
 
+    def test_future_timestamp_file_does_not_poison_watermark(self):
+        """issue #71:未来时间戳文件不参与水位线,新额度仍能被增量扫描捡到。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            future = self.now + 11 * 365 * 24 * 3600
+            self._write_entry(cache_dir, "decoy", "junk", future)
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            payloads = {"old": self._payload(37.0, 62.0)}
+            first = self._scan(cache_dir, state_file, self._decoder(payloads))
+            self.assertEqual(first["q5"], 37.0)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            import datetime as _dt
+            self.assertEqual(
+                _dt.datetime.fromtimestamp(state["scan_mtime_ns"] / 1e9).year,
+                _dt.datetime.fromtimestamp(self.now).year)
+
+            self._write_entry(cache_dir, "new", "new", self.now + 600)
+            payloads["new"] = self._payload(41.0, 65.0)
+            second = self._scan(cache_dir, state_file, self._decoder(payloads),
+                                now=self.now + 700)
+            self.assertEqual(second["q5"], 41.0)
+
+    def test_future_timestamp_file_is_not_repeatedly_redecoded(self):
+        """未来文件签名记入 scan_boundary 后,不再每轮重复解析。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "decoy", "junk", self.now + 11 * 365 * 24 * 3600)
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            payloads = {"old": self._payload(37.0, 62.0)}
+            self._scan(cache_dir, state_file, self._decoder(payloads))
+            seen = []
+
+            def spy(data):
+                seen.append(data[len(MAGIC):].decode("ascii"))
+                return self._decoder(payloads)(data)
+
+            self._scan(cache_dir, state_file, spy, now=self.now + 10)
+            self.assertNotIn("junk", seen)
+
+    def test_polluted_v2_state_is_discarded_on_upgrade(self):
+        """被 2037 污染的 v2 状态在版本升级后自动作废,立即全量重扫恢复。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            state_file.write_text(json.dumps({
+                "version": 2,
+                "scan_mtime_ns": (self.now + 11 * 365 * 24 * 3600) * 1_000_000_000,
+                "snapshot": {"q5": 1.0},
+            }), encoding="utf-8")
+            payloads = {"old": self._payload(37.0, 62.0)}
+            result = self._scan(cache_dir, state_file, self._decoder(payloads))
+            self.assertEqual(result["q5"], 37.0)
+            self.assertEqual(json.loads(state_file.read_text(encoding="utf-8"))["version"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

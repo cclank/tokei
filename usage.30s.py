@@ -12181,12 +12181,15 @@ def _zstd_decompress(data):
 
 
 # 首次全量定位 /usage，之后只检查变化项并复用最近一次有效候选。
-_CLAUDE_QUOTA_STATE_VERSION = 2
+_CLAUDE_QUOTA_STATE_VERSION = 3
 _CLAUDE_QUOTA_STALE_TTL = 1800
 _CLAUDE_QUOTA_FULL_SCAN_INTERVAL = 6 * 3600
 _CLAUDE_QUOTA_RETRY_SCAN_INTERVAL = 5 * 60
 _CLAUDE_CACHE_FILE_LIMIT = 16 * 1024 * 1024
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+# 水位线只认不超过当前时间的 mtime(留 5 分钟容差防时钟微偏);未来时间戳的
+# 文件不参与水位线计算,只读一次记入 scan_boundary(issue #71)。
+_CLAUDE_QUOTA_FUTURE_SKEW = 5 * 60
 
 
 def _claude_record_signature(record):
@@ -12339,7 +12342,12 @@ def _scan_claude_plan_raw(now=None):
         parsed = _parse_claude_quota_record(record)
         return (record, parsed) if parsed else None
 
+    horizon_ns = (now + _CLAUDE_QUOTA_FUTURE_SKEW) * 1_000_000_000
     for record in changed:
+        # 未来时间戳文件跳过内容解析:签名已在 scan_boundary,只读一次。
+        if record["mtime_ns"] > horizon_ns:
+            inspected.add(record["path"])
+            continue
         selected = inspect(record)
         if selected:
             break
@@ -12388,11 +12396,19 @@ def _scan_claude_plan_raw(now=None):
         state.pop("candidate", None)
 
     if records:
-        newest_mtime = records[0]["mtime_ns"]
+        horizon_ns = (now + _CLAUDE_QUOTA_FUTURE_SKEW) * 1_000_000_000
+        past = [record for record in records if record["mtime_ns"] <= horizon_ns]
+        future = [record for record in records if record["mtime_ns"] > horizon_ns]
+        base = past or records
+        newest_mtime = base[0]["mtime_ns"]
         state["scan_mtime_ns"] = newest_mtime
         state["scan_boundary"] = [
             _claude_record_signature(record)
-            for record in records if record["mtime_ns"] == newest_mtime
+            for record in base if record["mtime_ns"] == newest_mtime
+        ] + [
+            # 未来时间戳文件只读一次,不再每轮重复读取,也不参与水位线。
+            _claude_record_signature(record)
+            for record in future if record["path"] not in inspected
         ]
     else:
         state["scan_mtime_ns"] = -1

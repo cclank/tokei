@@ -552,6 +552,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 // 离屏截图模式:Tokei --shot /path/out.png
 enum Shot {
     static func run(path: String) {
+        if let lIdx = CommandLine.arguments.firstIndex(of: "--lang"),
+           CommandLine.arguments.count > lIdx + 1 {
+            let lang = CommandLine.arguments[lIdx + 1]
+            UserDefaults.standard.set(lang, forKey: AppLanguage.defaultsKey)
+        }
         _ = NSApplication.shared
         var usage: Usage?
         let thread = Thread {

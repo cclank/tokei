@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=6
+# TOKEI_COLLECTOR_REVISION=7
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -19,6 +19,8 @@
 #   Pi:          ~/.pi/agent/sessions/**/*.jsonl + ~/.omp/agent/sessions/**/*.jsonl
 #   WorkBuddy:   ~/.workbuddy/projects/**/*.jsonl (逐次模型调用 message.usage)
 #   WorkBuddy AI:~/.workbuddy-ai/projects/**/*.jsonl (国际版,同结构独立统计)
+#   Qoder CLI:   ~/.qoder/projects/**/*.jsonl (Agent transcript,按 request_id 跨文件去重)
+#   Qoder CN:    ~/.qoder-cn/projects/**/*.jsonl (国内版,同结构独立统计 qodercli_cn)
 #   CodeBuddy:   ~/.codebuddy/projects/**/*.jsonl (逐次模型调用 message.usage)
 #   Grok Bot:    ~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob
 #                (本地会话活动；当前快照不含 Token / 模型 / 成本)
@@ -1003,12 +1005,13 @@ def ledger_flush():
     try:
         fresh = _load_ledger_from_disk()
         memo = _LEDGER_CACHE["data"]
-        memo_qodercli_schema = int(memo.get("qodercli_schema", 0) or 0)
-        fresh_qodercli_schema = int(fresh.get("qodercli_schema", 0) or 0)
-        if memo_qodercli_schema > fresh_qodercli_schema:
-            fresh.setdefault("tools", {})["qodercli"] = dict(
-                memo.get("tools", {}).get("qodercli", {}))
-            fresh["qodercli_schema"] = memo_qodercli_schema
+        for qcli_tool in _QODERCLI_DIRS:
+            memo_qodercli_schema = int(memo.get(f"{qcli_tool}_schema", 0) or 0)
+            fresh_qodercli_schema = int(fresh.get(f"{qcli_tool}_schema", 0) or 0)
+            if memo_qodercli_schema > fresh_qodercli_schema:
+                fresh.setdefault("tools", {})[qcli_tool] = dict(
+                    memo.get("tools", {}).get(qcli_tool, {}))
+                fresh[f"{qcli_tool}_schema"] = memo_qodercli_schema
         for tool, days in memo.get("tools", {}).items():
             stored = fresh["tools"].setdefault(tool, {})
             for dk, day in days.items():
@@ -8097,26 +8100,31 @@ def _scan_hermes_db(db_path, _sq):
     return days
 
 
-# ---------- Qoder CLI ----------
+# ---------- Qoder CLI / Qoder CN ----------
 # Qoder CLI 与新版 Qoder App 共用 ~/.qoder/projects Agent transcript。
+# Qoder CN(国内版)transcript 结构相同、目录独立(~/.qoder-cn/projects),单独成键统计。
 # 旧 Qoder Desktop 的 transcript/ 镜像由 local.db 统计，不进入此采集器。
-_QODERCLI_DIR = os.path.join(HOME, ".qoder", "projects")
+_QODERCLI_DIRS = {
+    "qodercli": (os.path.join(HOME, ".qoder", "projects"), "TOKEI_QODERCLI_DIR"),
+    "qodercli_cn": (os.path.join(HOME, ".qoder-cn", "projects"), "TOKEI_QODERCLI_CN_DIR"),
+}
 _QODERCLI_PARSER_VERSION = 2
 _QODERCLI_LEDGER_VERSION = 1
 
 
-def _prepare_qodercli_ledger():
+def _prepare_qodercli_ledger(tool="qodercli"):
     ledger = _load_ledger()
-    if ledger.get("qodercli_schema") == _QODERCLI_LEDGER_VERSION:
+    schema_key = f"{tool}_schema"
+    if ledger.get(schema_key) == _QODERCLI_LEDGER_VERSION:
         return
-    ledger.setdefault("tools", {})["qodercli"] = {}
-    ledger["qodercli_schema"] = _QODERCLI_LEDGER_VERSION
+    ledger.setdefault("tools", {})[tool] = {}
+    ledger[schema_key] = _QODERCLI_LEDGER_VERSION
     _LEDGER_CACHE["dirty"] = True
 
 
-def _qodercli_dir():
-    return os.path.abspath(os.path.expanduser(
-        os.environ.get("TOKEI_QODERCLI_DIR", _QODERCLI_DIR)))
+def _qodercli_dir(tool="qodercli"):
+    default, env_name = _QODERCLI_DIRS[tool]
+    return os.path.abspath(os.path.expanduser(os.environ.get(env_name, default)))
 
 
 def _empty_qodercli():
@@ -8343,17 +8351,17 @@ def _qodercli_usage_days(entries, use_cached=True):
     return days
 
 
-def scan_qodercli(bounds, cache):
-    _prepare_qodercli_ledger()
-    ledger_touch("qodercli")
-    fc = cache.setdefault("qodercli", {})
+def scan_qodercli(bounds, cache, tool="qodercli"):
+    _prepare_qodercli_ledger(tool)
+    ledger_touch(tool)
+    fc = cache.setdefault(tool, {})
     if fc.get("_parser") != _QODERCLI_PARSER_VERSION:
         fc.clear()
         fc["_parser"] = _QODERCLI_PARSER_VERSION
         fc["_requests"] = {}
         cache["_dirty"] = True
     request_index = fc.setdefault("_requests", {})
-    root = _qodercli_dir()
+    root = _qodercli_dir(tool)
     paths = []
     if os.path.isdir(root):
         paths = glob.glob(os.path.join(root, "*", "*.jsonl"))
@@ -8434,7 +8442,7 @@ def scan_qodercli(bounds, cache):
     for key in RANGE_KEYS:
         B[key]["sessions"] = len(range_sessions[key])
         B[key]["sub_agents"] = len(range_subagents[key])
-    for dk, day in ledger_reconcile("qodercli", live_days).items():
+    for dk, day in ledger_reconcile(tool, live_days).items():
         try:
             d = date.fromisoformat(dk)
         except ValueError:
@@ -12419,6 +12427,9 @@ def compute():
     qd = _safe_scan("qoderwork", lambda: scan_qoder(bounds, cache), _empty_qoder, errors)
     qi = _safe_scan("qoder_ide", lambda: scan_qoder_ide(bounds, cache), _empty_qoder_ide, errors)
     qcli = _safe_scan("qodercli", lambda: scan_qodercli(bounds, cache), _empty_qodercli, errors)
+    qcli_cn = _safe_scan("qodercli_cn",
+                         lambda: scan_qodercli(bounds, cache, tool="qodercli_cn"),
+                         _empty_qodercli, errors)
     hm = _safe_scan("hermes", lambda: scan_hermes(bounds, cache), _empty_hermes, errors)
     zc = _safe_scan("zcode", lambda: scan_zcode(bounds, cache), _empty_zcode, errors)
     dv = _safe_scan("devin", lambda: scan_devin(bounds, cache), _empty_devin, errors)
@@ -12554,6 +12565,7 @@ def compute():
         return r
 
     qcliranges = {k: qodercli_range(qcli["ranges"][k]) for k in RANGE_KEYS}
+    qclircnranges = {k: qodercli_range(qcli_cn["ranges"][k]) for k in RANGE_KEYS}
 
     def hermes_range(b):
         denom = b["cr"] + b["cw"] + b["in"]
@@ -12708,6 +12720,10 @@ def compute():
         "qodercli": {
             "ranges": qcliranges,
             "model": qcli.get("model"),
+        },
+        "qodercli_cn": {
+            "ranges": qclircnranges,
+            "model": qcli_cn.get("model"),
         },
         "hermes": {
             "ranges": hranges,
@@ -13871,18 +13887,20 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
             m["out"] += output
             m["cr"] += cached
 
-    for dk, day in _qodercli_usage_days(cache.get("qodercli", {})).items():
-        if cutoff and dk < cutoff:
-            continue
-        d = days.setdefault(dk, _empty())
-        _add_day_tokens(d, dk, "qodercli", token_total(day))
-        for model_name, usage in day.get("models", {}).items():
-            name = f"{nice_model(model_name)} (Qoder CLI)"
-            model = models.setdefault(
-                name, {"cost": 0.0, "in": 0, "out": 0, "cr": 0, "cw": 0,
-                       "reason": 0, "tool": "qodercli"})
-            for field in ("in", "out", "cr", "cw"):
-                model[field] += int(usage.get(field, 0) or 0)
+    for qcli_key, qcli_label in (("qodercli", "Qoder CLI"),
+                                 ("qodercli_cn", "Qoder CN")):
+        for dk, day in _qodercli_usage_days(cache.get(qcli_key, {})).items():
+            if cutoff and dk < cutoff:
+                continue
+            d = days.setdefault(dk, _empty())
+            _add_day_tokens(d, dk, qcli_key, token_total(day))
+            for model_name, usage in day.get("models", {}).items():
+                name = f"{nice_model(model_name)} ({qcli_label})"
+                model = models.setdefault(
+                    name, {"cost": 0.0, "in": 0, "out": 0, "cr": 0, "cw": 0,
+                           "reason": 0, "tool": qcli_key})
+                for field in ("in", "out", "cr", "cw"):
+                    model[field] += int(usage.get(field, 0) or 0)
 
     # --- 持久账本高水位合并:逐工具逐日取 max,被清理的历史天由账本兜底补进序列 ---
     # 同一份数据的存档与实时绝不相加:cost 直接与该工具当日成本列取 max;
@@ -14432,17 +14450,19 @@ def build_wrapped(period="all", refresh=True, _cache=None):
             nm = f"{nice_model(model_name)} (Qoder)"
             model_tok[nm] = model_tok.get(nm, 0) + tok
 
-    # --- Qoder CLI (deduplicated transcript usage, no cost) ---
-    for dk, day in _qodercli_usage_days(cache.get("qodercli", {})).items():
-        if cutoff and dk < cutoff:
-            continue
-        tok = token_total(day)
-        day_tokens[dk] = day_tokens.get(dk, 0) + tok
-        weekday[date.fromisoformat(dk).weekday()] += tok
-        add_hours(dk, day.get("hours"))
-        for model_name, usage in day.get("models", {}).items():
-            name = f"{nice_model(model_name)} (Qoder CLI)"
-            model_tok[name] = model_tok.get(name, 0) + token_total(usage)
+    # --- Qoder CLI / Qoder CN (deduplicated transcript usage, no cost) ---
+    for qcli_key, qcli_label in (("qodercli", "Qoder CLI"),
+                                 ("qodercli_cn", "Qoder CN")):
+        for dk, day in _qodercli_usage_days(cache.get(qcli_key, {})).items():
+            if cutoff and dk < cutoff:
+                continue
+            tok = token_total(day)
+            day_tokens[dk] = day_tokens.get(dk, 0) + tok
+            weekday[date.fromisoformat(dk).weekday()] += tok
+            add_hours(dk, day.get("hours"))
+            for model_name, usage in day.get("models", {}).items():
+                name = f"{nice_model(model_name)} ({qcli_label})"
+                model_tok[name] = model_tok.get(name, 0) + token_total(usage)
 
     # --- 持久账本合并:全部指标统一账本口径 ---
     # 账本是同一份数据的高水位存档:同一天取 max(账本合计, 实时值),绝不相加以免重复计数

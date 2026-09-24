@@ -48,6 +48,13 @@ class QoderUsageTests(unittest.TestCase):
              mock.patch.object(USAGE, "ledger_reconcile", side_effect=lambda _tool, days: days):
             return USAGE.scan_qodercli(USAGE.range_bounds(), cache), cache
 
+    def scan_cli_cn(self, root):
+        cache = {"v": USAGE._SCAN_CACHE_VERSION}
+        with mock.patch.dict(os.environ, {"TOKEI_QODERCLI_CN_DIR": str(root)}), \
+             mock.patch.object(USAGE, "ledger_touch"), \
+             mock.patch.object(USAGE, "ledger_reconcile", side_effect=lambda _tool, days: days):
+            return USAGE.scan_qodercli(USAGE.range_bounds(), cache, tool="qodercli_cn"), cache
+
     def test_qodercli_exact_tokens_are_normalized_and_deduped_across_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "projects"
@@ -94,6 +101,62 @@ class QoderUsageTests(unittest.TestCase):
         for path, entry in _cache["qodercli"].items():
             if not path.startswith("_"):
                 self.assertNotIn("responses", entry)
+
+    def test_qodercli_cn_scans_own_directory_without_cross_counting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            intl = Path(tmp) / "intl" / "projects"
+            cn = Path(tmp) / "cn" / "projects"
+            now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+            self.write_jsonl(
+                intl / "project" / "session.jsonl",
+                [self.assistant(now, "m-intl", "r-intl", input_tokens=100, output_tokens=5)],
+            )
+            self.write_jsonl(
+                cn / "project" / "session.jsonl",
+                [self.assistant(now, "m-cn-1", "r-cn-1", model="qfmodel", credits=2.0),
+                 self.assistant(now, "m-cn-2", "r-cn-2", model="qfmodel",
+                                input_tokens=40, output_tokens=6, cache_read=8)],
+            )
+
+            result, cache = self.scan_cli_cn(cn)
+            intl_result, _ = self.scan_cli(intl)
+
+        usage = result["ranges"]["all"]
+        self.assertEqual(usage["calls"], 2)
+        self.assertEqual(usage["in"], 32)
+        self.assertEqual(usage["cr"], 8)
+        self.assertEqual(usage["out"], 6)
+        self.assertAlmostEqual(usage["credits"], 2.0)
+        self.assertEqual(result["model"], "qfmodel")
+        self.assertIn("qodercli_cn", cache)
+        self.assertNotIn("qodercli", cache)
+        # 国际版与 CN 各读各的目录,互不混入
+        self.assertEqual(intl_result["ranges"]["all"]["in"], 100)
+        self.assertEqual(usage["in"], 32)
+
+    def test_qodercli_cn_ledger_is_reset_under_its_own_schema_key(self):
+        ledger = {
+            "v": USAGE._LEDGER_VERSION,
+            "tools": {"qodercli_cn": {"2026-01-01": {"calls": 5, "est": 999}}},
+        }
+        saved = {}
+        USAGE._LEDGER_CACHE["data"] = ledger
+        USAGE._LEDGER_CACHE["dirty"] = False
+        try:
+            with mock.patch.object(USAGE, "_load_ledger_from_disk", return_value={
+                    "v": USAGE._LEDGER_VERSION,
+                    "tools": {"qodercli_cn": {"2026-01-01": {"calls": 5, "est": 999}}},
+                 }), mock.patch.object(USAGE, "_save_ledger",
+                                       side_effect=lambda value: saved.update(value)):
+                USAGE._prepare_qodercli_ledger("qodercli_cn")
+                USAGE.ledger_flush()
+        finally:
+            USAGE._LEDGER_CACHE["data"] = None
+            USAGE._LEDGER_CACHE["dirty"] = False
+
+        self.assertEqual(saved["tools"]["qodercli_cn"], {})
+        self.assertEqual(saved["qodercli_cn_schema"], USAGE._QODERCLI_LEDGER_VERSION)
+        self.assertNotIn("qodercli_schema", saved)
 
     def test_legacy_qodercli_ledger_is_cleared_before_exact_usage(self):
         ledger = {

@@ -405,6 +405,7 @@ struct DashboardView: View {
         case "qoder": return Theme.qoder
         case "qoderwork": return Theme.qoderwork
         case "qodercli": return Theme.qodercli
+        case "qodercli_cn": return Theme.qodercliCn
         case "hermes": return Theme.hermes
         case "zcode": return Theme.zcode
         case "mimocode": return Theme.mimocode
@@ -1118,6 +1119,16 @@ struct DashboardView: View {
                                  tokens: qodercli.totalTokens))
         }
 
+        let qodercliCN = usage.qodercliCN.ranges.get(key)
+        if !qodercliCN.models.isEmpty {
+            appendTokenModels(qodercliCN.models, tool: "qodercli_cn", suffix: "Qoder CN", to: &out)
+        } else if qodercliCN.totalTokens > 0 {
+            out.append(modelCost(name: usage.qodercliCN.model ?? "Qoder CN", cost: 0,
+                                 tool: "qodercli_cn", input: qodercliCN.in, out: qodercliCN.out,
+                                 cr: qodercliCN.cr, cw: qodercliCN.cw,
+                                 tokens: qodercliCN.totalTokens))
+        }
+
         appendTokenModels(usage.hermes.ranges.get(key).models, tool: "hermes", suffix: "Hermes", to: &out)
         appendTokenModels(usage.zcode.ranges.get(key).models, tool: "zcode", suffix: "ZCode", to: &out)
         appendTokenModels(usage.mimocode.ranges.get(key).models, tool: "mimocode", suffix: "MiMoCode", to: &out)
@@ -1183,6 +1194,7 @@ struct DashboardView: View {
         let qoderwork = usage.qoderwork.ranges.get(key)
         let qoder = usage.qoder.ranges.get(key)
         let qodercli = usage.qodercli.ranges.get(key)
+        let qodercliCN = usage.qodercliCN.ranges.get(key)
         return claude.in + claude.out + claude.cr + claude.cw
             + codex.tokens
             + reserve.tokens
@@ -1191,6 +1203,7 @@ struct DashboardView: View {
             + qoderwork.in + qoderwork.out
             + qoder.in + qoder.cached + qoder.out
             + qodercli.totalTokens
+            + qodercliCN.totalTokens
             + hermesTotal(usage.hermes.ranges.get(key))
             + tokenUsageTotal(usage.zcode.ranges.get(key))
             + tokenUsageTotal(usage.mimocode.ranges.get(key))

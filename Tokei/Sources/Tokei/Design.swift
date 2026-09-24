@@ -45,6 +45,7 @@ enum Theme {
     static let qoder  = Color(red: 0.90, green: 0.75, blue: 0.35)   // 琥珀金
     static let qoderwork = Color(red: 0.75, green: 0.65, blue: 0.30)  // 暗琥珀
     static let qodercli = Color(red: 0.96, green: 0.84, blue: 0.45)  // 亮琥珀
+    static let qodercliCn = Color(red: 0.98, green: 0.62, blue: 0.35)  // 橙珊瑚
     static let hermes = Color(red: 0.40, green: 0.82, blue: 0.60)   // 翠绿
     static let zcode = Color(red: 0.52, green: 0.80, blue: 0.34)    // 青柠绿
     static let mimocode = Color(red: 0.95, green: 0.50, blue: 0.26) // 暖橙

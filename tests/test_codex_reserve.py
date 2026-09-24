@@ -432,7 +432,7 @@ class CodexLunaReserveTests(unittest.TestCase):
 
         self.assertIn("var stale: Bool?", model)
         self.assertIn("let pct = q.usedPercent, q.stale != true", panel)
-        self.assertIn("Reserve 额度读数已过期", panel)
+        self.assertIn('L10n.t("s035")', panel)
         self.assertIn("+ reserve.tokens", dashboard)
         self.assertIn("+ (usage.codex.reserveRanges?.get(key).cost ?? 0)", dashboard)
         self.assertIn("total += r.tokens + reserve.tokens", main)

@@ -16,6 +16,7 @@ class GrokBotHelperManagerTests(unittest.TestCase):
                     "swiftc",
                     "-parse-as-library",
                     str(ROOT / "Tokei/Sources/Tokei/GrokBotHelperManager.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/GrokBotHelperManagerCheck.swift"),
                     "-o",
                     str(binary),

@@ -159,10 +159,10 @@ struct UsageShareOverviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            shareHeader(title: "Tokei 用量", subtitle: range.label, tint: Theme.claude)
+            shareHeader(title: L10n.shareTitle, subtitle: range.label, tint: Theme.claude)
 
             if lines.isEmpty {
-                Text("当前范围无可分享的用量")
+                Text(L10n.t("s257"))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tTertiary)
                     .padding(.vertical, 18)
@@ -185,14 +185,14 @@ struct UsageShareOverviewView: View {
 
     private var detailedTotals: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("合计明细")
+            Text(L10n.t("s164"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.tSecondary)
 
             if totals.tokens > 0 {
                 CostHeadline(
                     value: Fmt.human(totals.tokens),
-                    caption: "\(range.label) 总量",
+                    caption: L10n.f("s063", range.label),
                     tint: Theme.claude
                 )
             }
@@ -203,37 +203,37 @@ struct UsageShareOverviewView: View {
                 spacing: 9
             ) {
                 if totals.cost > 0 || totals.cost_cny > 0 {
-                    MetricCell(icon: "dollarsign.circle", label: "≈成本",
+                    MetricCell(icon: "dollarsign.circle", label: L10n.metricCost,
                                value: nativeMoney(totals.cost, totals.cost_cny), tint: Theme.claude)
                 }
-                MetricCell(icon: "square.grid.2x2", label: "工具",
+                MetricCell(icon: "square.grid.2x2", label: L10n.metricTools,
                            value: "\(totals.tools)", tint: Theme.codex)
                 if totals.sessions > 0 {
-                    MetricCell(icon: "bubble.left.and.bubble.right", label: "会话",
+                    MetricCell(icon: "bubble.left.and.bubble.right", label: L10n.metricSessions,
                                value: "\(totals.sessions)", tint: Theme.gemini)
                 }
                 if totals.calls > 0 {
-                    MetricCell(icon: "waveform", label: "调用",
+                    MetricCell(icon: "waveform", label: L10n.metricCalls,
                                value: "\(totals.calls)", tint: Theme.grok)
                 }
                 if totals.input > 0 {
-                    MetricCell(icon: "arrow.down", label: "输入",
+                    MetricCell(icon: "arrow.down", label: L10n.metricIn,
                                value: Fmt.human(totals.input), tint: Theme.claude)
                 }
                 if totals.output > 0 {
-                    MetricCell(icon: "arrow.up", label: "输出",
+                    MetricCell(icon: "arrow.up", label: L10n.metricOut,
                                value: Fmt.human(totals.output), tint: Theme.codex)
                 }
                 if totals.cacheRead > 0 {
-                    MetricCell(icon: "bolt.fill", label: "缓存读",
+                    MetricCell(icon: "bolt.fill", label: L10n.metricCacheRead,
                                value: Fmt.human(totals.cacheRead), tint: Theme.hermes)
                 }
                 if totals.cacheWrite > 0 {
-                    MetricCell(icon: "square.stack.3d.up.fill", label: "缓存写",
+                    MetricCell(icon: "square.stack.3d.up.fill", label: L10n.metricCacheWrite,
                                value: Fmt.human(totals.cacheWrite), tint: Theme.pi)
                 }
                 if totals.reason > 0 {
-                    MetricCell(icon: "brain", label: "推理",
+                    MetricCell(icon: "brain", label: L10n.metricReason,
                                value: Fmt.human(totals.reason), tint: Theme.gemini)
                 }
             }
@@ -342,7 +342,7 @@ private func nativeToolCard(
         }
 
         if let tokens = line.tokens, tokens > 0 {
-            CostHeadline(value: Fmt.human(tokens), caption: "\(rangeLabel) 总量", tint: tint)
+            CostHeadline(value: Fmt.human(tokens), caption: L10n.f("s064", rangeLabel), tint: tint)
         }
 
         LazyVGrid(
@@ -351,30 +351,30 @@ private func nativeToolCard(
             spacing: 8
         ) {
             if let cost = line.cost, cost > 0 || (line.cost_cny ?? 0) > 0 {
-                MetricCell(icon: "dollarsign.circle", label: "≈成本",
+                MetricCell(icon: "dollarsign.circle", label: L10n.metricCost,
                            value: nativeMoney(cost, line.cost_cny), tint: tint)
             }
             if let hit = line.hit, hit > 0 {
                 RingMetricCell(value: hit, label: "Cache Hit", tint: tint)
             }
             if let input = line.input, input > 0 {
-                MetricCell(icon: "arrow.down", label: "输入", value: Fmt.human(input), tint: tint)
+                MetricCell(icon: "arrow.down", label: L10n.metricIn, value: Fmt.human(input), tint: tint)
             }
             if let output = line.output, output > 0 {
-                MetricCell(icon: "arrow.up", label: "输出", value: Fmt.human(output), tint: tint)
+                MetricCell(icon: "arrow.up", label: L10n.metricOut, value: Fmt.human(output), tint: tint)
             }
             if let cr = line.cacheRead, cr > 0 {
-                MetricCell(icon: "bolt.fill", label: "缓存读", value: Fmt.human(cr), tint: tint)
+                MetricCell(icon: "bolt.fill", label: L10n.metricCacheRead, value: Fmt.human(cr), tint: tint)
             }
             if let cw = line.cacheWrite, cw > 0 {
-                MetricCell(icon: "square.stack.3d.up.fill", label: "缓存写",
+                MetricCell(icon: "square.stack.3d.up.fill", label: L10n.metricCacheWrite,
                            value: Fmt.human(cw), tint: tint)
             }
             if let reason = line.reason, reason > 0 {
-                MetricCell(icon: "brain", label: "推理", value: Fmt.human(reason), tint: tint)
+                MetricCell(icon: "brain", label: L10n.metricReason, value: Fmt.human(reason), tint: tint)
             }
             if let calls = line.calls, calls > 0 {
-                MetricCell(icon: "waveform", label: "调用", value: "\(calls)", tint: tint)
+                MetricCell(icon: "waveform", label: L10n.metricCalls, value: "\(calls)", tint: tint)
             }
         }
     }
@@ -403,7 +403,7 @@ private func footerBrand(_ updatedLine: String?) -> some View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(Theme.tTertiary)
         }
-        Text("Tokei · 知度")
+        Text(L10n.t("s040"))
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(Theme.tTertiary.opacity(0.85))
     }

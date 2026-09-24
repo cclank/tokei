@@ -8,7 +8,7 @@ enum PanelFontSize: String, CaseIterable, Identifiable {
     static let defaultsKey = "panelFontSize"
 
     var id: String { rawValue }
-    var label: String { self == .small ? "小" : "大" }
+    var label: String { self == .small ? L10n.sizeSmall : L10n.sizeLarge }
     var scale: CGFloat { self == .small ? 1 : 1.12 }
 
     static var current: PanelFontSize {

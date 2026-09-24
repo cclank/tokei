@@ -23,8 +23,19 @@ struct Tip: NSViewRepresentable {
     func updateNSView(_ v: NSView, context: Context) { v.toolTip = text }
 }
 
+/// --shot 离屏渲染（ImageRenderer）画不出 NSViewRepresentable，
+/// 会留下黄底红⛔缺失占位。tooltip 在静态图里无意义，直接跳过。
+enum ShotMode {
+    static var isActive: Bool {
+        CommandLine.arguments.contains("--shot")
+    }
+}
+
 extension View {
-    func tip(_ text: String) -> some View { overlay(Tip(text: text)) }
+    func tip(_ text: String) -> some View {
+        if ShotMode.isActive { return AnyView(self) }
+        return AnyView(overlay(Tip(text: text)))
+    }
 }
 
 // 设计系统:颜色 / 间距 / 圆角集中定义,组件语义化复用。

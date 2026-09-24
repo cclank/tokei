@@ -62,11 +62,11 @@ struct ProjectTrailView: View {
 
     private func groupLabel(_ g: Group) -> String {
         switch g {
-        case .pinned: return "置顶"
-        case .today: return "今天"
-        case .week: return "本周"
-        case .earlier: return "更早"
-        case .dormant: return "沉睡"
+        case .pinned: return L10n.t("s471")
+        case .today: return L10n.t("day_today")
+        case .week: return L10n.t("week_this")
+        case .earlier: return L10n.t("s365")
+        case .dormant: return L10n.t("s422")
         }
     }
 
@@ -83,13 +83,13 @@ struct ProjectTrailView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .tip("刷新")
+                .tip(L10n.t("s131"))
             }
             if loading || cached == nil {
                 HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
                     .frame(height: 120)
             } else if filtered.isEmpty {
-                HStack { Spacer(); Text("无匹配项目").font(.system(size: Theme.fontSize(11))).foregroundStyle(Theme.tTertiary); Spacer() }
+                HStack { Spacer(); Text(L10n.t("s292")).font(.system(size: Theme.fontSize(11))).foregroundStyle(Theme.tTertiary); Spacer() }
                     .frame(height: 80)
             } else {
                 let grouped = Dictionary(grouping: filtered, by: { group(for: $0) })
@@ -112,7 +112,7 @@ struct ProjectTrailView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: Theme.fontSize(10), weight: .medium))
                 .foregroundStyle(Theme.tTertiary)
-            TextField("搜索项目…", text: $query)
+            TextField(L10n.t("s285"), text: $query)
                 .font(.system(size: Theme.fontSize(11)))
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.tPrimary)
@@ -211,7 +211,7 @@ struct ProjectTrailView: View {
                     .foregroundStyle(pinned.contains(p.path) ? Theme.qoder : Theme.tTertiary)
             }
             .buttonStyle(.plain)
-            .tip(pinned.contains(p.path) ? "取消置顶" : "置顶")
+            .tip(pinned.contains(p.path) ? L10n.t("s157") : L10n.t("s471"))
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -219,14 +219,14 @@ struct ProjectTrailView: View {
         .contentShape(Rectangle())
         .onTapGesture { openInTerminal(p.path) }
         .contextMenu {
-            Button("在终端打开") { openInTerminal(p.path) }
-            Button("在 Ghostty 打开") { openInGhostty(p.path) }
-            Button("在 iTerm 打开") { openInITerm(p.path) }
+            Button(L10n.t("s201")) { openInTerminal(p.path) }
+            Button(L10n.t("s199")) { openInGhostty(p.path) }
+            Button(L10n.t("s200")) { openInITerm(p.path) }
             Divider()
-            Button("在 Finder 中显示") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
-            Button("用 VS Code 打开") { openInVSCode(p.path) }
+            Button(L10n.t("s198")) { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
+            Button(L10n.t("s439")) { openInVSCode(p.path) }
             Divider()
-            Button("复制路径") {
+            Button(L10n.t("s207")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(p.path, forType: .string)
             }
@@ -238,7 +238,7 @@ struct ProjectTrailView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         let earliestStr = earliest.map { fmt.string(from: $0) } ?? "?"
-        return Text("共 \(projects.count) 个项目 · 最远 \(earliestStr)")
+        return Text(L10n.f("s117", projects.count, earliestStr))
             .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
             .frame(maxWidth: .infinity)
             .padding(.top, 4)

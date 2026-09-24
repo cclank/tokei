@@ -16,6 +16,7 @@ class QoderUsageModelTests(unittest.TestCase):
                     "swiftc",
                     "-parse-as-library",
                     str(ROOT / "Tokei/Sources/Tokei/Model.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/QoderUsageModelCheck.swift"),
                     "-o",
                     str(binary),
@@ -56,8 +57,8 @@ class QoderUsageModelTests(unittest.TestCase):
 
         self.assertIn("Fmt.human(r.totalTokens)", work_block)
         self.assertIn("Fmt.human(r.totalTokens)", cli_block)
-        self.assertIn('"缓存读"', cli_block)
-        self.assertIn('"缓存写"', cli_block)
+        self.assertIn("L10n.metricCacheRead", cli_block)
+        self.assertIn("L10n.metricCacheWrite", cli_block)
         self.assertIn('"Credits"', cli_block)
 
     def test_qoder_cli_summary_and_sync_use_cli_exact_tokens(self):

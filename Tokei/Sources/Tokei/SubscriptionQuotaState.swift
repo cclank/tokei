@@ -24,6 +24,6 @@ enum SubscriptionQuotaState: Equatable {
 enum SubscriptionQuotaPresentation {
     static func remainingLabel(_ remaining: Double) -> String {
         let clamped = min(100, max(0, remaining))
-        return clamped < 0.5 ? "已用尽" : String(format: "%.0f%%", clamped)
+        return clamped < 0.5 ? L10n.exhausted : String(format: "%.0f%%", clamped)
     }
 }

@@ -38,13 +38,13 @@ final class SitReminder: ObservableObject {
             if workStart == nil {
                 workStart = Date()
             } else if let ws = workStart, Date().timeIntervalSince(ws) >= Double(intervalMin) * 60 {
-                ping("已连续用机 \(intervalMin) 分钟,起来活动一下 🧍")
+                ping(L10n.f("s244", intervalMin))
                 workStart = Date()
             }
         }
     }
 
-    func testPing() { ping("测试提醒:久坐提醒已就绪 ✅") }
+    func testPing() { ping(L10n.t("s429")) }
 
     private static let tipCount = 6
 
@@ -55,7 +55,7 @@ final class SitReminder: ObservableObject {
             if let url = Bundle.main.url(forResource: "tip_\(i)", withExtension: "mp3", subdirectory: "sit") {
                 NSSound(contentsOf: url, byReference: true)?.play()
             }
-            ReminderHUD.show(title: "久坐提醒", body: body)
+            ReminderHUD.show(title: L10n.t("s099"), body: body)
         }
     }
 

@@ -35,9 +35,9 @@ struct SubscriptionQuotaStateCheck {
         try expect(!expired.shouldUseCompactCard(hasUsage: true),
                    "cards with usage should keep their full presentation")
 
-        try expect(SubscriptionQuotaPresentation.remainingLabel(0) == "已用尽",
+        try expect(SubscriptionQuotaPresentation.remainingLabel(0) == L10n.exhausted,
                    "zero remaining should use an explicit exhausted label")
-        try expect(SubscriptionQuotaPresentation.remainingLabel(-4) == "已用尽",
+        try expect(SubscriptionQuotaPresentation.remainingLabel(-4) == L10n.exhausted,
                    "negative remaining should be clamped")
         try expect(SubscriptionQuotaPresentation.remainingLabel(42.4) == "42%",
                    "positive remaining should stay numeric")

@@ -6,13 +6,13 @@ enum RangeKey: String, CaseIterable, Identifiable {
     static let displayCases: [RangeKey] = [.today, .yesterday, .week, .lastWeek, .month, .year]
     var label: String {
         switch self {
-        case .today: return "今日"
-        case .yesterday: return "昨日"
-        case .week: return "本周"
-        case .lastWeek: return "上周"
-        case .month: return "本月"
-        case .year: return "本年"
-        case .all: return "全部"
+        case .today: return L10n.rangeToday
+        case .yesterday: return L10n.rangeYesterday
+        case .week: return L10n.t("week_this")
+        case .lastWeek: return L10n.rangeLastWeek
+        case .month: return L10n.rangeMonth
+        case .year: return L10n.t("s391")
+        case .all: return L10n.scopeAll
         }
     }
 }
@@ -1057,10 +1057,23 @@ enum Fmt {
 
     static func human(_ n: Int) -> String {
         let v = Double(n)
-        if v >= 100_000_000 { return String(format: "%.1f亿", v / 100_000_000) }
-        if v >= 1_000_000 { return String(format: "%.1fM", v / 1_000_000) }
-        if v >= 1_000 { return String(format: "%.0fK", v / 1_000) }
-        return String(format: "%.0f", v)
+        if L10n.isChinese {
+            if v >= 100_000_000 { return String(format: L10n.t("s003"), v / 100_000_000) }
+            if v >= 1_000_000 { return String(format: "%.1fM", v / 1_000_000) }
+            if v >= 1_000 { return String(format: "%.0fK", v / 1_000) }
+            return String(format: "%.0f", v)
+        } else {
+            if v >= 1_000_000_000 { return String(format: "%.1fB", v / 1_000_000_000) }
+            if v >= 1_000_000 {
+                let m = v / 1_000_000
+                if m >= 100 && abs(m.rounded() - m) < 0.05 {
+                    return String(format: "%.0fM", m)
+                }
+                return String(format: "%.1fM", m)
+            }
+            if v >= 1_000 { return String(format: "%.0fK", v / 1_000) }
+            return String(format: "%.0f", v)
+        }
     }
 
     /// 千分位精确写法，如 234,567,890。分隔符固定为逗号，不随语言环境变化。
@@ -1091,7 +1104,7 @@ enum Fmt {
         let d = Date(timeIntervalSince1970: TimeInterval(epoch))
         let f = DateFormatter()
         f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        f.locale = Locale(identifier: "zh_CN")
+        f.locale = Locale.autoupdatingCurrent
         f.dateFormat = full ? "yyyy-MM-dd HH:mm:ss" : "MM-dd HH:mm"
         return f.string(from: d)
     }
@@ -1099,7 +1112,7 @@ enum Fmt {
     static func countdown(_ epoch: Int?) -> String {
         guard let e = epoch else { return "?" }
         let s = TimeInterval(e) - Date().timeIntervalSince1970
-        if s <= 0 { return "即将重置" }
+        if s <= 0 { return L10n.resetSoon }
         let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
         return h > 0 ? "\(h)h\(m)m" : "\(m)m"
     }
@@ -1118,11 +1131,11 @@ enum Fmt {
         guard let d = f.date(from: iso) else { return iso }
         let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: d),
                                                     to: Calendar.current.startOfDay(for: Date())).day ?? 0
-        if days == 0 { return "今天" }
-        if days == 1 { return "昨天" }
-        if days <= 7 { return "\(days)天前" }
-        if days <= 30 { return "\(days / 7)周前" }
-        return "\(days / 30)月前"
+        if days == 0 { return L10n.t("day_today") }
+        if days == 1 { return L10n.t("s346") }
+        if days <= 7 { return L10n.f("s055", days) }
+        if days <= 30 { return L10n.f("s054", days / 7) }
+        return L10n.f("s053", days / 30)
     }
 }
 

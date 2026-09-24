@@ -16,13 +16,13 @@ enum MenuBarStyle: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .system: return "经典白"
-        case .color: return "彩色"
-        case .symbols: return "刻度"
-        case .dots: return "圆点"
-        case .compact: return "数字"
-        case .artistic: return "星轨"
-        case .palm: return "椰影"
+        case .system: return L10n.t("menubar_classic")
+        case .color: return L10n.t("menubar_colorful")
+        case .symbols: return L10n.t("s132")
+        case .dots: return L10n.t("s197")
+        case .compact: return L10n.t("s289")
+        case .artistic: return L10n.t("s345")
+        case .palm: return L10n.t("s411")
         }
     }
 
@@ -43,9 +43,9 @@ enum MenuBarDensity: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .full: return "双额度"
-        case .lowest: return "单额度"
-        case .icon: return "仅图标"
+        case .full: return L10n.t("s149")
+        case .lowest: return L10n.t("s146")
+        case .icon: return L10n.t("menubar_icon_only")
         }
     }
 
@@ -78,12 +78,12 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .claude5h: return "Claude 5h"
-        case .claudeWeek: return "Claude 周"
+        case .claudeWeek: return L10n.t("s016")
         case .claudeFable: return "Claude Fable"
         case .codex5h: return "Codex 5h"
-        case .codexWeek: return "Codex 周"
+        case .codexWeek: return L10n.t("s017")
         case .kimi5h: return "Kimi 5h"
-        case .kimiSubscription: return "Kimi 订阅"
+        case .kimiSubscription: return L10n.t("s031")
         case .grok: return "Grok"
         }
     }
@@ -187,7 +187,7 @@ enum MenuBarMetricKind: Equatable {
     var displayName: String {
         switch self {
         case .quota(let source): return source.label
-        case .total: return "今日"
+        case .total: return L10n.rangeToday
         }
     }
 
@@ -839,7 +839,7 @@ struct MenuBarStylePreview: View {
         HStack(spacing: style == .compact ? 5 : 6) { previewContent }
         .font(.system(size: 10, weight: .semibold, design: .monospaced))
         .frame(height: 20)
-        .accessibilityLabel("\(style.label)菜单栏预览")
+        .accessibilityLabel(L10n.f("s071", style.label))
     }
 
     @ViewBuilder

@@ -12,6 +12,7 @@ class ActivityReporterTests(unittest.TestCase):
             binary = str(Path(tmp) / "activity-reporter-check")
             result = subprocess.run([
                 "swiftc", str(ROOT / "Tokei/Sources/Tokei/ActivityReporter.swift"),
+                str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                 str(ROOT / "tests/swift/ActivityReporterCheck.swift"), "-o", binary,
             ], capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)

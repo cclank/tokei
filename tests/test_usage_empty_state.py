@@ -17,6 +17,7 @@ class UsageEmptyStateTests(unittest.TestCase):
                 [
                     "swiftc",
                     "-parse-as-library",
+                    str(SRC / "L10n.swift"),
                     str(SRC / "Model.swift"),
                     str(SRC / "UsageEmptyState.swift"),
                     str(ROOT / "tests/swift/UsageEmptyStateCheck.swift"),

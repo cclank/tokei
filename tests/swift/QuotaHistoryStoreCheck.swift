@@ -136,7 +136,7 @@ struct QuotaHistoryStoreCheck {
         ]
         let projection = QuotaHistoryProjection(points: points, tool: .claude)
 
-        try expect(projection.latestValues["5 小时"] == 79, "projection should keep the latest value")
+        try expect(projection.latestValues[L10n.quota5h] == 79, "projection should keep the latest value")
         try expect(projection.latestDatumIDs.count == 3, "each series should have one latest marker")
         try expect(projection.lineData.count == 12, "flat plateaus should compact to transition edges")
         try expect(projection.markerData.count == 6, "activity and latest markers should be preserved")
@@ -148,13 +148,13 @@ struct QuotaHistoryStoreCheck {
         )
         try expect(nearest?.timestamp.timeIntervalSince1970 == TimeInterval(base + 240),
                    "hover should find the nearest sampled minute")
-        try expect(nearest?.rows.map(\.window) == ["5 小时", "周 · 全部", "周 · Fable"],
+        try expect(nearest?.rows.map(\.window) == [L10n.quota5h, L10n.quotaWeekAll, L10n.quotaWeekFable],
                    "hover should include every available quota window")
         try expect(nearest?.activity.map(\.model) == ["Claude Fable", "Claude Opus"],
                    "hover should retain activity for the selected minute")
 
         let fableMarker = projection.markerData.first {
-            $0.window == "周 · Fable" && !$0.activity.isEmpty
+            $0.window == L10n.quotaWeekFable && !$0.activity.isEmpty
         }
         try expect(
             fableMarker?.activity.map(\.model) == ["Claude Fable"],

@@ -16,6 +16,7 @@ class ClaudeCLIQuotaBridgeTests(unittest.TestCase):
                     "swiftc",
                     "-parse-as-library",
                     str(ROOT / "Tokei/Sources/Tokei/ClaudeCLIQuotaBridge.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/ClaudeCLIQuotaBridgeCheck.swift"),
                     "-o",
                     str(binary),

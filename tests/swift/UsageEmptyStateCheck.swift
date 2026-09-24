@@ -32,7 +32,7 @@ struct UsageEmptyStateCheck {
             UsageEmptyState.resolve(
                 selected: .today, refreshing: false,
                 tokens: { $0 == .yesterday ? 12_300_000 : 0 }
-            ) == .empty(recent: "昨日 12.3M"),
+            ) == .empty(recent: L10n.rangeYesterday + " 12.3M"),
             "yesterday is the first witness"
         )
         // 数量级跟着 Fmt.human 走，不自己另造一套写法。
@@ -40,7 +40,7 @@ struct UsageEmptyStateCheck {
             UsageEmptyState.resolve(
                 selected: .today, refreshing: false,
                 tokens: { $0 == .yesterday ? 104_000_000 : 0 }
-            ) == .empty(recent: "昨日 1.0亿"),
+            ) == .empty(recent: L10n.rangeYesterday + " " + Fmt.human(104_000_000)),
             "hundred-million scale follows Fmt.human"
         )
         // 昨日也没有就往外找，本周优先于本月。
@@ -48,7 +48,7 @@ struct UsageEmptyStateCheck {
             UsageEmptyState.resolve(
                 selected: .today, refreshing: false,
                 tokens: { key in key == .week ? 2_000 : (key == .month ? 9_000 : 0) }
-            ) == .empty(recent: "本周 2K"),
+            ) == .empty(recent: L10n.weekThis + " " + Fmt.human(2_000)),
             "week outranks month"
         )
         // 谁都没有就不给旁证，而不是编一个。

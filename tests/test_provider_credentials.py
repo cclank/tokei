@@ -23,6 +23,7 @@ class ProviderCredentialStoreTests(unittest.TestCase):
                     "-D",
                     "TOKEI_PROVIDER_CREDENTIAL_STORE_TEST",
                     str(ROOT / "Tokei/Sources/Tokei/ProviderCredentialStore.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/ProviderCredentialStoreCheck.swift"),
                     "-o",
                     str(binary),

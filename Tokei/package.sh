@@ -71,7 +71,7 @@ cp "$PROJ_DIR/usage.30s.py" "$APP/Contents/Resources/"
 # 本地化资源：SwiftPM 把 *.lproj 打进 Tokei_Tokei.bundle，拷到 App 包内供 NSLocalizedString 读取。
 BUNDLE_DIR="$(swift build -c release --show-bin-path)/Tokei_Tokei.bundle"
 if [ -d "$BUNDLE_DIR/Contents/Resources" ]; then
-    for lang in en zh fr; do
+    for lang in en zh fr ja ko; do
         [ -d "$BUNDLE_DIR/Contents/Resources/$lang.lproj" ] \
             && cp -R "$BUNDLE_DIR/Contents/Resources/$lang.lproj" "$APP/Contents/Resources/"
     done
@@ -94,7 +94,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>Tokei</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleLocalizations</key><array><string>en</string><string>zh</string><string>fr</string></array>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>zh</string><string>fr</string><string>ja</string><string>ko</string></array>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

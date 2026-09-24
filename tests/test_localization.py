@@ -39,7 +39,7 @@ class LocalizationTests(unittest.TestCase):
         for match in re.finditer(r's\("([^"]+)"\)', l10n_src):
             keys.add(match.group(1))
         self.assertGreater(len(keys), 600, "should track 600+ keys")
-        for lang in ("en", "zh", "fr"):
+        for lang in ("en", "zh", "fr", "ja", "ko"):
             strings = (ROOT / f"Tokei/Sources/Tokei/Resources/{lang}.lproj/Localizable.strings").read_text(
                 encoding="utf-8")
             missing = [key for key in keys if f'"{key}"' not in strings]
@@ -65,7 +65,7 @@ class LocalizationTests(unittest.TestCase):
             "spec = importlib.util.spec_from_file_location('tokei_usage', Path('usage.30s.py'))\n"
             "u = importlib.util.module_from_spec(spec); spec.loader.exec_module(u)\n"
             "import json, os\n"
-            "for lang in ('zh', 'en', 'fr'):\n"
+            "for lang in ('zh', 'en', 'fr', 'ja', 'ko'):\n"
             "    os.environ['TOKEI_LANG'] = lang\n"
             "    print(lang, u._T('plan_usage'), u.nice_model('<synthetic>'))\n"
         )
@@ -74,6 +74,8 @@ class LocalizationTests(unittest.TestCase):
         self.assertIn("zh 套餐用量 合成", result.stdout)
         self.assertIn("en Plan Usage Synthetic", result.stdout)
         self.assertIn("fr Utilisation du forfait", result.stdout)
+        self.assertIn("ja プラン使用量 合成", result.stdout)
+        self.assertIn("ko 요금제 사용량 합성", result.stdout)
 
 
 if __name__ == "__main__":

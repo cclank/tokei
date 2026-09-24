@@ -11,6 +11,8 @@
 "lang_fr" = "French";
 "lang_system" = "System";
 "lang_zh" = "Chinese";
+"lang_ko" = "Korean";
+"lang_ja" = "Japanese";
 "language" = "Language";
 "loading" = "Loading…";
 "menubar_classic" = "Classic White";

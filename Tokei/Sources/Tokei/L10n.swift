@@ -1,13 +1,15 @@
 import Foundation
 import SwiftUI
 
-/// 应用语言：跟随系统 / English / 中文 / Français。
+/// 应用语言：跟随系统 / English / 中文 / Français / 日本語 / 한국어。
 /// 新增语言 = 新建 `<lang>.lproj/Localizable.strings` + RawValue + 显示名，零其他改动。
 enum AppLanguage: String, CaseIterable, Identifiable {
     case system
     case en
     case zh
     case fr
+    case ja
+    case ko
 
     var id: String { rawValue }
 
@@ -16,23 +18,29 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     /// 设置页显示名（不本地化，保证各语言下都能认出选项）。
     var label: String {
         switch self {
-        case .system: return "System / 跟随系统 / Système"
+        case .system: return "System / 跟随系统 / Système / システム / 시스템"
         case .en: return "English"
         case .zh: return "中文"
         case .fr: return "Français"
+        case .ja: return "日本語"
+        case .ko: return "한국어"
         }
     }
 
-    /// 解析为实际 locale；system 跟随 macOS 首选语言（非 en/zh/fr 时回退英文）。
+    /// 解析为实际 locale；system 跟随 macOS 首选语言（非支持语言时回退英文）。
     var resolvedLocale: Locale {
         switch self {
         case .en: return Locale(identifier: "en")
         case .zh: return Locale(identifier: "zh-Hans")
         case .fr: return Locale(identifier: "fr")
+        case .ja: return Locale(identifier: "ja")
+        case .ko: return Locale(identifier: "ko")
         case .system:
             let first = Locale.preferredLanguages.first ?? "en"
             if first.hasPrefix("zh") { return Locale(identifier: "zh-Hans") }
             if first.hasPrefix("fr") { return Locale(identifier: "fr") }
+            if first.hasPrefix("ja") { return Locale(identifier: "ja") }
+            if first.hasPrefix("ko") { return Locale(identifier: "ko") }
             return Locale(identifier: "en")
         }
     }
@@ -43,10 +51,14 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .en: return "en"
         case .zh: return "zh"
         case .fr: return "fr"
+        case .ja: return "ja"
+        case .ko: return "ko"
         case .system:
             let first = Locale.preferredLanguages.first ?? "en"
             if first.hasPrefix("zh") { return "zh" }
             if first.hasPrefix("fr") { return "fr" }
+            if first.hasPrefix("ja") { return "ja" }
+            if first.hasPrefix("ko") { return "ko" }
             return "en"
         }
     }
@@ -60,12 +72,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
 /// 强类型本地化 key：杜绝散落字面量。
 /// 用法：`Text(L10n.tabHome)` 或 `String(format: L10n.daysAgo, days)`。
-/// 新增 UI 文案必须先加 en+zh 的 key（test_localization 卡住），fr 允许后补。
+/// 新增 UI 文案必须先加 en+zh 的 key（test_localization 卡住），fr/ja/ko 允许后补。
 enum L10n {
     /// 测试/裸 swiftc 场景下 Bundle.main 没有 .lproj 时，按当前语言直读 strings 文件。
     private static let table: [String: [String: String]] = {
         let fm = FileManager.default
-        let langs = ["en", "zh", "fr"]
+        let langs = ["en", "zh", "fr", "ja", "ko"]
         // 1. SwiftPM 资源 bundle（Tokei.app / swift build）。
         let candidates: [URL] = [
             Bundle.main.bundleURL.appendingPathComponent("Tokei_Tokei.bundle"),
@@ -130,6 +142,8 @@ enum L10n {
             let first = Locale.preferredLanguages.first ?? "en"
             if first.hasPrefix("zh") { return "zh" }
             if first.hasPrefix("fr") { return "fr" }
+            if first.hasPrefix("ja") { return "ja" }
+            if first.hasPrefix("ko") { return "ko" }
             return "en"
         }
         return lang

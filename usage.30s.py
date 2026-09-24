@@ -219,29 +219,29 @@ _USER_DIR = os.path.join(HOME, ".tokei")
 # 再无则 zh(保持现状)。只影响进 JSON 的展示字段(token/成本等数据字段不动)。
 # 新增语言 = 下表加一列,零其他改动。
 _LANG_TABLE = {
-    "model_synthetic": {"zh": "合成", "en": "Synthetic", "fr": "Synthétique"},
-    "model_unknown": {"zh": "未知", "en": "Unknown", "fr": "Inconnu"},
-    "cursor_models": {"zh": "Cursor 模型", "en": "Cursor Models", "fr": "Modèles Cursor"},
-    "third_party_models": {"zh": "第三方模型", "en": "Third-party Models", "fr": "Modèles tiers"},
-    "plan_usage": {"zh": "套餐用量", "en": "Plan Usage", "fr": "Utilisation du forfait"},
-    "paygo_budget": {"zh": "按量预算", "en": "Pay-as-you-go Budget", "fr": "Budget à l'usage"},
-    "period_quota": {"zh": "本周期额度", "en": "Current Period Quota", "fr": "Quota de la période"},
-    "account": {"zh": "账号", "en": "Account", "fr": "Compte"},
-    "balance": {"zh": "余额", "en": "Balance", "fr": "Solde"},
-    "plan_expiry": {"zh": "套餐到期", "en": "Plan Expiry", "fr": "Expiration du forfait"},
-    "overage_balance": {"zh": "超额余额", "en": "Overage Balance", "fr": "Solde excédentaire"},
-    "local_accounts": {"zh": "本机账号", "en": "Local Accounts", "fr": "Comptes locaux"},
+    "model_synthetic": {"zh": "合成", "en": "Synthetic", "fr": "Synthétique", "ja": "合成", "ko": "합성"},
+    "model_unknown": {"zh": "未知", "en": "Unknown", "fr": "Inconnu", "ja": "不明", "ko": "알 수 없음"},
+    "cursor_models": {"zh": "Cursor 模型", "en": "Cursor Models", "fr": "Modèles Cursor", "ja": "Cursor モデル", "ko": "Cursor 모델"},
+    "third_party_models": {"zh": "第三方模型", "en": "Third-party Models", "fr": "Modèles tiers", "ja": "サードパーティモデル", "ko": "서드파티 모델"},
+    "plan_usage": {"zh": "套餐用量", "en": "Plan Usage", "fr": "Utilisation du forfait", "ja": "プラン使用量", "ko": "요금제 사용량"},
+    "paygo_budget": {"zh": "按量预算", "en": "Pay-as-you-go Budget", "fr": "Budget à l'usage", "ja": "従量課金予算", "ko": "종량제 예산"},
+    "period_quota": {"zh": "本周期额度", "en": "Current Period Quota", "fr": "Quota de la période", "ja": "今期の利用枠", "ko": "이번 주기 한도"},
+    "account": {"zh": "账号", "en": "Account", "fr": "Compte", "ja": "アカウント", "ko": "계정"},
+    "balance": {"zh": "余额", "en": "Balance", "fr": "Solde", "ja": "残高", "ko": "잔액"},
+    "plan_expiry": {"zh": "套餐到期", "en": "Plan Expiry", "fr": "Expiration du forfait", "ja": "プラン期限", "ko": "요금제 만료"},
+    "overage_balance": {"zh": "超额余额", "en": "Overage Balance", "fr": "Solde excédentaire", "ja": "超過残高", "ko": "초과 잔액"},
+    "local_accounts": {"zh": "本机账号", "en": "Local Accounts", "fr": "Comptes locaux", "ja": "ローカルアカウント", "ko": "로컬 계정"},
 }
 
 
 def _display_lang():
     env = (os.environ.get("TOKEI_LANG") or "").strip().lower()
-    if env in ("zh", "en", "fr"):
+    if env in ("zh", "en", "fr", "ja", "ko"):
         return env
     try:
         cfg = _load_json(os.path.join(_USER_DIR, "config.json"), {})
         lang = str((cfg if isinstance(cfg, dict) else {}).get("language") or "").strip().lower()
-        if lang in ("zh", "en", "fr"):
+        if lang in ("zh", "en", "fr", "ja", "ko"):
             return lang
     except Exception:
         pass

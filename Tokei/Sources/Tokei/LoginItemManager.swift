@@ -21,9 +21,9 @@ private enum LaunchAgentLoginItemError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidApplication:
-            return "找不到 Tokei.app，请将应用移到“应用程序”后重试"
+            return L10n.t("s268")
         case .commandFailed(let message):
-            return message.isEmpty ? "系统未能加载登录项" : "系统未能加载登录项：\(message)"
+            return message.isEmpty ? L10n.t("s457") : L10n.f("s458", message)
         }
     }
 }
@@ -155,7 +155,7 @@ private enum LoginItemManagerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .applicationNotFound:
-            return "找不到可注册的 Tokei.app，请将应用移到“应用程序”后重试"
+            return L10n.t("s269")
         }
     }
 }

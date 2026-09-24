@@ -18,6 +18,7 @@ class PopoverPlacementTests(unittest.TestCase):
                     "-module-cache-path", str(Path(tmp) / "module-cache"),
                     "-framework", "AppKit",
                     str(ROOT / "Tokei/Sources/Tokei/PanelPlacement.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/PopoverPlacementCheck.swift"),
                     "-o", str(binary),
                 ],

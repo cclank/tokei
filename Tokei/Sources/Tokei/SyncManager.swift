@@ -61,13 +61,26 @@ struct RangeBoundary: Codable, Equatable {
 }
 
 enum PeerLoadStage: String {
-    case configuration = "配置"
-    case read = "读取"
+    case configuration = "configuration"
+    case read = "read"
     case json = "JSON"
-    case timestamp = "时间戳"
-    case usage = "用量结构"
-    case dashboard = "面板数据"
-    case rangeBounds = "时间范围"
+    case timestamp = "timestamp"
+    case usage = "usage"
+    case dashboard = "dashboard"
+    case rangeBounds = "rangeBounds"
+
+    /// 本地化显示名（rawValue 保持英文稳定，供 id/日志使用）。
+    var displayName: String {
+        switch self {
+        case .configuration: return L10n.t("s524")
+        case .read: return L10n.t("s493")
+        case .json: return "JSON"
+        case .timestamp: return L10n.t("s343")
+        case .usage: return L10n.t("s442")
+        case .dashboard: return L10n.t("s535")
+        case .rangeBounds: return L10n.t("s344")
+        }
+    }
 }
 
 struct PeerLoadIssue: Identifiable {
@@ -76,7 +89,7 @@ struct PeerLoadIssue: Identifiable {
     var stage: PeerLoadStage
     var detail: String
 
-    var summary: String { "\(file)：\(stage.rawValue)失败，\(detail)" }
+    var summary: String { L10n.f("s058", file, stage.displayName, detail) }
 }
 
 struct PeerLoadReport {
@@ -316,7 +329,7 @@ final class SyncManager {
                 issues: [PeerLoadIssue(
                     file: Self.configPath.path,
                     stage: .configuration,
-                    detail: "同步配置缺失或无法解析"
+                    detail: L10n.t("s183")
                 )]
             )
         }
@@ -324,7 +337,7 @@ final class SyncManager {
         guard FileManager.default.fileExists(atPath: dir) else {
             return PeerLoadReport(
                 peers: [],
-                issues: [PeerLoadIssue(file: dir, stage: .read, detail: "同步目录不存在")]
+                issues: [PeerLoadIssue(file: dir, stage: .read, detail: L10n.t("s178"))]
             )
         }
         var peers: [PeerDevice] = []
@@ -355,7 +368,7 @@ final class SyncManager {
             let raw: [String: Any]
             do {
                 guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    issues.append(PeerLoadIssue(file: file, stage: .json, detail: "顶层不是对象"))
+                    issues.append(PeerLoadIssue(file: file, stage: .json, detail: L10n.t("s536")))
                     continue
                 }
                 raw = value
@@ -364,7 +377,7 @@ final class SyncManager {
                 continue
             }
             guard let ts = raw["_ts"] as? Int else {
-                issues.append(PeerLoadIssue(file: file, stage: .timestamp, detail: "缺少 _ts"))
+                issues.append(PeerLoadIssue(file: file, stage: .timestamp, detail: L10n.t("s469")))
                 continue
             }
             var cleaned = raw
@@ -382,7 +395,7 @@ final class SyncManager {
                 do {
                     guard JSONSerialization.isValidJSONObject(rawDashboard) else {
                         throw NSError(domain: "TokeiPeer", code: 1,
-                                      userInfo: [NSLocalizedDescriptionKey: "不是有效 JSON 对象"])
+                                      userInfo: [NSLocalizedDescriptionKey: L10n.t("s095")])
                     }
                     let dashboardData = try JSONSerialization.data(withJSONObject: rawDashboard)
                     dashboard = try JSONDecoder().decode(PeerDashboardSnapshot.self, from: dashboardData)
@@ -396,7 +409,7 @@ final class SyncManager {
                 do {
                     guard JSONSerialization.isValidJSONObject(rawBounds) else {
                         throw NSError(domain: "TokeiPeer", code: 2,
-                                      userInfo: [NSLocalizedDescriptionKey: "不是有效 JSON 对象"])
+                                      userInfo: [NSLocalizedDescriptionKey: L10n.t("s095")])
                     }
                     let boundsData = try JSONSerialization.data(withJSONObject: rawBounds)
                     rangeBounds = try JSONDecoder().decode([String: RangeBoundary].self, from: boundsData)
@@ -748,7 +761,7 @@ final class SyncManager {
                 dst[idx].cost += m.cost
                 dst[idx].credits += m.credits
                 dst[idx].cost_cny = (dst[idx].cost_cny ?? 0) + (m.cost_cny ?? 0)
-                if dst[idx].name == "未知" && m.name != "未知" {
+                if dst[idx].name == L10n.modelUnknown && m.name != L10n.modelUnknown {
                     dst[idx].name = m.name
                 }
             } else {
@@ -777,6 +790,7 @@ final class SyncManager {
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
+
 
     private static func validDeviceID(_ value: String) -> String? {
         let trimmed = normalizedDeviceID(value)
@@ -821,14 +835,14 @@ final class SyncManager {
         }
 
         git_dir=$(sync_git rev-parse --absolute-git-dir 2>/dev/null) \
-          || fail 20 "同步目录不是有效的 Git 仓库"
+          || fail 20 \(Self.shellQuote(L10n.t("s180")))
         declared_root=$(sync_git rev-parse --show-toplevel 2>/dev/null) \
-          || fail 20 "无法读取同步仓库工作树"
+          || fail 20 \(Self.shellQuote(L10n.t("s333")))
         declared_root=$(cd -- "$declared_root" 2>/dev/null && /bin/pwd -P) \
-          || fail 20 "无法解析同步仓库工作树"
+          || fail 20 \(Self.shellQuote(L10n.t("s329")))
         current_root=$(/bin/pwd -P)
         [ "$declared_root" = "$current_root" ] \
-          || fail 20 "同步仓库 core.worktree 指向其他目录，已停止"
+          || fail 20 \(Self.shellQuote(L10n.t("s167")))
         marker="$git_dir/tokei-sync-rebase"
         rebase_merge="$git_dir/rebase-merge"
         rebase_apply="$git_dir/rebase-apply"
@@ -858,111 +872,111 @@ final class SyncManager {
 
         if [ -d "$rebase_merge" ] || [ -d "$rebase_apply" ]; then
           if validate_marker; then
-            fail 21 "检测到上次 Tokei 遗留的 rebase，已保留现场且禁止跨进程自动 abort"
+            fail 21 \(Self.shellQuote(L10n.t("s406")))
           fi
-          fail 21 "检测到未完成的外部 rebase，已停止且未改动仓库"
+          fail 21 \(Self.shellQuote(L10n.t("s410")))
         elif [ -f "$marker" ]; then
-          validate_marker || fail 21 "发现格式异常的 Tokei rebase 标记，已停止"
+          validate_marker || fail 21 \(Self.shellQuote(L10n.t("s153")))
           current_branch=$(sync_git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
           [ "$current_branch" = "main" ] \
-            || fail 21 "发现遗留 rebase 标记且当前分支异常，已停止"
+            || fail 21 \(Self.shellQuote(L10n.t("s155")))
           /bin/rm -f "$marker"
         fi
 
         for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_START; do
           operation_path=$(sync_git rev-parse --git-path "$operation")
           [ ! -e "$operation_path" ] \
-            || fail 21 "检测到未完成的 $operation，已停止且未改动仓库"
+            || fail 21 \(Self.shellQuote(L10n.t("s408")))
         done
         sequencer_path=$(sync_git rev-parse --git-path sequencer)
         [ ! -d "$sequencer_path" ] \
-          || fail 21 "检测到未完成的 Git sequencer 操作，已停止且未改动仓库"
+          || fail 21 \(Self.shellQuote(L10n.t("s409")))
         unmerged_state=$(sync_git ls-files -u) \
-          || fail 21 "无法检查同步仓库的冲突状态"
+          || fail 21 \(Self.shellQuote(L10n.t("s319")))
         [ -z "$unmerged_state" ] \
-          || fail 21 "同步仓库含有未解决冲突，已停止且未改动仓库"
+          || fail 21 \(Self.shellQuote(L10n.t("s170")))
 
         branch=$(sync_git symbolic-ref --quiet --short HEAD 2>/dev/null) \
-          || fail 22 "同步仓库处于 detached HEAD，已停止"
-        [ "$branch" = "main" ] || fail 22 "同步仓库必须位于 main 分支，当前为 $branch"
+          || fail 22 \(Self.shellQuote(L10n.t("s171")))
+        [ "$branch" = "main" ] || fail 22 \(Self.shellQuote(L10n.t("s172")))
 
         sync_git remote get-url origin >/dev/null 2>&1 \
-          || fail 20 "同步仓库缺少 origin 远端"
-        sync_git fetch origin main || fail 25 "拉取 origin/main 失败"
+          || fail 20 \(Self.shellQuote(L10n.t("s173")))
+        sync_git fetch origin main || fail 25 \(Self.shellQuote(L10n.t("s270")))
         sync_git show-ref --verify --quiet refs/remotes/origin/main \
-          || fail 25 "origin/main 不存在"
+          || fail 25 \(Self.shellQuote(L10n.t("s077")))
         tracked_peer_files=$(sync_git ls-files --cached -- \
           "$peer_json_pathspec" "$exclude_pathspec") \
-          || fail 23 "无法枚举其他设备快照"
+          || fail 23 \(Self.shellQuote(L10n.t("s316")))
         if [ -n "$tracked_peer_files" ]; then
           sync_git restore --source=HEAD --staged --worktree -- \
             "$peer_json_pathspec" "$exclude_pathspec" \
-            || fail 23 "无法恢复其他设备快照"
+            || fail 23 \(Self.shellQuote(L10n.t("s315")))
         fi
         other_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
           -- . "$exclude_pathspec" "$junk_pathspec") \
-          || fail 23 "无法检查同步仓库的工作区状态"
+          || fail 23 \(Self.shellQuote(L10n.t("s320")))
         [ -z "$other_changes" ] \
-          || fail 23 "同步仓库包含本机快照以外的未提交改动"
+          || fail 23 \(Self.shellQuote(L10n.t("s169")))
 
         audit_local_history() {
           audit_base="$1"
           audit_head="$2"
           sync_git rev-list --reverse "$audit_base..$audit_head" > "$audit_commits" \
-            || fail 23 "无法读取本地待推送提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s335")))
           while IFS= read -r commit; do
             [ -n "$commit" ] || continue
             parent_count=$(sync_git rev-list --parents -n 1 "$commit" \
               | /usr/bin/awk '{ print NF - 1 }') \
-              || fail 23 "无法检查本地提交 $commit"
+              || fail 23 \(Self.shellQuote(L10n.t("s322")))
             [ "$parent_count" -eq 1 ] \
-              || fail 23 "本地待推送历史包含 merge 或根提交，已停止"
+              || fail 23 \(Self.shellQuote(L10n.t("s382")))
             own_history_changes=$(sync_git diff-tree --no-commit-id --name-only -r \
               "$commit" -- "$device_pathspec") \
-              || fail 23 "无法检查本地提交 $commit 的本机快照"
+              || fail 23 \(Self.shellQuote(L10n.t("s324")))
             [ -n "$own_history_changes" ] \
-              || fail 23 "本地待推送提交未修改本机快照，已停止"
+              || fail 23 \(Self.shellQuote(L10n.t("s385")))
             other_history_changes=$(sync_git diff-tree --no-commit-id --name-only -r \
               "$commit" -- . "$exclude_pathspec") \
-              || fail 23 "无法检查本地提交 $commit 的文件范围"
+              || fail 23 \(Self.shellQuote(L10n.t("s323")))
             [ -z "$other_history_changes" ] \
-              || fail 23 "本地待推送提交修改了其他设备数据，已停止"
+              || fail 23 \(Self.shellQuote(L10n.t("s384")))
           done < "$audit_commits"
           /bin/rm -f "$audit_commits"
         }
 
         pre_snapshot_base=$(sync_git rev-parse origin/main) \
-          || fail 23 "无法固定快照前远端提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s304")))
         pre_snapshot_head=$(sync_git rev-parse HEAD) \
-          || fail 23 "无法固定快照前本地提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s303")))
         audit_local_history "$pre_snapshot_base" "$pre_snapshot_head"
         verified_pre_snapshot_head=$(sync_git rev-parse HEAD 2>/dev/null || true)
         [ "$verified_pre_snapshot_head" = "$pre_snapshot_head" ] \
-          || fail 23 "历史审计期间 HEAD 发生变化，已停止"
+          || fail 23 \(Self.shellQuote(L10n.t("s148")))
 
-        \(snapshot) || fail 24 "生成本机数据快照失败"
+        \(snapshot) || fail 24 \(Self.shellQuote(L10n.t("s438")))
 
         matches=$(sync_git ls-files --cached --others --exclude-standard -- "$device_pathspec")
         match_count=$(printf '%s\\n' "$matches" | /usr/bin/awk 'NF { count++ } END { print count + 0 }')
         [ "$match_count" -eq 1 ] \
-          || fail 24 "本机设备快照缺失或存在大小写重名文件"
+          || fail 24 \(Self.shellQuote(L10n.t("s394")))
 
         other_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
           -- . "$exclude_pathspec" "$junk_pathspec") \
-          || fail 23 "无法检查生成快照后的工作区状态"
+          || fail 23 \(Self.shellQuote(L10n.t("s326")))
         [ -z "$other_changes" ] \
-          || fail 23 "生成快照时检测到其他文件被修改"
+          || fail 23 \(Self.shellQuote(L10n.t("s437")))
 
-        sync_git add -- "$device_pathspec" || fail 26 "暂存本机快照失败"
+        sync_git add -- "$device_pathspec" || fail 26 \(Self.shellQuote(L10n.t("s350")))
         if ! sync_git diff --cached --quiet -- "$device_pathspec"; then
           sync_git commit --no-gpg-sign --only -m "tokei sync $device_id" -- "$device_pathspec" \
-            || fail 26 "提交本机快照失败"
+            || fail 26 \(Self.shellQuote(L10n.t("s284")))
         fi
         post_commit_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
           -- . "$junk_pathspec") \
-          || fail 23 "无法检查提交后的工作区状态"
+          || fail 23 \(Self.shellQuote(L10n.t("s321")))
         [ -z "$post_commit_changes" ] \
-          || fail 23 "提交后工作区仍有改动，已停止"
+          || fail 23 \(Self.shellQuote(L10n.t("s283")))
 
         write_marker() {
           marker_head="$1"
@@ -977,8 +991,8 @@ final class SyncManager {
             printf '%s\\n' "$marker_onto"
             printf 'pid=%s\\n' "$$"
             /bin/date -u '+started_at=%Y-%m-%dT%H:%M:%SZ'
-          } > "$marker_tmp" || fail 28 "无法写入 rebase 恢复标记"
-          /bin/mv -f "$marker_tmp" "$marker" || fail 28 "无法保存 rebase 恢复标记"
+          } > "$marker_tmp" || fail 28 \(Self.shellQuote(L10n.t("s294")))
+          /bin/mv -f "$marker_tmp" "$marker" || fail 28 \(Self.shellQuote(L10n.t("s293")))
         }
 
         rebase_onto_origin() {
@@ -986,71 +1000,71 @@ final class SyncManager {
             return 0
           fi
           pre_rebase_head=$(sync_git rev-parse HEAD) \
-            || fail 27 "无法读取 rebase 前提交"
+            || fail 27 \(Self.shellQuote(L10n.t("s331")))
           pre_rebase_onto=$(sync_git rev-parse origin/main) \
-            || fail 27 "无法读取 rebase 目标提交"
+            || fail 27 \(Self.shellQuote(L10n.t("s332")))
           write_marker "$pre_rebase_head" "$pre_rebase_onto"
           if sync_git rebase --merge origin/main; then
             /bin/rm -f "$marker"
             return 0
           fi
           if [ -d "$rebase_merge" ] || [ -d "$rebase_apply" ]; then
-            fail 27 "rebase 未完成，已保留现场且禁止自动 abort，请人工检查同步仓库"
+            fail 27 \(Self.shellQuote(L10n.t("s087")))
           fi
           /bin/rm -f "$marker"
-          fail 27 "本机快照无法安全 rebase 到 origin/main"
+          fail 27 \(Self.shellQuote(L10n.t("s393")))
         }
 
         attempt=1
         while [ "$attempt" -le 3 ]; do
           rebase_onto_origin
           audit_base=$(sync_git rev-parse origin/main) \
-            || fail 23 "无法固定审计基线"
+            || fail 23 \(Self.shellQuote(L10n.t("s299")))
           candidate_head=$(sync_git rev-parse HEAD) \
-            || fail 23 "无法固定待审计的本地提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s302")))
           audit_local_history "$audit_base" "$candidate_head"
           verified_candidate_head=$(sync_git rev-parse HEAD 2>/dev/null || true)
           [ "$verified_candidate_head" = "$candidate_head" ] \
-            || fail 23 "历史审计期间 HEAD 发生变化，已停止"
+            || fail 23 \(Self.shellQuote(L10n.t("s148")))
           audited_head="$candidate_head"
           audited_branch=$(sync_git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
           [ "$audited_branch" = "main" ] \
-            || fail 23 "审计后 main 分支发生变化，已停止"
+            || fail 23 \(Self.shellQuote(L10n.t("s224")))
           push_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
             -- . "$junk_pathspec") \
-            || fail 23 "无法检查 push 前的工作区状态"
+            || fail 23 \(Self.shellQuote(L10n.t("s317")))
           [ -z "$push_changes" ] \
-            || fail 23 "push 前工作区出现改动，已停止"
+            || fail 23 \(Self.shellQuote(L10n.t("s079")))
           current_head=$(sync_git rev-parse HEAD) \
-            || fail 23 "无法复核 push 前提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s308")))
           [ "$current_head" = "$audited_head" ] \
-            || fail 23 "审计后 HEAD 发生变化，已停止"
+            || fail 23 \(Self.shellQuote(L10n.t("s222")))
           if sync_git push origin "${audited_head}:refs/heads/main"; then
             pushed_head=$(sync_git rev-parse HEAD 2>/dev/null || true)
             [ "$pushed_head" = "$audited_head" ] \
-              || fail 23 "push 期间 HEAD 发生变化，请检查外部 Git 操作"
+              || fail 23 \(Self.shellQuote(L10n.t("s082")))
             printf '多设备同步完成\\n'
             exit 0
           fi
 
-          sync_git fetch origin main || fail 25 "push 失败后重新拉取 origin/main 失败"
+          sync_git fetch origin main || fail 25 \(Self.shellQuote(L10n.t("s081")))
           retry_head=$(sync_git rev-parse HEAD 2>/dev/null || true)
           [ "$retry_head" = "$audited_head" ] \
-            || fail 23 "push 重试前 HEAD 发生变化，已停止"
+            || fail 23 \(Self.shellQuote(L10n.t("s084")))
           if sync_git merge-base --is-ancestor "$audited_head" origin/main; then
             printf '远端已包含本机同步提交\\n'
             exit 0
           fi
           if sync_git merge-base --is-ancestor origin/main "$audited_head"; then
-            fail 29 "远端没有竞争更新，push 仍失败，请检查认证或分支权限"
+            fail 29 \(Self.shellQuote(L10n.t("s516")))
           fi
-          [ "$attempt" -lt 3 ] || fail 29 "远端持续更新，三次同步重试均失败"
+          [ "$attempt" -lt 3 ] || fail 29 \(Self.shellQuote(L10n.t("s515")))
           /bin/sleep "$attempt"
           attempt=$((attempt + 1))
           printf '检测到其他设备同时更新，正在重试 %s/3\\n' "$attempt"
         done
 
-        fail 29 "push 失败"
+        fail 29 \(Self.shellQuote(L10n.t("s080")))
         """
     }
 
@@ -1156,11 +1170,11 @@ final class SyncManager {
     func synchronize(snapshotCommand: SyncCommand,
                      completion: @escaping (GitSyncResult) -> Void) {
         guard let cfg = config else {
-            completion(GitSyncResult(code: .invalidConfiguration, output: "同步配置不可用"))
+            completion(GitSyncResult(code: .invalidConfiguration, output: L10n.t("s181")))
             return
         }
         guard let deviceID = Self.validDeviceID(cfg.device_id) else {
-            completion(GitSyncResult(code: .invalidConfiguration, output: "设备名不合法"))
+            completion(GitSyncResult(code: .invalidConfiguration, output: L10n.t("s481")))
             return
         }
         let dir = Self.resolvedSyncDir(cfg)
@@ -1170,7 +1184,7 @@ final class SyncManager {
               isDirectory.boolValue else {
             completion(GitSyncResult(
                 code: .invalidRepository,
-                output: "同步目录不是普通 Git 仓库：\(dir)"
+                output: L10n.f("s179", dir)
             ))
             return
         }
@@ -1255,9 +1269,9 @@ final class SyncManager {
             let code = Self.resultCode(for: proc.terminationStatus)
             let fallback: String
             switch code {
-            case .success: fallback = "GitHub 已同步"
-            case .busy: fallback = "另一同步任务正在运行"
-            default: fallback = "同步失败，退出码 \(proc.terminationStatus)"
+            case .success: fallback = L10n.t("s021")
+            case .busy: fallback = L10n.t("s159")
+            default: fallback = L10n.f("s177", proc.terminationStatus)
             }
             let result = GitSyncResult(
                 code: code,

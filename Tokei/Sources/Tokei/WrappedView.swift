@@ -41,11 +41,11 @@ enum WrappedPeriod: String, CaseIterable {
     case day = "1d", week = "7d", month = "30d", year = "365d", all = "all"
     var label: String {
         switch self {
-        case .day: return "今日"
-        case .week: return "本周"
-        case .month: return "本月"
-        case .year: return "今年"
-        case .all: return "全部"
+        case .day: return L10n.rangeToday
+        case .week: return L10n.t("week_this")
+        case .month: return L10n.rangeMonth
+        case .year: return L10n.rangeYear
+        case .all: return L10n.scopeAll
         }
     }
 }
@@ -106,18 +106,18 @@ struct WrappedView: View {
             HStack(spacing: 5) {
                 Image(systemName: "sparkles").font(.system(size: Theme.fontSize(11), weight: .bold))
                     .foregroundStyle(Theme.claude)
-                Text("回顾").font(.system(size: Theme.fontSize(11), weight: .bold)).tracking(1.5)
+                Text(L10n.t("s194")).font(.system(size: Theme.fontSize(11), weight: .bold)).tracking(1.5)
                     .foregroundStyle(Theme.tSecondary)
                 Spacer()
                 periodPicker
             }
             HStack(spacing: 4) {
                 if !d.first_day.isEmpty {
-                    Text(period == .all ? "自 \(d.first_day)" : d.first_day)
+                    Text(period == .all ? L10n.f("s473", d.first_day) : d.first_day)
                         .font(.system(size: Theme.fontSize(9), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
                 if d.active_days > 0 {
-                    Text("· \(d.active_days) 天活跃")
+                    Text(L10n.f("s091", d.active_days))
                         .font(.system(size: Theme.fontSize(9), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
             }
@@ -150,11 +150,11 @@ struct WrappedView: View {
     func statChips(_ d: WrappedData) -> some View {
         let avg = d.active_days > 0 ? d.total_cost / Double(d.active_days) : 0
         return HStack(spacing: 7) {
-            chip("总成本", nativeMoney(d.total_cost, d.cost_cny), Theme.claude)
-            chip("连续", "\(d.streak_cur) 天", Theme.hermes, icon: "flame.fill")
-            chip("日均", nativeMoney(avg, (d.cost_cny ?? 0) / Double(max(d.active_days, 1))), Theme.gemini)
-            chip("峰值日", shortDate(d.busiest.date), Color.red.opacity(0.85))
-            chip("本命模型", d.top_model.name, Theme.codex)
+            chip(L10n.t("s261"), nativeMoney(d.total_cost, d.cost_cny), Theme.claude)
+            chip(L10n.t("s517"), L10n.f("s052", d.streak_cur), Theme.hermes, icon: "flame.fill")
+            chip(L10n.t("s339"), nativeMoney(avg, (d.cost_cny ?? 0) / Double(max(d.active_days, 1))), Theme.gemini)
+            chip(L10n.t("s229"), shortDate(d.busiest.date), Color.red.opacity(0.85))
+            chip(L10n.t("s380"), d.top_model.name, Theme.codex)
         }
     }
 
@@ -184,7 +184,7 @@ struct WrappedView: View {
         let shown = (achievementsExpanded || !hasMore) ? d.achievements : Array(d.achievements.prefix(limit))
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 5) {
-                Text("成就").font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
+                Text(L10n.t("s262")).font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
                 Text("\(d.achievements.count)")
                     .font(.system(size: Theme.fontSize(9.5), weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.claude)
@@ -196,7 +196,7 @@ struct WrappedView: View {
                         withAnimation(.easeInOut(duration: 0.25)) { achievementsExpanded.toggle() }
                     } label: {
                         HStack(spacing: 3) {
-                            Text(achievementsExpanded ? "收起" : "展开全部")
+                            Text(achievementsExpanded ? L10n.t("s286") : L10n.t("s228"))
                                 .font(.system(size: Theme.fontSize(10), weight: .medium))
                             Image(systemName: achievementsExpanded ? "chevron.up" : "chevron.down")
                                 .font(.system(size: Theme.fontSize(8), weight: .bold))
@@ -221,7 +221,7 @@ struct WrappedView: View {
     // MARK: - 巅峰日 Top 3(现存日志 + 持久账本合并的单日高峰)
     func peakDaysSection(_ peaks: [WrappedPeakDay]) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("巅峰日").font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
+            Text(L10n.t("s230")).font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
             VStack(spacing: 5) {
                 ForEach(Array(peaks.prefix(3).enumerated()), id: \.element.date) { i, p in
                     HStack(spacing: 8) {
@@ -261,7 +261,7 @@ struct WrappedView: View {
     func peakDate(_ s: String) -> String {
         let parts = s.split(separator: "-")
         guard parts.count == 3, let m = Int(parts[1]), let d = Int(parts[2]) else { return s }
-        return "\(m)月\(d)日"
+        return L10n.f("s059", m, d)
     }
 
     // MARK: - 24h rhythm
@@ -270,10 +270,10 @@ struct WrappedView: View {
         let peak = d.hours.firstIndex(of: d.hours.max() ?? 0) ?? -1
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("活跃时段").font(.system(size: Theme.fontSize(13), weight: .bold))
+                Text(L10n.t("s426")).font(.system(size: Theme.fontSize(13), weight: .bold))
                 Spacer()
                 if peak >= 0 {
-                    Text(String(format: "高峰 %02d:00", peak))
+                    Text(String(format: L10n.t("s553"), peak))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
             }
@@ -333,9 +333,9 @@ struct WrappedView: View {
         let coffee = Int((d.total_cost / 4).rounded())
         let hotpot = Int((d.total_cost / 40).rounded())
         switch funSeed {
-        case 0:  return "这些花费 ≈ \(coffee.formatted()) 杯咖啡 ☕"
-        case 1:  return "这些花费 ≈ \(hotpot.formatted()) 顿火锅 🍲"
-        default: return "这些 token ≈ 码了 \(Fmt.human(Int(Double(d.total_tokens) * 0.6))) 字 ✍️"
+        case 0:  return L10n.f("s511", coffee.formatted())
+        case 1:  return L10n.f("s512", hotpot.formatted())
+        default: return L10n.f("s510", Fmt.human(Int(Double(d.total_tokens) * 0.6)))
         }
     }
 

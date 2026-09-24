@@ -213,6 +213,46 @@ CMDCODE_DIR = os.path.abspath(os.path.expanduser(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _USER_DIR = os.path.join(HOME, ".tokei")
 
+
+# ---------- 界面语言 ----------
+# App 设置页(AppLanguage)同步 language 到 ~/.tokei/config.json;无则读 TOKEI_LANG;
+# 再无则 zh(保持现状)。只影响进 JSON 的展示字段(token/成本等数据字段不动)。
+# 新增语言 = 下表加一列,零其他改动。
+_LANG_TABLE = {
+    "model_synthetic": {"zh": "合成", "en": "Synthetic", "fr": "Synthétique", "ja": "合成", "ko": "합성"},
+    "model_unknown": {"zh": "未知", "en": "Unknown", "fr": "Inconnu", "ja": "不明", "ko": "알 수 없음"},
+    "cursor_models": {"zh": "Cursor 模型", "en": "Cursor Models", "fr": "Modèles Cursor", "ja": "Cursor モデル", "ko": "Cursor 모델"},
+    "third_party_models": {"zh": "第三方模型", "en": "Third-party Models", "fr": "Modèles tiers", "ja": "サードパーティモデル", "ko": "서드파티 모델"},
+    "plan_usage": {"zh": "套餐用量", "en": "Plan Usage", "fr": "Utilisation du forfait", "ja": "プラン使用量", "ko": "요금제 사용량"},
+    "paygo_budget": {"zh": "按量预算", "en": "Pay-as-you-go Budget", "fr": "Budget à l'usage", "ja": "従量課金予算", "ko": "종량제 예산"},
+    "period_quota": {"zh": "本周期额度", "en": "Current Period Quota", "fr": "Quota de la période", "ja": "今期の利用枠", "ko": "이번 주기 한도"},
+    "account": {"zh": "账号", "en": "Account", "fr": "Compte", "ja": "アカウント", "ko": "계정"},
+    "balance": {"zh": "余额", "en": "Balance", "fr": "Solde", "ja": "残高", "ko": "잔액"},
+    "plan_expiry": {"zh": "套餐到期", "en": "Plan Expiry", "fr": "Expiration du forfait", "ja": "プラン期限", "ko": "요금제 만료"},
+    "overage_balance": {"zh": "超额余额", "en": "Overage Balance", "fr": "Solde excédentaire", "ja": "超過残高", "ko": "초과 잔액"},
+    "local_accounts": {"zh": "本机账号", "en": "Local Accounts", "fr": "Comptes locaux", "ja": "ローカルアカウント", "ko": "로컬 계정"},
+}
+
+
+def _display_lang():
+    env = (os.environ.get("TOKEI_LANG") or "").strip().lower()
+    if env in ("zh", "en", "fr", "ja", "ko"):
+        return env
+    try:
+        cfg = _load_json(os.path.join(_USER_DIR, "config.json"), {})
+        lang = str((cfg if isinstance(cfg, dict) else {}).get("language") or "").strip().lower()
+        if lang in ("zh", "en", "fr", "ja", "ko"):
+            return lang
+    except Exception:
+        pass
+    return "zh"
+
+
+def _T(key):
+    """展示字段翻译;缺翻译回退中文(保持现状)。"""
+    row = _LANG_TABLE.get(key) or {}
+    return row.get(_display_lang()) or row.get("zh") or key
+
 def _writable_path(name):
     """优先用 ~/.tokei/ 下的可写副本,没有则用脚本同目录(开发模式)。"""
     user = os.path.join(_USER_DIR, name)
@@ -656,9 +696,9 @@ TOKEN_FIELDS = ("in", "out", "cr", "cw", "reason")
 def nice_model(m: str) -> str:
     """claude-opus-4-7 → Opus 4.7;<synthetic> → 合成;其它去前缀/-free 后美化。"""
     if not m or m == "<synthetic>":
-        return "合成"
+        return _T("model_synthetic")
     if m == "unknown":
-        return "未知"
+        return _T("model_unknown")
     import re
     s = m.lower()
     for key, disp in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")):
@@ -5999,14 +6039,14 @@ def _normalize_cursor_quota(summary, *, request_usage=None, sand_usage=None, use
         windows = []
         if auto_pct is not None:
             windows.append(_provider_window(
-                "cursor-auto", "Cursor 模型", auto_pct, cycle_end, window_minutes))
+                "cursor-auto", _T("cursor_models"), auto_pct, cycle_end, window_minutes))
         if api_pct is not None:
             windows.append(_provider_window(
-                "cursor-api", "第三方模型", api_pct, cycle_end, window_minutes))
+                "cursor-api", _T("third_party_models"), api_pct, cycle_end, window_minutes))
     details = []
     if plan_limit > 0 and not legacy:
         details.append({
-            "label": "套餐用量",
+            "label": _T("plan_usage"),
             "value": spend_detail or (
                 f"{_provider_money(plan_used / 100)} / {_provider_money(plan_limit / 100)}"),
         })
@@ -6021,7 +6061,7 @@ def _normalize_cursor_quota(summary, *, request_usage=None, sand_usage=None, use
             on_limit = team_limit
     if on_limit and on_limit > 0:
         details.append({
-            "label": "按量预算",
+            "label": _T("paygo_budget"),
             "value": f"{_provider_money(on_used / 100)} / {_provider_money(on_limit / 100)}",
         })
 
@@ -6204,7 +6244,7 @@ def _normalize_grok_bot_quota(sand_usage, *, user_info=None, identity=None, upda
         "plan": plan,
         "account": None,
         "windows": [_provider_window(
-            "grok-bot-period", "本周期额度", used_pct, reset, window_minutes)],
+            "grok-bot-period", _T("period_quota"), used_pct, reset, window_minutes)],
         "details": [],
         "source": source,
         "updated": int(updated if updated is not None else datetime.now().timestamp()),
@@ -6222,7 +6262,7 @@ def _grok_bot_quota_from_cursor(cursor_quota):
         return {}
     window = dict(source_window)
     window["id"] = "grok-bot-period"
-    window["title"] = "本周期额度"
+    window["title"] = _T("period_quota")
     plan = window.pop("detail", None)
     return {
         "available": True,
@@ -6472,7 +6512,7 @@ def _normalize_zed_quota(payload, updated=None):
 
     details = []
     if isinstance(user.get("name"), str) and user["name"].strip():
-        details.append({"label": "账号", "value": user["name"].strip()})
+        details.append({"label": _T("account"), "value": user["name"].strip()})
     organization_plans = payload.get("plans_by_organization")
     organization_plans = organization_plans if isinstance(organization_plans, dict) else {}
     default_organization_id = payload.get("default_organization_id")
@@ -6635,7 +6675,7 @@ def _normalize_sub2api_quota(data, updated=None):
     details = []
     balance = _provider_number(data.get("balance"))
     if balance is not None:
-        details.append({"label": "余额", "value": _provider_money(balance, unit)})
+        details.append({"label": _T("balance"), "value": _provider_money(balance, unit)})
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     for key, label in (("today", "今日"), ("total", "累计")):
         row = usage.get(key) if isinstance(usage.get(key), dict) else None
@@ -6655,7 +6695,7 @@ def _normalize_sub2api_quota(data, updated=None):
     expiration = (subscription or {}).get("expires_at") or data.get("expires_at")
     expiration_epoch = _provider_epoch(expiration)
     if expiration_epoch:
-        details.append({"label": "套餐到期", "value": str(expiration_epoch)})
+        details.append({"label": _T("plan_expiry"), "value": str(expiration_epoch)})
     plan_name = data.get("planName") if isinstance(data.get("planName"), str) else None
     return {
         "available": bool(windows or details or plan_name),
@@ -7388,9 +7428,9 @@ def _normalize_devin_plan(plan, launched_at, now=None, accounts=1):
     # 字段名就写了是 micros：10,000,000 即十美元。
     balance = _devin_plan_number(plan, "overageBalanceMicros")
     if balance is not None:
-        details.append({"label": "超额余额", "value": _provider_money(balance / 1_000_000)})
+        details.append({"label": _T("overage_balance"), "value": _provider_money(balance / 1_000_000)})
     if accounts > 1:
-        details.append({"label": "本机账号", "value": f"{accounts} 个",
+        details.append({"label": _T("local_accounts"), "value": f"{accounts} 个",
                         "secondary": "取订阅期最长的一个"})
 
     if not windows and not details:

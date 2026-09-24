@@ -20,6 +20,7 @@ class MenuBarQuotaSourceTests(unittest.TestCase):
                     "-module-name",
                     "MenuBarQuotaCheck",
                     str(TOKEI_SRC / "Model.swift"),
+                    str(TOKEI_SRC / "L10n.swift"),
                     str(TOKEI_SRC / "Design.swift"),
                     str(TOKEI_SRC / "PanelTypography.swift"),
                     str(TOKEI_SRC / "MenuBarStyle.swift"),

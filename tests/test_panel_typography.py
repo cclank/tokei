@@ -26,6 +26,7 @@ class PanelTypographyTests(unittest.TestCase):
                     "-parse-as-library",
                     "-module-cache-path", str(Path(tmp) / "module-cache"),
                     str(ROOT / "Tokei/Sources/Tokei/PanelTypography.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/PanelTypographyCheck.swift"),
                     "-o", str(binary),
                 ],
@@ -53,7 +54,7 @@ class PanelTypographyTests(unittest.TestCase):
         source = (ROOT / "Tokei/Sources/Tokei/PanelView.swift").read_text()
         self.assertIn("@AppStorage(PanelFontSize.defaultsKey)", source)
         self.assertIn("PanelFontSize.small.rawValue", source)
-        self.assertIn('Picker("字体大小"', source)
+        self.assertIn("L10n.t(\"font_size\")", source)
 
 
 if __name__ == "__main__":

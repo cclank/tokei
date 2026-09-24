@@ -15,7 +15,7 @@ struct PanelTypographyCheck {
 
         try expect(PanelFontSize.small.scale == 1, "small should preserve current sizes")
         try expect(PanelFontSize.large.scale == 1.12, "large should use the bounded scale")
-        try expect(PanelFontSize.large.label == "大", "large should have a user-facing label")
+        try expect(PanelFontSize.large.label == L10n.t("size_large"), "large should have a user-facing label")
         try expect(PanelFontSize.allCases == [.small, .large], "only two sizes should be exposed")
 
         print("panel typography checks passed")

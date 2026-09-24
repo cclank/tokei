@@ -33,18 +33,18 @@ struct UsageSummaryBuilderCheck {
         let todayText = UsageSummaryBuilder.text(
             usage: usage, range: .today, visibility: allVisible, updated: "12:34"
         )
-        try expect(todayText.contains("Tokei 用量 · 今日"), "period label missing: \(todayText)")
+        try expect(todayText.contains(L10n.shareTitle + " · " + L10n.rangeToday), "period label missing: \(todayText)")
         try expect(todayText.contains("Claude Code"), "claude line missing: \(todayText)")
         try expect(todayText.contains("$1.25"), "claude cost missing: \(todayText)")
         try expect(todayText.contains("Codex"), "codex line missing: \(todayText)")
         try expect(todayText.contains("$0.50"), "codex cost missing: \(todayText)")
         try expect(todayText.contains("Luna Reserve"), "reserve line missing: \(todayText)")
         try expect(todayText.contains("$0.25"), "reserve cost missing: \(todayText)")
-        try expect(todayText.contains("合计"), "total line missing: \(todayText)")
+        try expect(todayText.contains(L10n.t("s161")), "total line missing: \(todayText)")
         // Claude 1.25 + Codex 0.50 + Luna Reserve 0.25 + Gemini 0.10
         try expect(todayText.contains("$2.10"), "total cost wrong: \(todayText)")
-        try expect(todayText.contains("更新于 12:34"), "updated missing: \(todayText)")
-        try expect(!todayText.contains("更新于 更新"), "must not double-prefix bare time: \(todayText)")
+        try expect(todayText.contains(L10n.f("s358", "12:34")), "updated missing: \(todayText)")
+        try expect(!todayText.contains(L10n.f("s358", L10n.t("s357"))), "must not double-prefix bare time: \(todayText)")
         try expect(todayText.contains("Gemini"), "gemini should appear when visible: \(todayText)")
         try expect(todayText.contains("$0.10") || todayText.contains("$0.1"),
                    "gemini cost missing: \(todayText)")
@@ -68,17 +68,17 @@ struct UsageSummaryBuilderCheck {
 
         // Store path uses lastUpdated = "更新 HH:mm:ss" (main.swift); strip, don't nest.
         let storeStampText = UsageSummaryBuilder.text(
-            usage: usage, range: .today, visibility: allVisible, updated: "更新 21:51:18"
+            usage: usage, range: .today, visibility: allVisible, updated: L10n.t("s354") + " 21:51:18"
         )
-        try expect(storeStampText.contains("更新于 21:51:18"),
+        try expect(storeStampText.contains(L10n.f("s358", "21:51:18")),
                    "store stamp should normalize: \(storeStampText)")
-        try expect(!storeStampText.contains("更新于 更新"),
+        try expect(!storeStampText.contains(L10n.f("s358", L10n.t("s357"))),
                    "must not double-prefix store lastUpdated: \(storeStampText)")
-        try expect(UsageSummaryBuilder.formatUpdatedLine("更新 21:51:18") == "更新于 21:51:18",
+        try expect(UsageSummaryBuilder.formatUpdatedLine(L10n.t("s354") + " 21:51:18") == L10n.f("s358", "21:51:18"),
                    "formatUpdatedLine store stamp")
-        try expect(UsageSummaryBuilder.formatUpdatedLine("更新于 09:00") == "更新于 09:00",
+        try expect(UsageSummaryBuilder.formatUpdatedLine(L10n.t("s357") + " 09:00") == L10n.t("s357") + " 09:00",
                    "formatUpdatedLine already-prefixed")
-        try expect(UsageSummaryBuilder.formatUpdatedLine("加载中…") == nil,
+        try expect(UsageSummaryBuilder.formatUpdatedLine(L10n.loading) == nil,
                    "loading stamp omitted")
 
         // Devin 卡片的复制按钮按 toolID "devin" 取这一行。
@@ -119,7 +119,7 @@ struct UsageSummaryBuilderCheck {
         let weekText = UsageSummaryBuilder.text(
             usage: usage, range: .week, visibility: allVisible, updated: nil
         )
-        try expect(weekText.contains("Tokei 用量 · 本周"), "week label: \(weekText)")
+        try expect(weekText.contains(L10n.shareTitle + " · " + L10n.weekThis), "week label: \(weekText)")
         try expect(weekText.contains("$3.00"), "week claude cost: \(weekText)")
 
         let lines = UsageSummaryBuilder.toolLines(
@@ -152,14 +152,14 @@ struct UsageSummaryBuilderCheck {
         try expect(abs(totals.cost - 2.00) < 0.001, "totals cost")
         try expect(totals.input == 1140 + 17370, "totals input incl. Devin")
         try expect(totals.output == 420 + 166, "totals output incl. Devin")
-        try expect(hiddenText.contains("输入") || UsageSummaryBuilder.text(
+        try expect(hiddenText.contains(L10n.metricIn) || UsageSummaryBuilder.text(
             usage: usage, range: .today, visibility: hideGemini
-        ).contains("输入"), "text totals include input detail")
+        ).contains(L10n.metricIn), "text totals include input detail")
 
         // Generated share images (footer + per-tool).
         try MainActor.assumeIsolated {
             guard let png = UsageShareImage.pngData(
-                usage: usage, range: .today, visibility: allVisible, updated: "更新 21:51:18"
+                usage: usage, range: .today, visibility: allVisible, updated: L10n.t("s354") + " 21:51:18"
             ) else {
                 throw TestFailure.assertion("pngData returned nil")
             }
@@ -180,7 +180,7 @@ struct UsageSummaryBuilderCheck {
                 throw TestFailure.assertion("codex line missing")
             }
             guard let singlePng = UsageShareImage.pngData(
-                line: codexLine, range: .today, updated: "更新 12:00:00"
+                line: codexLine, range: .today, updated: L10n.t("s354") + " 12:00:00"
             ) else {
                 throw TestFailure.assertion("single-tool png nil")
             }
@@ -188,7 +188,7 @@ struct UsageSummaryBuilderCheck {
             try expect(singlePng != png, "single-tool image should differ from overview")
 
             let wrote = UsageShareImage.copyToPasteboard(
-                line: codexLine, range: .today, updated: "更新 12:00:00"
+                line: codexLine, range: .today, updated: L10n.t("s354") + " 12:00:00"
             )
             try expect(wrote, "single-tool copyToPasteboard failed")
             let pb = NSPasteboard.general

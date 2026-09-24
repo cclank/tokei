@@ -7,7 +7,7 @@ final class Store: ObservableObject {
     @Published var usage: Usage?
     @Published var localUsage: Usage?
     @Published var allDevicesUsage: Usage?
-    @Published var lastUpdated: String = "加载中…"
+    @Published var lastUpdated: String = L10n.loading
     @Published var loadError: String?
     @Published var peers: [PeerDevice] = []
     @Published var syncing = false
@@ -63,7 +63,7 @@ final class Store: ObservableObject {
         }
         allDevicesUsage = allDevices
         applyDisplayMode()
-        lastUpdated = "缓存数据 · 后台更新中"
+        lastUpdated = L10n.t("s466")
     }
 
     func refresh(prewarmQuotaDetail: Bool = false) {
@@ -93,16 +93,16 @@ final class Store: ObservableObject {
                 let willRetry = self.usage == nil && self.retryCount < 3
                 if willRetry {
                     self.retryCount += 1
-                    self.lastUpdated = "加载中…(\(self.retryCount))"
+                    self.lastUpdated = L10n.f("s138", self.retryCount)
                     if !hadPendingRefresh {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.refresh() }
                     }
                 } else if self.usage == nil {
-                    self.loadError = "读取用量失败"
-                    self.lastUpdated = "加载失败"
+                    self.loadError = L10n.t("s496")
+                    self.lastUpdated = L10n.t("s139")
                 } else {
                     self.loadError = nil
-                    self.lastUpdated = "缓存数据 · 等待刷新"
+                    self.lastUpdated = L10n.t("s467")
                 }
                 (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
                 if !willRetry { self.prewarmQuotaDetailIfReady() }
@@ -134,7 +134,7 @@ final class Store: ObservableObject {
             self.allDevicesUsage = allDevices
             self.applyDisplayMode(updateStatusTitle: false)
             let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-            self.lastUpdated = "更新 " + f.string(from: Date())
+            self.lastUpdated = L10n.t("s355") + f.string(from: Date())
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
             if !self.refreshPending && !self.dashboardPrewarmStarted {
                 self.dashboardPrewarmStarted = true
@@ -164,7 +164,9 @@ final class Store: ObservableObject {
         let claudeRange = usage.claude.ranges.get(.today)
         let codexRange = usage.codex.ranges.get(.today)
         let claudeModels = claudeRange.models.reduce(into: [String: Int]()) { totals, model in
-            guard model.name != "合成" else { return }
+            guard model.name != L10n.modelSynthetic,
+                  model.name != L10n.legacySyntheticName,
+                  model.name != "<synthetic>" else { return }
             totals[model.name, default: 0] += model.in + model.out + model.cr + model.cw
         }
         let codexModels = codexRange.models.reduce(into: [String: Int]()) { totals, model in
@@ -188,13 +190,13 @@ final class Store: ObservableObject {
     func doSync() {
         guard syncEnabled, !syncing else { return }
         guard let cfg = syncManager.config else {
-            syncStatus = "同步配置不可用"
+            syncStatus = L10n.t("s181")
             syncSucceeded = false
-            syncDetail = "请先完成多设备同步配置"
+            syncDetail = L10n.t("s486")
             return
         }
         syncing = true
-        syncStatus = "正在同步"
+        syncStatus = L10n.t("s416")
         syncSucceeded = nil
         syncDetail = ""
         let deviceID = SyncManager.normalizedDeviceID(cfg.device_id)
@@ -209,17 +211,17 @@ final class Store: ObservableObject {
                 self.syncFailStreak = 0
                 let formatter = DateFormatter()
                 formatter.dateFormat = "HH:mm"
-                self.syncStatus = "已同步 " + formatter.string(from: Date())
+                self.syncStatus = L10n.t("s235") + formatter.string(from: Date())
                 self.refresh()
             } else if result.code == .busy {
                 self.syncSucceeded = nil
-                self.syncStatus = "同步任务已在运行"
+                self.syncStatus = L10n.t("s174")
             } else {
                 self.syncSucceeded = false
                 self.syncFailStreak += 1
                 self.syncStatus = self.syncFailStreak > 1
-                    ? "同步失败（连续 \(self.syncFailStreak) 次）"
-                    : "同步失败"
+                    ? L10n.f("s176", self.syncFailStreak)
+                    : L10n.t("s175")
             }
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
@@ -253,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var popover = NSPopover()
     lazy var statusMenu: NSMenu = {
         let menu = NSMenu()
-        let quitItem = NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L10n.t("s519"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         return menu
@@ -284,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let host = NSHostingController(rootView: PanelView(
             store: store,
             layout: panelLayout
-        ))
+        ).environment(\.locale, AppLanguage.currentLocale))
         // 页面切换只改变固定画布内部内容，禁止 preferredContentSize 驱动
         // NSPopover 在全屏 Space 中重新选择屏幕和锚点。
         host.sizingOptions = []
@@ -439,15 +441,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         var summaryParts = displayedMetrics.map { metric in
             let name = metric.kind.displayName
             if metric.remaining != nil {
-                return "\(name) 剩余 \(metric.value)%"
+                return L10n.f("s060", name, metric.value)
             }
             return "\(name) \(metric.value)"
         }
         if store.keepAwake.active {
-            summaryParts.insert("保持唤醒已开启", at: 0)
+            summaryParts.insert(L10n.t("s110"), at: 0)
         }
         if store.syncFailStreak >= 3 {
-            summaryParts.insert("多设备同步已连续失败 \(store.syncFailStreak) 次，请打开设置查看", at: 0)
+            summaryParts.insert(L10n.f("s211", store.syncFailStreak), at: 0)
         }
         let summary = summaryParts.joined(separator: " · ")
         let accessibility = summary.isEmpty ? "Tokei" : "Tokei · \(summary)"
@@ -531,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// 只在打开之前调用，开着的时候绝不重量——见 `PanelPlacement.contentSize`。
     private func measuredPanelSize() -> CGSize {
         let probe = NSHostingController(
-            rootView: PanelView(store: store, layout: panelLayout, scrollable: false))
+            rootView: PanelView(store: store, layout: panelLayout, scrollable: false).environment(\.locale, AppLanguage.currentLocale))
         probe.view.layoutSubtreeIfNeeded()
         let size = probe.sizeThatFits(in: CGSize(width: CGFloat.greatestFiniteMagnitude,
                                                  height: CGFloat.greatestFiniteMagnitude))
@@ -550,16 +552,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 // 离屏截图模式:Tokei --shot /path/out.png
 enum Shot {
     static func run(path: String) {
+        if let lIdx = CommandLine.arguments.firstIndex(of: "--lang"),
+           CommandLine.arguments.count > lIdx + 1 {
+            let lang = CommandLine.arguments[lIdx + 1]
+            UserDefaults.standard.set(lang, forKey: AppLanguage.defaultsKey)
+        }
         _ = NSApplication.shared
         var usage: Usage?
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async { usage = DataLoader.loadSync(); sem.signal() }
-        sem.wait()
+        let thread = Thread {
+            usage = DataLoader.loadSync()
+        }
+        thread.stackSize = 8 * 1024 * 1024
+        thread.start()
+        while !thread.isFinished {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+        }
         MainActor.assumeIsolated {
             let store = Store()
             store.usage = usage
-            store.lastUpdated = "预览"
+            let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+            store.lastUpdated = L10n.t("s355") + f.string(from: Date())
             let content = PanelView(store: store, scrollable: false)
+                .environment(\.locale, AppLanguage.currentLocale)
                 .background(Color(red: 0.22, green: 0.23, blue: 0.26))
             let renderer = ImageRenderer(content: content)
             renderer.scale = 2

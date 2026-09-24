@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Tokei",
+    defaultLocalization: "en",
     platforms: [.macOS(.v13)],
     targets: [
         .target(
@@ -30,7 +31,8 @@ let package = Package(
         .executableTarget(
             name: "Tokei",
             dependencies: ["CZstd", "TokeiUpdateSecurity", "GrokBotBridge"],
-            path: "Sources/Tokei"
+            path: "Sources/Tokei",
+            resources: [.process("Resources")]
         )
     ]
 )

@@ -9,9 +9,9 @@ enum QuotaHistoryTool: String, CaseIterable, Identifiable {
     var windowNames: [String] {
         switch self {
         case .claude:
-            return ["5 小时", "周 · 全部", "周 · Fable"]
+            return [L10n.quota5h, L10n.quotaWeekAll, L10n.quotaWeekFable]
         case .codex:
-            return ["周"]
+            return [L10n.quotaWeek]
         }
     }
 }
@@ -239,7 +239,7 @@ struct QuotaHistoryProjection {
         tool: QuotaHistoryTool
     ) -> [QuotaModelActivity] {
         let all = activity(for: point, tool: tool)
-        guard tool == .claude, window == "周 · Fable" else { return all }
+        guard tool == .claude, window == L10n.quotaWeekFable else { return all }
         return all.filter { $0.model.localizedCaseInsensitiveContains("fable") }
     }
 
@@ -249,13 +249,13 @@ struct QuotaHistoryProjection {
         tool: QuotaHistoryTool
     ) -> Double? {
         switch (tool, window) {
-        case (.claude, "5 小时"):
+        case (.claude, L10n.quota5h):
             return point.claudeFiveHourRemaining
-        case (.claude, "周 · 全部"):
+        case (.claude, L10n.quotaWeekAll):
             return point.claudeWeekRemaining
-        case (.claude, "周 · Fable"):
+        case (.claude, L10n.quotaWeekFable):
             return point.claudeFableWeekRemaining
-        case (.codex, "周"):
+        case (.codex, L10n.quotaWeek):
             return point.codexWeekRemaining
         default:
             return nil

@@ -50,6 +50,7 @@ struct PanelView: View {
         var presentation: ToolCardPresentation = .standard
         let content: AnyView
     }
+    @AppStorage(AppLanguage.defaultsKey) private var appLanguageRaw = AppLanguage.system.rawValue
     @AppStorage("showClaude") private var showClaude = true
     @AppStorage("showCodex") private var showCodex = true
     @AppStorage("showGemini") private var showGemini = true
@@ -273,7 +274,7 @@ struct PanelView: View {
                             .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                             .tracking(0.5)
                             .lineLimit(1)
-                        Text("知度 · AI 用量")
+                        Text(L10n.t("s448"))
                             .font(.system(size: Theme.fontSize(9)))
                             .foregroundStyle(Theme.tTertiary)
                             .lineLimit(1)
@@ -283,13 +284,13 @@ struct PanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .tip("主页")
+            .tip(L10n.tabHome)
             updatePill
             if store.syncFailStreak >= 3 {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: Theme.fontSize(11)))
                     .foregroundStyle(.orange)
-                    .help("多设备同步已连续失败 \(store.syncFailStreak) 次：\(store.syncStatus)\n\(store.syncDetail)")
+                    .help(L10n.f("s212", store.syncFailStreak, store.syncStatus, store.syncDetail))
             }
             Spacer()
             if hasMultipleDevices {
@@ -309,7 +310,7 @@ struct PanelView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .tip("项目足迹")
+            .tip(L10n.t("tab_projects"))
             Button {
                 mode = mode == .quotaHistory ? .cards : .quotaHistory
             } label: {
@@ -321,7 +322,7 @@ struct PanelView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .tip("额度曲线")
+            .tip(L10n.t("tab_quota"))
             Button {
                 withAnimation(.easeInOut(duration: 0.35)) { mode = mode == .dashboard ? .cards : .dashboard }
             } label: {
@@ -333,7 +334,7 @@ struct PanelView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .tip("数据面板")
+            .tip(L10n.t("tab_dashboard"))
             Button {
                 withAnimation(.easeInOut(duration: 0.35)) { mode = mode == .settings ? .cards : .settings }
             } label: {
@@ -345,20 +346,20 @@ struct PanelView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .tip("设置")
+            .tip(L10n.t("settings"))
         }
     }
 
     var deviceScopePicker: some View {
         Picker("", selection: $store.showAllDevices) {
-            Text("本机").tag(false)
-            Text("全部").tag(true)
+            Text(L10n.scopeLocal).tag(false)
+            Text(L10n.scopeAll).tag(true)
         }
         .pickerStyle(.segmented)
         .frame(width: 92)
         .controlSize(.mini)
         .onChange(of: store.showAllDevices) { _ in store.applyDisplayMode() }
-        .tip("数据范围")
+        .tip(L10n.t("s291"))
     }
 
     private func toolCards(for u: Usage) -> [ToolCardItem] {
@@ -429,17 +430,17 @@ struct PanelView: View {
                          content: AnyView(providerQuotaBlock(
                             "Cursor", quota: u.cursor, usage: cursorUsage,
                             modelsOpen: $cursorModelsOpen, tint: Theme.cursor,
-                            setupHint: "请确认 Cursor.app 已登录；Tokei 会复用其本地登录态读取额度。"))),
+                            setupHint: L10n.t("s492")))),
             ToolCardItem(id: "zed", name: "Zed", visible: showZed, active: showZed,
                          tint: Theme.zed, presentation: .compactStatus,
                          content: AnyView(providerQuotaBlock(
                             "Zed", quota: u.zed, tint: Theme.zed,
-                            setupHint: "请先在 Zed 中登录 GitHub，再到设置的「Provider 额度」中授权读取登录态。"))),
+                            setupHint: L10n.t("s485")))),
             ToolCardItem(id: "sub2api", name: "Sub2API", visible: showSub2API, active: showSub2API,
                          tint: Theme.sub2api, presentation: .compactStatus,
                          content: AnyView(providerQuotaBlock(
                             "Sub2API", quota: u.sub2api, tint: Theme.sub2api,
-                            setupHint: "请在设置的「Provider 额度」中保存 Base URL 与 Group API Key。"))),
+                            setupHint: L10n.t("s488")))),
             ToolCardItem(id: "zai", name: "z.ai / GLM", visible: showZai,
                          active: u.zai.available || zaiUsage.totalTokens > 0,
                          tint: Theme.zai,
@@ -447,7 +448,7 @@ struct PanelView: View {
                          content: AnyView(providerQuotaBlock(
                             "z.ai / GLM", quota: u.zai, usage: zaiUsage,
                             modelsOpen: $zaiModelsOpen, tint: Theme.zai,
-                            setupHint: "请在设置的「Provider 额度」中选择区域并保存 API Key。"))),
+                            setupHint: L10n.t("s489")))),
             ToolCardItem(id: "grok", name: "Grok", visible: showGrok,
                          active: kr.sessions > 0 || kr.usage_calls > 0 || u.grok.pct != nil,
                          tint: Theme.grok,
@@ -520,7 +521,7 @@ struct PanelView: View {
                          tint: Theme.opencode, content: AnyView(tokenUsageBlock(title: "OpenCode", or, tint: Theme.opencode, modelsOpen: $openCodeModelsOpen, toolID: "opencode"))),
             ToolCardItem(id: "qwencode", name: "Qwen Code", visible: showQwenCode, active: qcr.sessions > 0,
                          tint: Theme.qwencode, content: AnyView(tokenUsageBlock(title: "Qwen Code", qcr, tint: Theme.qwencode, modelsOpen: $qwenCodeModelsOpen, toolID: "qwencode"))),
-            ToolCardItem(id: "qwenwork", name: "千问办公", visible: showQwenWork,
+            ToolCardItem(id: "qwenwork", name: L10n.t("s142"), visible: showQwenWork,
                          active: qwenWorkQuotaEnabled || u.qwenwork.available ||
                              u.qwenwork.remaining != nil || !u.qwenwork.segments.isEmpty ||
                              u.qwenwork.shared != nil,
@@ -589,16 +590,18 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 11) {
             cardHead("Claude Code", tint: Theme.claude, sessions: r.sessions, toolID: "claude")
             if r.sessions > 0 {
-                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw), caption: "\(sel.label) 总量", tint: Theme.claude)
+                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw), caption: L10n.f("s066", sel.label), tint: Theme.claude)
                 metricGrid([
-                    .init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost)),
+                    .init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost)),
                 ], hit: r.hit, extra: [
-                    .init("arrow.down", "输入", Fmt.human(r.in)),
-                    .init("arrow.up", "输出", Fmt.human(r.out)),
-                    .init("bolt.fill", "缓存读", Fmt.human(r.cr)),
-                    .init("square.stack.3d.up.fill", "缓存写", Fmt.human(r.cw)),
+                    .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                    .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
+                    .init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr)),
+                    .init("square.stack.3d.up.fill", L10n.metricCacheWrite, Fmt.human(r.cw)),
                 ], tint: Theme.claude)
-                let claudeRows = r.models.filter { $0.name != "合成" }.map { m in
+                let claudeRows = r.models.filter {
+                    $0.name != L10n.modelSynthetic && $0.name != L10n.legacySyntheticName && $0.name != "<synthetic>"
+                }.map { m in
                     let denom = m.cr + m.cw + m.in
                     let hit = denom > 0 ? Double(m.cr) / Double(denom) * 100 : 0
                     return ModelRow(name: m.name, pin: m.pin, pout: m.pout, cost: m.cost, total: m.total, hit: hit,
@@ -616,9 +619,9 @@ struct PanelView: View {
 
             if compactExpired {
                 quotaStateNotice(
-                    title: "额度数据已过期",
-                    detail: "等待 Claude Code 更新额度，恢复后将自动展示。",
-                    source: "Claude Code 额度缓存",
+                    title: L10n.t("s541"),
+                    detail: L10n.t("s452"),
+                    source: L10n.t("s015"),
                     updated: c.q_updated,
                     tint: Theme.claude,
                     warning: true
@@ -626,19 +629,19 @@ struct PanelView: View {
             } else if quotaState != .unavailable {
                 thinDivider
                 if let q5 = c.q5, c.q5_stale != true {
-                    quotaRow(title: "5h 剩余", pct: 100 - q5, reset: c.q5_reset, tint: Theme.claude)
+                    quotaRow(title: L10n.t("s009"), pct: 100 - q5, reset: c.q5_reset, tint: Theme.claude)
                 }
                 if let q7 = c.q7, c.q7_stale != true {
-                    quotaRow(title: "周 · 全部剩余", pct: 100 - q7, reset: c.q7_reset, tint: Theme.claude)
+                    quotaRow(title: L10n.t("s189"), pct: 100 - q7, reset: c.q7_reset, tint: Theme.claude)
                 }
                 if let qf = c.qf, c.qf_stale != true {
-                    quotaRow(title: "周 · Fable 剩余", pct: 100 - qf, reset: c.qf_reset, tint: .orange)
+                    quotaRow(title: L10n.t("s188"), pct: 100 - qf, reset: c.qf_reset, tint: .orange)
                 }
                 if quotaState == .expired {
                     quotaStateNotice(
-                        title: "额度数据已过期",
-                        detail: "当前用量仍可查看；额度更新后会自动恢复。",
-                        source: "Claude Code 额度缓存",
+                        title: L10n.t("s541"),
+                        detail: L10n.t("s256"),
+                        source: L10n.t("s015"),
                         updated: c.q_updated,
                         tint: Theme.claude,
                         warning: true
@@ -649,11 +652,11 @@ struct PanelView: View {
             } else if r.sessions > 0 {
                 thinDivider
                 quotaStateNotice(
-                    title: "暂未获取到额度数据",
+                    title: L10n.t("s353"),
                     detail: claudeCLIQuotaEnabled
-                        ? "用量统计不受影响；登录态或网络恢复后会自动重试。"
-                        : "仅使用 CLI 时，可在「隐私与额度」开启 Claude Code CLI 额度查询。",
-                    source: "Claude Code 额度缓存",
+                        ? L10n.t("s445")
+                        : L10n.t("s100"),
+                    source: L10n.t("s015"),
                     updated: c.q_updated,
                     tint: Theme.claude
                 )
@@ -669,15 +672,15 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 11) {
             cardHead("Codex", tint: Theme.codex, sessions: r.sessions, toolID: "codex")
             if r.sessions > 0 {
-                CostHeadline(value: Fmt.human(r.in + r.cached + r.out), caption: "\(sel.label) 总量", tint: Theme.codex)
-                metricGrid([.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost))],
+                CostHeadline(value: Fmt.human(r.in + r.cached + r.out), caption: L10n.f("s066", sel.label), tint: Theme.codex)
+                metricGrid([.init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost))],
                     hit: r.hit, extra: {
                     var items: [Metric] = [
-                        .init("arrow.down", "输入", Fmt.human(r.in)),
-                        .init("bolt.fill", "缓存读", Fmt.human(r.cached)),
-                        .init("arrow.up", "输出", Fmt.human(r.out)),
+                        .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                        .init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cached)),
+                        .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
                     ]
-                    if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
+                    if r.reason > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
                     return items
                 }(), tint: Theme.codex)
                 if !r.models.isEmpty {
@@ -694,19 +697,19 @@ struct PanelView: View {
                 thinDivider
             }
             if let p5 = x.p5, x.p5_stale != true {
-                quotaRow(title: "5h 剩余", pct: 100 - p5, reset: x.r5, tint: Theme.codex)
+                quotaRow(title: L10n.t("s009"), pct: 100 - p5, reset: x.r5, tint: Theme.codex)
             }
             if let pw = x.pw, x.pw_stale != true {
-                quotaRow(title: "周剩余", pct: 100 - pw, reset: x.rw, tint: Theme.codex)
+                quotaRow(title: L10n.t("s190"), pct: 100 - pw, reset: x.rw, tint: Theme.codex)
             }
             // Reserve 常驻:额度行跟 5h/周排在一起;按模型紧跟额度行,不跟重置卡/plan隔开。
             if let q = x.reserveQuota, let pct = q.usedPercent, q.stale != true {
-                quotaRow(title: "Reserve 剩余", pct: 100 - pct, detail: "常规额度外", reset: q.resetsAt, tint: Theme.codex)
+                quotaRow(title: L10n.t("s034"), pct: 100 - pct, detail: L10n.t("s246"), reset: q.resetsAt, tint: Theme.codex)
             } else if let q = x.reserveQuota, q.stale == true {
                 quotaStateNotice(
-                    title: "Reserve 额度读数已过期",
-                    detail: "重置后已有新的 Reserve 消耗；等待下一条额度记录更新。",
-                    source: "Codex 本地状态",
+                    title: L10n.t("s035"),
+                    detail: L10n.t("s527"),
+                    source: L10n.t("s018"),
                     updated: q.updated,
                     tint: Theme.codex,
                     warning: true
@@ -736,9 +739,9 @@ struct PanelView: View {
             if r.sessions > 0 && !hasQuotaData {
                 thinDivider
                 quotaStateNotice(
-                    title: "暂未获取到额度数据",
-                    detail: "用量统计不受影响；检测到订阅周期后会自动展示。",
-                    source: "Codex 本地状态",
+                    title: L10n.t("s353"),
+                    detail: L10n.t("s443"),
+                    source: L10n.t("s018"),
                     updated: nil,
                     tint: Theme.codex
                 )
@@ -755,7 +758,7 @@ struct PanelView: View {
             cardHead("Kimi Code", tint: Theme.kimicode, sessions: r.sessions, toolID: "kimicode")
             if r.sessions > 0 {
                 CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw + r.reason),
-                             caption: "\(sel.label) 总量", tint: Theme.kimicode)
+                             caption: L10n.f("s066", sel.label), tint: Theme.kimicode)
                 metricGrid([], hit: r.hit, extra: tokenUsageMetrics(r), tint: Theme.kimicode)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: $kimiCodeModelsOpen, tint: Theme.kimicode)
@@ -772,16 +775,16 @@ struct PanelView: View {
                 thinDivider
             }
             if let p5 = x.p5, x.p5_stale != true {
-                quotaRow(title: "5h 剩余", pct: 100 - p5, reset: x.r5, tint: Theme.kimicode)
+                quotaRow(title: L10n.t("s009"), pct: 100 - p5, reset: x.r5, tint: Theme.kimicode)
             }
             if let pw = x.pw, x.pw_stale != true {
                 // 接口只给了这一档的重置时刻,没有说周期是周还是月,所以标题不写周期名。
-                quotaRow(title: "订阅额度剩余", pct: 100 - pw, reset: x.rw, tint: Theme.kimicode)
+                quotaRow(title: L10n.t("s479"), pct: 100 - pw, reset: x.rw, tint: Theme.kimicode)
             }
             if x.hasStaleQuota {
                 quotaStateNotice(
-                    title: "额度读数已过期",
-                    detail: "Kimi Code 的登录态很快到期,过期后 Tokei 不再查询官方额度,也不会代它刷新。在 Kimi Code 里发一条消息即可让它自行刷新,额度随后恢复更新。",
+                    title: L10n.t("s551"),
+                    detail: L10n.t("s030"),
                     source: "api.kimi.com",
                     updated: x.q_updated,
                     tint: Theme.kimicode,
@@ -802,9 +805,9 @@ struct PanelView: View {
             if r.sessions > 0 && !x.hasQuota && !x.hasStaleQuota {
                 thinDivider
                 quotaStateNotice(
-                    title: "暂未获取到额度数据",
-                    detail: "用量统计不受影响；登录 Kimi Code 后会自动展示官方额度。",
-                    source: "Kimi Code 本地登录态",
+                    title: L10n.t("s353"),
+                    detail: L10n.t("s444"),
+                    source: L10n.t("s029"),
                     updated: nil,
                     tint: Theme.kimicode
                 )
@@ -824,15 +827,15 @@ struct PanelView: View {
                 Image(systemName: "arrow.clockwise.circle.fill")
                     .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.codex)
-                Text("重置卡")
+                Text(L10n.t("s526"))
                     .font(.system(size: Theme.fontSize(11)))
                     .foregroundStyle(Theme.tSecondary)
-                Text("\(cards.count) 张")
+                Text(L10n.f("s049", cards.count))
                     .font(.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
                 Spacer(minLength: 6)
                 if let nearest = expirations.first {
-                    Text("最近 \(Fmt.beijingTime(nearest)) · 北京时间")
+                    Text(L10n.f("s367", Fmt.beijingTime(nearest)))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -843,16 +846,16 @@ struct PanelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("查看重置卡到期时间")
+        .help(L10n.t("s401"))
 
         if codexResetCardsOpen {
             VStack(alignment: .leading, spacing: 7) {
                 HStack {
-                    Text("到期时间")
+                    Text(L10n.t("s130"))
                         .font(.system(size: Theme.fontSize(9.5), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                     Spacer()
-                    Text("北京时间 UTC+8")
+                    Text(L10n.t("s140"))
                         .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -863,7 +866,7 @@ struct PanelView: View {
                             .foregroundStyle(Theme.codex)
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(Theme.codex.opacity(0.14)))
-                        Text("完整重置")
+                        Text(L10n.t("s219"))
                             .font(.system(size: Theme.fontSize(10.5), weight: .medium))
                             .foregroundStyle(Theme.tSecondary)
                         Spacer()
@@ -903,15 +906,15 @@ struct PanelView: View {
             if r.hasUsage {
                 cardHead("Gemini / Antigravity", tint: Theme.gemini, sessions: r.sessions,
                          toolID: "gemini")
-                CostHeadline(value: Fmt.human(r.totalTokens), caption: "\(usageLabel) 总量", tint: Theme.gemini)
-                metricGrid([.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost))],
+                CostHeadline(value: Fmt.human(r.totalTokens), caption: L10n.f("s074", usageLabel), tint: Theme.gemini)
+                metricGrid([.init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost))],
                     hit: r.hit, extra: {
                     var items: [Metric] = [
-                        .init("arrow.down", "输入", Fmt.human(r.in)),
-                        .init("arrow.up", "输出", Fmt.human(r.out)),
-                        .init("bolt.fill", "缓存", Fmt.human(r.cached)),
+                        .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                        .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
+                        .init("bolt.fill", L10n.t("s462"), Fmt.human(r.cached)),
                     ]
-                    if r.thoughts > 0 { items.append(.init("brain", "推理", Fmt.human(r.thoughts))) }
+                    if r.thoughts > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.thoughts))) }
                     return items
                 }(), tint: Theme.gemini)
                 if !r.models.isEmpty {
@@ -941,8 +944,8 @@ struct PanelView: View {
             cardHead("Devin", tint: Theme.devin, sessions: r.sessions, toolID: "devin")
             if hasUsage {
                 CostHeadline(value: Fmt.human(r.totalTokens),
-                             caption: "\(sel.label) 总量", tint: Theme.devin)
-                metricGrid([.init("dollarsign.circle", "≈成本",
+                             caption: L10n.f("s066", sel.label), tint: Theme.devin)
+                metricGrid([.init("dollarsign.circle", L10n.metricCost,
                                   String(format: "$%.2f", r.cost))],
                            hit: r.hit, extra: tokenUsageMetrics(r), tint: Theme.devin)
                 if !r.models.isEmpty {
@@ -953,8 +956,8 @@ struct PanelView: View {
                 if hasUsage { thinDivider }
                 providerQuotaContent(quota, tint: Theme.devin)
             } else if !hasUsage {
-                Text("请打开一次 Devin 桌面端并登录，它会把套餐额度写入本地；"
-                     + "Token 统计来自 Devin CLI 的会话库。")
+                Text(L10n.t("s490")
+                     + L10n.t("s045"))
                     .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -999,30 +1002,30 @@ struct PanelView: View {
     ) -> some View {
         var top: [Metric] = []
         if r.cost > 0 {
-            top.append(.init("dollarsign.circle", "API 价", String(format: "$%.2f", r.cost)))
+            top.append(.init("dollarsign.circle", L10n.t("s012"), String(format: "$%.2f", r.cost)))
         }
         if r.requests > 0 {
-            top.append(.init("arrow.triangle.2.circlepath", "请求", Fmt.human(r.requests)))
+            top.append(.init("arrow.triangle.2.circlepath", L10n.t("s491"), Fmt.human(r.requests)))
         }
         var details: [Metric] = []
         if r.hasComponents {
             details = [
-                .init("arrow.down", "输入", Fmt.human(r.in)),
-                .init("arrow.up", "输出", Fmt.human(r.out)),
+                .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
             ]
-            if r.cr > 0 { details.append(.init("bolt.fill", "缓存读", Fmt.human(r.cr))) }
+            if r.cr > 0 { details.append(.init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr))) }
             if r.cw > 0 {
-                details.append(.init("square.stack.3d.up.fill", "缓存写", Fmt.human(r.cw)))
+                details.append(.init("square.stack.3d.up.fill", L10n.metricCacheWrite, Fmt.human(r.cw)))
             }
-            if r.reason > 0 { details.append(.init("brain", "推理", Fmt.human(r.reason))) }
+            if r.reason > 0 { details.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
         }
         return VStack(alignment: .leading, spacing: 9) {
             CostHeadline(
                 value: Fmt.human(r.totalTokens),
-                caption: "\(r.coverage ?? periodLabel ?? sel.label) 账号总量",
+                caption: L10n.f("s061", r.coverage ?? periodLabel ?? sel.label),
                 tint: tint
             )
-            Text("账号级用量 · 单列统计，避免与本地工具日志重复计算")
+            Text(L10n.t("s500"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
             if !top.isEmpty || !details.isEmpty {
@@ -1072,7 +1075,7 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(11)))
                         .foregroundStyle(Theme.tSecondary)
                     Spacer(minLength: 6)
-                    Text(window.detail ?? "额度比例未知")
+                    Text(window.detail ?? L10n.t("s549"))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                         .multilineTextAlignment(.trailing)
@@ -1108,9 +1111,9 @@ struct PanelView: View {
 
         if quota.stale {
             quotaStateNotice(
-                title: "额度数据已过期",
-                detail: "当前展示最近一次成功结果；登录态或网络恢复后会自动刷新。",
-                source: quota.source ?? "Provider 缓存",
+                title: L10n.t("s541"),
+                detail: L10n.t("s252"),
+                source: quota.source ?? L10n.t("s032"),
                 updated: quota.updated,
                 tint: tint,
                 warning: true
@@ -1119,7 +1122,7 @@ struct PanelView: View {
             HStack(spacing: 5) {
                 Image(systemName: "clock")
                     .font(.system(size: Theme.fontSize(8.5)))
-                Text("额度更新于 \(Fmt.reset(updated))")
+                Text(L10n.f("s545", Fmt.reset(updated)))
                     .font(.system(size: Theme.fontSize(9), design: .monospaced))
                 Spacer(minLength: 4)
             }
@@ -1137,7 +1140,7 @@ struct PanelView: View {
     }
 
     func providerQuotaDetailValue(_ detail: ProviderQuotaDetail) -> String {
-        if detail.label.contains("到期"), let epoch = Int(detail.value) {
+        if detail.label.contains(L10n.t("s129")), let epoch = Int(detail.value) {
             return Fmt.reset(epoch)
         }
         return detail.value
@@ -1158,7 +1161,7 @@ struct PanelView: View {
                      toolID: hasActivity && displayedRange == sel ? "grok-bot" : nil)
             if hasUsage {
                 if displayedRange != sel {
-                    Text("\(sel.label)暂无活动，显示\(displayedRange.label)最近记录")
+                    Text(L10n.f("s068", sel.label, displayedRange.label))
                         .font(.system(size: Theme.fontSize(9.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -1169,35 +1172,35 @@ struct PanelView: View {
                     periodLabel: displayedRange.label
                 )
                 if hasActivity {
-                    Text("本地记录 · \(r.turns) 条消息 · \(r.calls) 次响应")
+                    Text(L10n.f("s388", r.turns, r.calls))
                         .font(.system(size: Theme.fontSize(8.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
             } else if hasActivity {
                 if displayedRange != sel {
-                    Text("\(sel.label)暂无活动，显示\(displayedRange.label)最近记录")
+                    Text(L10n.f("s068", sel.label, displayedRange.label))
                         .font(.system(size: Theme.fontSize(9.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
                 CostHeadline(
                     value: Fmt.human(r.calls > 0 ? r.calls : r.turns),
-                    caption: "\(displayedRange.label) 响应",
+                    caption: L10n.f("s056", displayedRange.label),
                     tint: Theme.grokBot
                 )
                 metricGrid({
                     var items: [Metric] = [
-                        .init("bubble.left", "你的消息", Fmt.human(r.turns)),
-                        .init("sparkles", "响应", Fmt.human(r.calls)),
+                        .init("bubble.left", L10n.t("s106"), Fmt.human(r.turns)),
+                        .init("sparkles", L10n.t("s192"), Fmt.human(r.calls)),
                     ]
                     if r.tools > 0 {
-                        items.append(.init("wrench.and.screwdriver", "工具调用", Fmt.human(r.tools)))
+                        items.append(.init("wrench.and.screwdriver", L10n.t("s231"), Fmt.human(r.tools)))
                     }
                     if r.duration > 0 {
-                        items.append(.init("clock", "活跃", Fmt.duration(r.duration * 1000)))
+                        items.append(.init("clock", L10n.t("s425"), Fmt.duration(r.duration * 1000)))
                     }
                     return items
                 }(), tint: Theme.grokBot)
-                Text("本地活动 · 授权后显示官方 Token、模型和成本")
+                Text(L10n.t("s386"))
                     .font(.system(size: Theme.fontSize(8.5)))
                     .foregroundStyle(Theme.tTertiary)
             } else if !stat.quota.available {
@@ -1207,7 +1210,7 @@ struct PanelView: View {
                 if hasActivity || hasUsage { thinDivider }
                 providerQuotaContent(stat.quota, tint: Theme.grokBot)
             } else if grokBotQuotaEnabled {
-                Text("官方数据暂时不可用，Tokei 将自动重试")
+                Text(L10n.t("s220"))
                     .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
             }
@@ -1226,41 +1229,41 @@ struct PanelView: View {
             cardHead("Grok", tint: Theme.grok, sessions: r.sessions, toolID: "grok")
             if hasUsage {
                 CostHeadline(value: Fmt.human(r.tokens),
-                             caption: r.usage_available ? "\(sel.label) 真实用量" : "\(sel.label) 上下文快照",
+                             caption: r.usage_available ? L10n.f("s067", sel.label) : L10n.f("s065", sel.label),
                              tint: Theme.grok)
                 let grokMetrics: [Metric] = {
                     var items: [Metric] = []
                     if r.usage_available {
                         if r.cost > 0 {
-                            items.append(.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost)))
+                            items.append(.init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost)))
                         }
-                        items.append(.init("arrow.down", "输入", Fmt.human(r.in)))
-                        items.append(.init("bolt.fill", "缓存读", Fmt.human(r.cr)))
-                        items.append(.init("arrow.up", "输出", Fmt.human(r.out)))
-                        if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
-                        items.append(.init("waveform", "调用", "\(r.usage_calls)"))
+                        items.append(.init("arrow.down", L10n.metricIn, Fmt.human(r.in)))
+                        items.append(.init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr)))
+                        items.append(.init("arrow.up", L10n.metricOut, Fmt.human(r.out)))
+                        if r.reason > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
+                        items.append(.init("waveform", L10n.metricCalls, "\(r.usage_calls)"))
                     }
                     items.append(contentsOf: [
-                        .init("arrow.triangle.2.circlepath", "轮次", "\(r.turns ?? 0)"),
-                        .init("wrench.and.screwdriver", "工具", "\(r.tools ?? 0)"),
+                        .init("arrow.triangle.2.circlepath", L10n.t("s504"), "\(r.turns ?? 0)"),
+                        .init("wrench.and.screwdriver", L10n.metricTools, "\(r.tools ?? 0)"),
                     ])
                     if let duration = r.duration, duration > 0 {
-                        items.append(.init("clock", "耗时", Fmt.duration(duration * 1000)))
+                        items.append(.init("clock", L10n.t("s472"), Fmt.duration(duration * 1000)))
                     }
                     if let ctx = r.ctx, ctx > 0 {
-                        items.append(.init("chart.bar.fill", "窗口", String(format: "%.0f%%", ctx)))
+                        items.append(.init("chart.bar.fill", L10n.t("s450"), String(format: "%.0f%%", ctx)))
                     }
                     if let ttft = r.ttft, ttft > 0 {
-                        items.append(.init("timer", "首字", String(format: "%.1fs", Double(ttft) / 1000)))
+                        items.append(.init("timer", L10n.t("s552"), String(format: "%.1fs", Double(ttft) / 1000)))
                     }
                     if let response = r.response, response > 0 {
-                        items.append(.init("speedometer", "响应", String(format: "%.1fs", Double(response) / 1000)))
+                        items.append(.init("speedometer", L10n.t("s192"), String(format: "%.1fs", Double(response) / 1000)))
                     }
                     if (r.errors ?? 0) > 0 {
-                        items.append(.init("exclamationmark.triangle", "错误", "\(r.errors ?? 0)"))
+                        items.append(.init("exclamationmark.triangle", L10n.t("s529"), "\(r.errors ?? 0)"))
                     }
                     if (r.cancellations ?? 0) > 0 {
-                        items.append(.init("xmark.circle", "取消", "\(r.cancellations ?? 0)"))
+                        items.append(.init("xmark.circle", L10n.t("s156"), "\(r.cancellations ?? 0)"))
                     }
                     return items
                 }()
@@ -1273,9 +1276,9 @@ struct PanelView: View {
                 }
                 Text(r.usage_available
                      ? (r.cost > 0
-                        ? "来自 Grok Build 本地推理日志；成本按 API 价估算，订阅实付不按此。"
-                        : "来自 Grok Build 本地推理日志；当前模型未匹配到公开价格。")
-                     : "旧版日志未保存真实用量，当前仅展示上下文与执行指标。")
+                        ? L10n.t("s397")
+                        : L10n.t("s396"))
+                     : L10n.t("s341"))
                     .font(.system(size: Theme.fontSize(8.5)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1288,8 +1291,8 @@ struct PanelView: View {
 
             if compactExpired {
                 quotaStateNotice(
-                    title: "额度周期已结束",
-                    detail: "Grok 写入新周期日志后，将自动恢复额度展示。",
+                    title: L10n.t("s539"),
+                    detail: L10n.t("s025"),
                     source: grokQuotaSourceLabel(g.source),
                     updated: g.q_updated,
                     tint: Theme.grok,
@@ -1297,7 +1300,7 @@ struct PanelView: View {
                 )
             } else if let pct = g.pct, g.stale != true {
                 if hasUsage { thinDivider }
-                let title = (g.window == "month") ? "月剩余" : "周剩余"
+                let title = (g.window == "month") ? L10n.t("s370") : L10n.t("s190")
                 // 总剩余：同一周额度池。分产品 usagePercent 是该产品在池内的占用占比，不是独立额度剩余。
                 quotaRow(title: title, pct: 100 - pct, reset: g.reset, tint: Theme.grok)
                 ForEach(g.products.filter { $0.pct != nil }) { product in
@@ -1325,8 +1328,8 @@ struct PanelView: View {
             } else if quotaState == .expired {
                 if hasUsage { thinDivider }
                 quotaStateNotice(
-                    title: "额度周期已结束",
-                    detail: "当前用量仍可查看；新周期日志写入后会自动恢复。",
+                    title: L10n.t("s539"),
+                    detail: L10n.t("s255"),
                     source: grokQuotaSourceLabel(g.source),
                     updated: g.q_updated,
                     tint: Theme.grok,
@@ -1335,8 +1338,8 @@ struct PanelView: View {
             } else if hasUsage {
                 thinDivider
                 quotaStateNotice(
-                    title: "暂未获取到额度数据",
-                    detail: "用量统计不受影响；检测到订阅周期后会自动展示。",
+                    title: L10n.t("s353"),
+                    detail: L10n.t("s443"),
                     source: grokQuotaSourceLabel(g.source),
                     updated: g.q_updated,
                     tint: Theme.grok
@@ -1347,34 +1350,34 @@ struct PanelView: View {
 
     func grokQuotaStatus(_ stat: GrokStat) -> some View {
         let sourceLabel = grokQuotaSourceLabel(stat.source)
-        let updated = stat.q_updated.map { Fmt.reset($0) } ?? "更新时间未知"
+        let updated = stat.q_updated.map { Fmt.reset($0) } ?? L10n.t("s364")
         return HStack(spacing: 5) {
             Image(systemName: "clock")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("额度来源 \(sourceLabel) · \(updated)")
+            Text(L10n.f("s548", sourceLabel, updated))
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }
         .foregroundStyle(Theme.tTertiary)
         .help(stat.source == "live"
-              ? "已开启 Grok 实时额度查询。Grok Build / API 等为同一周额度池内的占用拆分，共享上方重置时间。"
-              : "默认只读 ~/.grok 本地日志，不访问网络")
+              ? L10n.t("s238")
+              : L10n.t("s556"))
     }
 
     private func grokQuotaSourceLabel(_ source: String?) -> String {
         switch source {
-        case "live": return "Grok 实时接口"
-        case "cache": return "Grok 本地缓存"
-        default: return "Grok 本地日志"
+        case "live": return L10n.grokLive
+        case "cache": return L10n.grokCache
+        default: return L10n.grokLog
         }
     }
 
     /// 账单 product 字段 → 更可读的名称。
     static func grokProductLabel(_ raw: String) -> String {
         switch raw.lowercased() {
-        case "grokbuild": return "Grok Build（本机 CLI）"
-        case "api": return "开放 API（api.x.ai）"
-        case "grokchat": return "Grok 网页聊天"
+        case "grokbuild": return L10n.t("s024")
+        case "api": return L10n.t("s251")
+        case "grokchat": return L10n.t("s027")
         default: return raw
         }
     }
@@ -1383,13 +1386,13 @@ struct PanelView: View {
     static func grokProductHelp(_ raw: String) -> String {
         switch raw.lowercased() {
         case "grokbuild":
-            return "Grok Build / 本机 CLI 编程消耗，占用本周统一额度池的比例。"
+            return L10n.t("s023")
         case "api":
-            return "通过 xAI 开放 API（api.x.ai / Console 密钥）调用模型的消耗，与 CLI 共用同一周额度池。"
+            return L10n.t("s522")
         case "grokchat":
-            return "grok.com 网页聊天消耗，与 CLI / 开放 API 共用同一周额度池。"
+            return L10n.t("s076")
         default:
-            return "该产品在本周统一额度池中的占用比例（与周剩余共用同一重置时间）。"
+            return L10n.t("s484")
         }
     }
 
@@ -1403,7 +1406,7 @@ struct PanelView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                 Spacer(minLength: 6)
-                Text(String(format: "占用 %.0f%%", usedPct))
+                Text(String(format: L10n.t("s147"), usedPct))
                     .font(.system(size: Theme.fontSize(12), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
             }
@@ -1416,13 +1419,13 @@ struct PanelView: View {
     @ViewBuilder
     func qwenWorkBlock(_ quota: QwenWorkQuota) -> some View {
         VStack(alignment: .leading, spacing: 11) {
-            cardHeadPlain("千问办公", tint: Theme.qwenwork)
+            cardHeadPlain(L10n.t("s142"), tint: Theme.qwenwork)
 
             if quota.available || quota.remaining != nil || !quota.segments.isEmpty || quota.shared != nil {
                 if quota.exceeded {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                        Text("官方额度状态：已用尽")
+                        Text(L10n.t("s221"))
                     }
                     .font(.system(size: Theme.fontSize(10), weight: .semibold))
                     .foregroundStyle(Color.red.opacity(0.92))
@@ -1431,7 +1434,7 @@ struct PanelView: View {
                 if let remaining = quota.remaining {
                     CostHeadline(
                         value: Fmt.credits(remaining),
-                        caption: quota.is_team ? "团队账号个人可用积分" : "个人可用积分",
+                        caption: quota.is_team ? L10n.t("s196") : L10n.t("s097"),
                         tint: Theme.qwenwork
                     )
                 }
@@ -1439,7 +1442,7 @@ struct PanelView: View {
                 // 有明确比例时才画进度条。部分千问办公套餐只返回绝对积分余额。
                 if let remainingPct = quota.remaining_pct {
                     quotaRow(
-                        title: "综合剩余比例",
+                        title: L10n.t("s461"),
                         pct: max(0, min(100, remainingPct)),
                         reset: nil,
                         tint: Theme.qwenwork
@@ -1447,16 +1450,16 @@ struct PanelView: View {
                 }
 
                 if let expiresAt = quota.expires_at {
-                    qwenWorkDateRow("额度有效期", epoch: expiresAt)
+                    qwenWorkDateRow(L10n.t("s546"), epoch: expiresAt)
                 }
                 if let planExpiration = quota.plan_expiration,
                    planExpiration != quota.expires_at {
-                    qwenWorkDateRow("套餐有效期", epoch: planExpiration)
+                    qwenWorkDateRow(L10n.t("s214"), epoch: planExpiration)
                 }
 
                 if !quota.segments.isEmpty {
                     thinDivider
-                    Text("个人积分明细")
+                    Text(L10n.t("s098"))
                         .font(.system(size: Theme.fontSize(10), weight: .semibold))
                         .foregroundStyle(Theme.tSecondary)
                     ForEach(Array(quota.segments.enumerated()), id: \.offset) { item in
@@ -1471,12 +1474,12 @@ struct PanelView: View {
 
                 qwenWorkQuotaStatus(quota)
             } else if qwenWorkQuotaEnabled {
-                Text("未读取到额度。请确认千问办公已登录并保持运行。")
+                Text(L10n.t("s377"))
                     .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("在设置的「隐私与额度」中开启查询后显示。")
+                Text(L10n.t("s202"))
                     .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1496,7 +1499,7 @@ struct PanelView: View {
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 if let remaining = segment.remaining {
-                    Text("剩余 \(Fmt.credits(remaining)) \(Self.qwenWorkUnitLabel(segment.unit))")
+                    Text(L10n.f("s133", Fmt.credits(remaining), Self.qwenWorkUnitLabel(segment.unit)))
                         .font(.system(size: Theme.fontSize(11), weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.tPrimary)
                 }
@@ -1504,7 +1507,7 @@ struct PanelView: View {
 
             if let total = segment.total, total > 0 {
                 let used = segment.used.map(Fmt.credits) ?? "?"
-                Text("已用 \(used) / 总量 \(Fmt.credits(total))")
+                Text(L10n.f("s242", used, Fmt.credits(total)))
                     .font(.system(size: Theme.fontSize(9), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
             }
@@ -1519,9 +1522,9 @@ struct PanelView: View {
             }
 
             if let renewsAt = segment.renews_at {
-                qwenWorkDateRow("续期", epoch: renewsAt)
+                qwenWorkDateRow(L10n.t("s460"), epoch: renewsAt)
             } else if let expiresAt = segment.expires_at {
-                qwenWorkDateRow("到期", epoch: expiresAt)
+                qwenWorkDateRow(L10n.t("s129"), epoch: expiresAt)
             }
         }
         .padding(.vertical, 1)
@@ -1533,22 +1536,22 @@ struct PanelView: View {
             : nil
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("团队共享资源包")
+                Text(L10n.t("s195"))
                     .font(.system(size: Theme.fontSize(10), weight: .semibold))
                     .foregroundStyle(Theme.tSecondary)
                 Spacer(minLength: 6)
                 if let remaining = shared.remaining {
-                    Text("剩余 \(Fmt.credits(remaining)) \(Self.qwenWorkUnitLabel(shared.unit))")
+                    Text(L10n.f("s134", Fmt.credits(remaining), Self.qwenWorkUnitLabel(shared.unit)))
                         .font(.system(size: Theme.fontSize(11), weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.tPrimary)
                 }
             }
-            Text("共享包独立展示，不计入上方个人积分")
+            Text(L10n.t("s120"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
             if let total = shared.total, total > 0 {
                 let used = shared.used.map(Fmt.credits) ?? "?"
-                Text("已用 \(used) / 总量 \(Fmt.credits(total))")
+                Text(L10n.f("s242", used, Fmt.credits(total)))
                     .font(.system(size: Theme.fontSize(9), design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
             }
@@ -1561,7 +1564,7 @@ struct PanelView: View {
                 }
             }
             if let expiresAt = shared.expires_at {
-                qwenWorkDateRow("共享包到期", epoch: expiresAt)
+                qwenWorkDateRow(L10n.t("s119"), epoch: expiresAt)
             }
         }
     }
@@ -1580,35 +1583,35 @@ struct PanelView: View {
     func qwenWorkQuotaStatus(_ quota: QwenWorkQuota) -> some View {
         let sourceLabel: String
         switch quota.source {
-        case "mcp", "local_mcp": sourceLabel = "本机 QwenWork 接口"
-        case "cache": sourceLabel = "本地缓存"
-        default: sourceLabel = "额度数据"
+        case "mcp", "local_mcp": sourceLabel = L10n.t("s392")
+        case "cache": sourceLabel = L10n.t("s387")
+        default: sourceLabel = L10n.t("s540")
         }
-        let updated = quota.updated.map { Fmt.reset($0) } ?? "更新时间未知"
+        let updated = quota.updated.map { Fmt.reset($0) } ?? L10n.t("s364")
         return HStack(spacing: 5) {
             Image(systemName: quota.stale ? "exclamationmark.triangle.fill" : "clock")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("\(quota.stale ? "缓存可能已过期" : sourceLabel) · \(updated)")
+            Text("\(quota.stale ? L10n.t("s464") : sourceLabel) · \(updated)")
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }
         .foregroundStyle(quota.stale ? Color.orange.opacity(0.88) : Theme.tTertiary)
-        .help("Tokei 仅通过千问办公桌面端的本机 QwenWork 接口读取额度，不读取或保存登录凭据。")
+        .help(L10n.t("s041"))
     }
 
     static func qwenWorkSegmentLabel(_ segment: QwenWorkQuotaSegment) -> String {
         let key = segment.id.isEmpty ? segment.kind : segment.id
         switch key.lowercased().replacingOccurrences(of: "-", with: "_") {
-        case "plan", "plan_credits": return "套餐积分"
-        case "addon", "add_on", "add_on_credits": return "加购积分"
-        case "shared_addon", "shared_add_on", "shared_add_on_credits": return "共享加购积分"
-        default: return key.isEmpty ? "积分" : key
+        case "plan", "plan_credits": return L10n.t("s215")
+        case "addon", "add_on", "add_on_credits": return L10n.t("s136")
+        case "shared_addon", "shared_add_on", "shared_add_on_credits": return L10n.t("s118")
+        default: return key.isEmpty ? L10n.t("s449") : key
         }
     }
 
     static func qwenWorkUnitLabel(_ unit: String?) -> String {
-        guard let unit, !unit.isEmpty else { return "积分" }
-        return ["credit", "credits"].contains(unit.lowercased()) ? "积分" : unit
+        guard let unit, !unit.isEmpty else { return L10n.t("s449") }
+        return ["credit", "credits"].contains(unit.lowercased()) ? L10n.t("s449") : unit
     }
 
     // MARK: - Qoder IDE 卡片
@@ -1619,33 +1622,33 @@ struct PanelView: View {
             let total = r.in + r.cached + r.out
             if r.calls > 0 || total > 0 {
                 if total > 0 {
-                    CostHeadline(value: Fmt.human(total), caption: "\(sel.label) 总量", tint: Theme.qoder)
+                    CostHeadline(value: Fmt.human(total), caption: L10n.f("s066", sel.label), tint: Theme.qoder)
                 }
                 metricGrid({
                     var items: [Metric] = [
-                        .init("terminal", "模型调用", "\(r.calls)"),
-                        .init("person.2", "会话", "\(r.sessions)"),
+                        .init("terminal", L10n.t("s413"), "\(r.calls)"),
+                        .init("person.2", L10n.metricSessions, "\(r.sessions)"),
                     ]
                     if r.sub_agents > 0 {
-                        items.append(.init("point.3.connected.trianglepath.dotted", "子agent", "\(r.sub_agents)"))
+                        items.append(.init("point.3.connected.trianglepath.dotted", L10n.t("s216"), "\(r.sub_agents)"))
                     }
                     if r.messages > 0 {
-                        items.append(.init("bubble.left.and.bubble.right", "消息数", Fmt.human(r.messages)))
+                        items.append(.init("bubble.left.and.bubble.right", L10n.t("s430"), Fmt.human(r.messages)))
                     }
                     if r.ctx > 0 {
-                        items.append(.init("chart.bar.fill", "缓存命中", String(format: "%.0f%%", r.ctx)))
+                        items.append(.init("chart.bar.fill", L10n.t("s465"), String(format: "%.0f%%", r.ctx)))
                     }
                     if r.duration > 0 {
-                        items.append(.init("clock", "耗时", Fmt.duration(r.duration * 1000)))
+                        items.append(.init("clock", L10n.t("s472"), Fmt.duration(r.duration * 1000)))
                     }
                     if r.in > 0 {
-                        items.append(.init("arrow.down", "输入", Fmt.human(r.in)))
+                        items.append(.init("arrow.down", L10n.metricIn, Fmt.human(r.in)))
                     }
                     if r.out > 0 {
-                        items.append(.init("arrow.up", "输出", Fmt.human(r.out)))
+                        items.append(.init("arrow.up", L10n.metricOut, Fmt.human(r.out)))
                     }
                     if r.cached > 0 {
-                        items.append(.init("bolt.fill", "缓存读", Fmt.human(r.cached)))
+                        items.append(.init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cached)))
                     }
                     return items
                 }(), tint: Theme.qoder)
@@ -1665,24 +1668,24 @@ struct PanelView: View {
             cardHeadPlain("QoderWork", tint: Theme.qoderwork, toolID: "qoderwork")
             if r.calls > 0 || r.totalTokens > 0 {
                 if r.totalTokens > 0 {
-                    CostHeadline(value: Fmt.human(r.totalTokens), caption: "\(sel.label) 总量", tint: Theme.qoderwork)
+                    CostHeadline(value: Fmt.human(r.totalTokens), caption: L10n.f("s066", sel.label), tint: Theme.qoderwork)
                 }
                 metricGrid({
                     var items: [Metric] = [
-                        .init("terminal", "任务", "\(r.calls)"),
-                        .init("person.2", "会话", "\(r.sessions)"),
-                        .init("clock", "耗时", Fmt.duration(r.duration)),
+                        .init("terminal", L10n.t("s104"), "\(r.calls)"),
+                        .init("person.2", L10n.metricSessions, "\(r.sessions)"),
+                        .init("clock", L10n.t("s472"), Fmt.duration(r.duration)),
                     ]
-                    if r.in > 0 { items.append(.init("arrow.down", "输入", Fmt.human(r.in))) }
-                    if r.out > 0 { items.append(.init("arrow.up", "输出", Fmt.human(r.out))) }
+                    if r.in > 0 { items.append(.init("arrow.down", L10n.metricIn, Fmt.human(r.in))) }
+                    if r.out > 0 { items.append(.init("arrow.up", L10n.metricOut, Fmt.human(r.out))) }
                     if r.sub_agents > 0 {
-                        items.append(.init("point.3.connected.trianglepath.dotted", "子agent", "\(r.sub_agents)"))
+                        items.append(.init("point.3.connected.trianglepath.dotted", L10n.t("s216"), "\(r.sub_agents)"))
                     }
                     if r.turns > 0 {
-                        items.append(.init("bubble.left.and.bubble.right", "模型调用", Fmt.human(r.turns)))
+                        items.append(.init("bubble.left.and.bubble.right", L10n.t("s413"), Fmt.human(r.turns)))
                     }
                     if r.ctx > 0 {
-                        items.append(.init("chart.bar.fill", "平均深度", String(format: "%.0f%%", r.ctx)))
+                        items.append(.init("chart.bar.fill", L10n.t("s247"), String(format: "%.0f%%", r.ctx)))
                     }
                     return items
                 }(), tint: Theme.qoderwork)
@@ -1702,28 +1705,28 @@ struct PanelView: View {
             cardHeadPlain("Qoder CLI", tint: Theme.qodercli, toolID: "qodercli")
             if r.calls > 0 || r.totalTokens > 0 {
                 if r.usage_available && r.totalTokens > 0 {
-                    CostHeadline(value: Fmt.human(r.totalTokens), caption: "\(sel.label) 总量", tint: Theme.qodercli)
+                    CostHeadline(value: Fmt.human(r.totalTokens), caption: L10n.f("s066", sel.label), tint: Theme.qodercli)
                 }
                 metricGrid(r.credits > 0 ? [
                     .init("circle.hexagongrid.fill", "Credits", Fmt.credits(r.credits)),
                 ] : [], hit: r.hit, extra: {
                     var items: [Metric] = [
-                        .init("terminal", "模型调用", "\(r.calls)"),
-                        .init("person.2", "会话", "\(r.sessions)"),
-                        .init("bubble.left.and.bubble.right", "消息数", Fmt.human(r.turns)),
-                        .init("clock", "活跃", Fmt.duration(r.duration)),
+                        .init("terminal", L10n.t("s413"), "\(r.calls)"),
+                        .init("person.2", L10n.metricSessions, "\(r.sessions)"),
+                        .init("bubble.left.and.bubble.right", L10n.t("s430"), Fmt.human(r.turns)),
+                        .init("clock", L10n.t("s425"), Fmt.duration(r.duration)),
                     ]
                     if r.usage_available {
-                        items.append(.init("arrow.down", "输入", Fmt.human(r.in)))
-                        items.append(.init("arrow.up", "输出", Fmt.human(r.out)))
-                        if r.cr > 0 { items.append(.init("bolt.fill", "缓存读", Fmt.human(r.cr))) }
-                        if r.cw > 0 { items.append(.init("square.stack.3d.up.fill", "缓存写", Fmt.human(r.cw))) }
+                        items.append(.init("arrow.down", L10n.metricIn, Fmt.human(r.in)))
+                        items.append(.init("arrow.up", L10n.metricOut, Fmt.human(r.out)))
+                        if r.cr > 0 { items.append(.init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr))) }
+                        if r.cw > 0 { items.append(.init("square.stack.3d.up.fill", L10n.metricCacheWrite, Fmt.human(r.cw))) }
                     }
                     if r.tools > 0 {
-                        items.append(.init("wrench.and.screwdriver", "工具调用", Fmt.human(r.tools)))
+                        items.append(.init("wrench.and.screwdriver", L10n.t("s231"), Fmt.human(r.tools)))
                     }
                     if r.sub_agents > 0 {
-                        items.append(.init("point.3.connected.trianglepath.dotted", "子agent", "\(r.sub_agents)"))
+                        items.append(.init("point.3.connected.trianglepath.dotted", L10n.t("s216"), "\(r.sub_agents)"))
                     }
                     return items
                 }(), tint: Theme.qodercli)
@@ -1744,15 +1747,15 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 11) {
             cardHead("Hermes", tint: Theme.hermes, sessions: r.sessions, toolID: "hermes")
             if r.sessions > 0 {
-                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw + r.reason), caption: "\(sel.label) 总量", tint: Theme.hermes)
-                metricGrid([.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost))],
+                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw + r.reason), caption: L10n.f("s066", sel.label), tint: Theme.hermes)
+                metricGrid([.init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost))],
                     hit: r.hit, extra: {
                     var items: [Metric] = [
-                        .init("arrow.down", "输入", Fmt.human(r.in)),
-                        .init("arrow.up", "输出", Fmt.human(r.out)),
-                        .init("bolt.fill", "缓存读", Fmt.human(r.cr)),
+                        .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                        .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
+                        .init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr)),
                     ]
-                    if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
+                    if r.reason > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
                     return items
                 }(), tint: Theme.hermes)
                 if !r.models.isEmpty {
@@ -1770,16 +1773,16 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 11) {
             cardHead("OpenClaw", tint: Theme.openclaw, sessions: r.sessions, toolID: "openclaw")
             if r.in + r.out + r.cr + r.cw + r.reason > 0 {
-                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw), caption: "\(sel.label) 总量", tint: Theme.openclaw)
-                metricGrid([.init("dollarsign.circle", "≈成本", String(format: "$%.2f", r.cost))],
+                CostHeadline(value: Fmt.human(r.in + r.out + r.cr + r.cw), caption: L10n.f("s066", sel.label), tint: Theme.openclaw)
+                metricGrid([.init("dollarsign.circle", L10n.metricCost, String(format: "$%.2f", r.cost))],
                     hit: r.hit, extra: {
                     var items: [Metric] = [
-                        .init("arrow.down", "输入", Fmt.human(r.in)),
-                        .init("arrow.up", "输出", Fmt.human(r.out)),
-                        .init("bolt.fill", "缓存读", Fmt.human(r.cr)),
+                        .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+                        .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
+                        .init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr)),
                     ]
-                    if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
-                    if r.tasks > 0 { items.append(.init("checklist", "任务", "\(r.tasks)")) }
+                    if r.reason > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
+                    if r.tasks > 0 { items.append(.init("checklist", L10n.t("s104"), "\(r.tasks)")) }
                     return items
                 }(), tint: Theme.openclaw)
                 if !r.models.isEmpty {
@@ -1789,14 +1792,14 @@ struct PanelView: View {
             } else if r.tasks > 0 {
                 HStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("任务").font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
+                        Text(L10n.t("s104")).font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                         Text("\(r.tasks)")
                             .font(.system(size: Theme.fontSize(16), weight: .bold, design: .rounded))
                             .foregroundStyle(Theme.tPrimary)
                     }
                     if r.completed > 0 {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("完成").font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
+                            Text(L10n.t("s218")).font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                             Text("\(r.completed)")
                                 .font(.system(size: Theme.fontSize(16), weight: .bold, design: .rounded))
                                 .foregroundStyle(.green)
@@ -1804,7 +1807,7 @@ struct PanelView: View {
                     }
                     if r.failed > 0 {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("失败").font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
+                            Text(L10n.t("s213")).font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                             Text("\(r.failed)")
                                 .font(.system(size: Theme.fontSize(16), weight: .bold, design: .rounded))
                                 .foregroundStyle(.red.opacity(0.8))
@@ -1829,11 +1832,11 @@ struct PanelView: View {
             cardHead(title, tint: tint, sessions: r.sessions, toolID: toolID)
             if r.sessions > 0 {
                 let total = r.in + r.out + r.cr + r.cw + (reasonIncludedInOutput ? 0 : r.reason)
-                CostHeadline(value: Fmt.human(total), caption: "\(sel.label) 总量", tint: tint)
+                CostHeadline(value: Fmt.human(total), caption: L10n.f("s066", sel.label), tint: tint)
                 let creditMetrics: [Metric] = showsCredits && r.credits > 0
                     ? [.init("circle.hexagongrid.fill", "Credits", Fmt.credits(r.credits))]
                     : []
-                metricGrid(showsCost ? [.init("dollarsign.circle", "≈成本", nativeMoney(r.cost, r.cost_cny))] : [],
+                metricGrid(showsCost ? [.init("dollarsign.circle", L10n.metricCost, nativeMoney(r.cost, r.cost_cny))] : [],
                     hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO), tint: tint)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint,
@@ -1849,21 +1852,21 @@ struct PanelView: View {
     func tokenUsageMetrics(_ r: TokenUsageRange, inclusiveIO: Bool = false) -> [Metric] {
         if inclusiveIO {
             var items: [Metric] = [
-                .init("arrow.down", "输入", Fmt.human(r.in + r.cr + r.cw)),
-                .init("arrow.up", "输出", Fmt.human(r.out + r.reason)),
+                .init("arrow.down", L10n.metricIn, Fmt.human(r.in + r.cr + r.cw)),
+                .init("arrow.up", L10n.metricOut, Fmt.human(r.out + r.reason)),
             ]
-            if r.cr > 0 { items.append(.init("bolt.fill", "其中缓存读", Fmt.human(r.cr))) }
-            if r.reason > 0 { items.append(.init("brain", "其中推理", Fmt.human(r.reason))) }
-            if r.cw > 0 { items.append(.init("square.stack.3d.up.fill", "其中缓存写", Fmt.human(r.cw))) }
+            if r.cr > 0 { items.append(.init("bolt.fill", L10n.t("s125"), Fmt.human(r.cr))) }
+            if r.reason > 0 { items.append(.init("brain", L10n.t("s123"), Fmt.human(r.reason))) }
+            if r.cw > 0 { items.append(.init("square.stack.3d.up.fill", L10n.t("s124"), Fmt.human(r.cw))) }
             return items
         }
         var items: [Metric] = [
-            .init("arrow.down", "输入", Fmt.human(r.in)),
-            .init("arrow.up", "输出", Fmt.human(r.out)),
-            .init("bolt.fill", "缓存读", Fmt.human(r.cr)),
-            .init("square.stack.3d.up.fill", "缓存写", Fmt.human(r.cw)),
+            .init("arrow.down", L10n.metricIn, Fmt.human(r.in)),
+            .init("arrow.up", L10n.metricOut, Fmt.human(r.out)),
+            .init("bolt.fill", L10n.metricCacheRead, Fmt.human(r.cr)),
+            .init("square.stack.3d.up.fill", L10n.metricCacheWrite, Fmt.human(r.cw)),
         ]
-        if r.reason > 0 { items.append(.init("brain", "推理", Fmt.human(r.reason))) }
+        if r.reason > 0 { items.append(.init("brain", L10n.metricReason, Fmt.human(r.reason))) }
         return items
     }
 
@@ -1871,7 +1874,7 @@ struct PanelView: View {
     private func inactiveToolsLine(_ cards: [ToolCardItem]) -> some View {
         let inactive = cards.filter { $0.visible && !$0.active }.map(\.name)
         if !inactive.isEmpty {
-            Text("未检测到本地数据: " + inactive.joined(separator: " · "))
+            Text(L10n.t("s375") + inactive.joined(separator: " · "))
                 .font(.system(size: Theme.fontSize(9)))
                 .foregroundStyle(Theme.tTertiary)
                 .frame(maxWidth: .infinity)
@@ -1879,7 +1882,7 @@ struct PanelView: View {
     }
 
     var emptyHint: some View {
-        Text("暂无数据")
+        Text(L10n.t("s351"))
             .font(.system(size: Theme.fontSize(10)))
             .foregroundStyle(Theme.tTertiary)
     }
@@ -1888,11 +1891,11 @@ struct PanelView: View {
     func usageEmptyHint(recent: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if store.isRefreshing {
-                Text("正在刷新\(sel.label)用量…")
+                Text(L10n.f("s415", sel.label))
             } else {
-                Text("\(sel.label)暂无用量，额度状态如下")
+                Text(L10n.f("s069", sel.label))
                 if let recent = recent {
-                    Text("最近一次 · \(recent)")
+                    Text(L10n.f("s368", recent))
                 }
             }
         }
@@ -1916,7 +1919,7 @@ struct PanelView: View {
         warning: Bool = false
     ) -> some View {
         let statusTint = warning ? Color.orange : tint
-        let updatedLabel = updated.map { "上次更新 \(Fmt.reset($0))" } ?? "尚无更新时间"
+        let updatedLabel = updated.map { L10n.f("s093", Fmt.reset($0)) } ?? L10n.t("s226")
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: warning ? "exclamationmark.triangle.fill" : "info.circle.fill")
@@ -2039,7 +2042,7 @@ struct PanelView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .tip(done ? "已复制图片" : "复制此工具用量图")
+        .tip(done ? L10n.t("s237") : L10n.t("s205"))
     }
 
     @ViewBuilder
@@ -2071,7 +2074,7 @@ struct PanelView: View {
         HStack {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
-            Text("本会话 \(name)").font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
+            Text(L10n.f("s379", name)).font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
             Spacer()
             Text(Fmt.human(total))
                 .font(.system(size: Theme.fontSize(10), weight: .medium, design: .monospaced))
@@ -2080,7 +2083,7 @@ struct PanelView: View {
     }
 
     var disclaimer: some View {
-        Text(mode == .settings ? "Made by lank" : "成本按 API 价估算,非订阅实付")
+        Text(mode == .settings ? "Made by lank" : L10n.t("s263"))
             .font(.system(size: Theme.fontSize(9)))
             .foregroundStyle(Theme.tTertiary)
     }
@@ -2096,7 +2099,7 @@ struct PanelView: View {
             HStack(spacing: 5) {
                 Image(systemName: "chart.pie.fill")
                     .font(.system(size: Theme.fontSize(9))).foregroundStyle(tint)
-                Text("按模型 (\(models.count))")
+                Text(L10n.f("s273", models.count))
                     .font(.system(size: Theme.fontSize(11), weight: .medium))
                     .foregroundStyle(Theme.tSecondary)
                 Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
@@ -2109,7 +2112,7 @@ struct PanelView: View {
         .buttonStyle(.plain)
         if open.wrappedValue {
             VStack(alignment: .leading, spacing: 6) {
-                Text("按模型 · \(periodLabel ?? sel.label)")
+                Text(L10n.f("s274", periodLabel ?? sel.label))
                     .font(.system(size: Theme.fontSize(11), weight: .semibold))
                     .foregroundStyle(Theme.tSecondary)
                 ForEach(models) { m in
@@ -2199,7 +2202,7 @@ struct PanelView: View {
             HStack(spacing: 5) {
                 Image(systemName: "chart.pie.fill")
                     .font(.system(size: Theme.fontSize(9))).foregroundStyle(tint)
-                Text("按模型 (\(models.count))")
+                Text(L10n.f("s273", models.count))
                     .font(.system(size: Theme.fontSize(11), weight: .medium))
                     .foregroundStyle(Theme.tSecondary)
                 Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
@@ -2212,7 +2215,7 @@ struct PanelView: View {
         .buttonStyle(.plain)
         if open.wrappedValue {
             VStack(alignment: .leading, spacing: 6) {
-                Text("按模型 · \(periodLabel ?? sel.label)")
+                Text(L10n.f("s274", periodLabel ?? sel.label))
                     .font(.system(size: Theme.fontSize(11), weight: .semibold))
                     .foregroundStyle(Theme.tSecondary)
                 ForEach(models) { m in
@@ -2282,23 +2285,23 @@ struct PanelView: View {
         HStack(spacing: 0) {
             Spacer().frame(width: 20)
             FlowLayout(spacing: 4) {
-                detailTag("↓ \(Fmt.human(tokIn))", label: "输入", tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
-                detailTag("↑ \(Fmt.human(tokOut))", label: "输出", tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
+                detailTag("↓ \(Fmt.human(tokIn))", label: L10n.metricIn, tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
+                detailTag("↑ \(Fmt.human(tokOut))", label: L10n.metricOut, tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 if tokCR > 0 {
-                    detailTag("⚡ \(Fmt.human(tokCR))", label: componentsAreSubtotals ? "其中缓存读" : "缓存读",
+                    detailTag("⚡ \(Fmt.human(tokCR))", label: componentsAreSubtotals ? L10n.t("s125") : L10n.metricCacheRead,
                               tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 }
                 if tokCW > 0 {
-                    detailTag("✎ \(Fmt.human(tokCW))", label: componentsAreSubtotals ? "其中缓存写" : "缓存写",
+                    detailTag("✎ \(Fmt.human(tokCW))", label: componentsAreSubtotals ? L10n.t("s124") : L10n.metricCacheWrite,
                               tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 }
                 if tokReason > 0 {
-                    detailTag("◉ \(Fmt.human(tokReason))", label: componentsAreSubtotals ? "其中推理" : "推理",
+                    detailTag("◉ \(Fmt.human(tokReason))", label: componentsAreSubtotals ? L10n.t("s123") : L10n.metricReason,
                               tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 }
                 if hit > 0 {
                     HStack(spacing: 2) {
-                        Text("命中").font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(L10n.t("s191")).font(labelFont).foregroundStyle(Theme.tTertiary)
                         Text(String(format: "%.0f%%", hit)).font(tagFont).foregroundStyle(tint)
                     }
                     .padding(.horizontal, 6).padding(.vertical, 2.5)
@@ -2399,7 +2402,7 @@ struct PanelView: View {
             }
             MiniBar(value: pct, tint: pct <= 15 ? .red : tint)
         }
-        .help(reset != nil ? "\(Fmt.countdown(reset)) 后重置" : "")
+        .help(reset != nil ? L10n.f("s047", Fmt.countdown(reset)) : "")
     }
 
     func claudeQuotaStatus(_ stat: ClaudeStat) -> some View {
@@ -2410,11 +2413,11 @@ struct PanelView: View {
         let stale = staleCount > 0
         let label: String
         if stale {
-            label = hasFreshQuota ? "部分额度待更新" : "额度数据已过期"
+            label = hasFreshQuota ? L10n.t("s523") : L10n.t("s541")
         } else {
-            label = "额度更新"
+            label = L10n.t("s544")
         }
-        let updated = stat.q_updated.map { Fmt.reset($0) } ?? "更新时间未知"
+        let updated = stat.q_updated.map { Fmt.reset($0) } ?? L10n.t("s364")
         return HStack(spacing: 5) {
             Image(systemName: stale ? "exclamationmark.triangle.fill" : "clock")
                 .font(.system(size: Theme.fontSize(9)))
@@ -2423,20 +2426,20 @@ struct PanelView: View {
             Spacer()
         }
         .foregroundStyle(stale ? Color.orange.opacity(0.88) : Theme.tTertiary)
-        .help(stale ? "等待 Claude Code 更新额度" : "来自 Claude Code CLI 或 Desktop")
+        .help(stale ? L10n.t("s451") : L10n.t("s395"))
     }
 
     func codexQuotaStatus(_ stat: CodexStat) -> some View {
-        let updated = stat.q_updated.map { Fmt.reset($0) } ?? "更新时间未知"
+        let updated = stat.q_updated.map { Fmt.reset($0) } ?? L10n.t("s364")
         return HStack(spacing: 5) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("额度数据已过期 · 更新于 \(updated)")
+            Text(L10n.f("s542", updated))
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }
         .foregroundStyle(Color.orange.opacity(0.88))
-        .help("等待 Codex 写入新的额度读数")
+        .help(L10n.t("s453"))
     }
 
     var footer: some View {
@@ -2446,12 +2449,12 @@ struct PanelView: View {
             KeepAwakeMenu(ka: store.keepAwake)
             IconButton(
                 icon: copyFeedback ? "checkmark" : "photo.on.rectangle",
-                label: copyFeedback ? "已复制" : "复制"
+                label: copyFeedback ? L10n.t("s236") : L10n.t("s204")
             ) {
                 copyUsageImage()
             }
-            IconButton(icon: "arrow.clockwise", label: "刷新") { store.refresh() }
-            IconButton(icon: "power", label: "退出") { NSApp.terminate(nil) }
+            IconButton(icon: "arrow.clockwise", label: L10n.t("s131")) { store.refresh() }
+            IconButton(icon: "power", label: L10n.t("s519")) { NSApp.terminate(nil) }
         }
     }
 
@@ -2527,7 +2530,7 @@ struct PanelView: View {
                 }
             }
             .buttonStyle(.plain)
-            .tip("升级 \(tag)")
+            .tip(L10n.f("s144", tag))
         case .downloading(let p):
             ZStack {
                 Circle()
@@ -2563,7 +2566,7 @@ struct PanelView: View {
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .tip("重试")
+            .tip(L10n.t("s528"))
         default:
             EmptyView()
         }
@@ -2696,19 +2699,19 @@ struct PanelView: View {
 
     private var menuBarQuotaHint: String {
         let selected = menuBarQuotaSelectedSources
-        if selected.isEmpty { return "全部关闭，状态栏只留图标。" }
+        if selected.isEmpty { return L10n.t("s113") }
         let shown = selected.prefix(2).map(\.label).joined(separator: " · ")
         if selected.count > 2 {
             let hidden = selected.dropFirst(2).map(\.label).joined(separator: "、")
-            return "双额度显示：\(shown)；\(hidden) 放不下。"
+            return L10n.f("s151", shown, hidden)
         }
-        return "双额度显示：\(shown)。"
+        return L10n.f("s150", shown)
     }
 
     var settingsAppearanceSection: some View {
-        settingsSection("textformat.size", "界面") {
-            settingsStackedValue("字体大小") {
-                Picker("字体大小", selection: $panelFontSize) {
+        settingsSection("textformat.size", L10n.t("appearance")) {
+            settingsStackedValue(L10n.t("font_size")) {
+                Picker(L10n.t("font_size"), selection: $panelFontSize) {
                     ForEach(PanelFontSize.allCases) { size in
                         Text(size.label).tag(size.rawValue)
                     }
@@ -2718,13 +2721,43 @@ struct PanelView: View {
                 .controlSize(.mini)
                 .frame(width: settingsMenuPickerWidth)
             }
+            settingsStackedValue(L10n.language) {
+                Picker(L10n.language, selection: $appLanguageRaw) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.label).tag(lang.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.mini)
+                .frame(width: settingsMenuPickerWidth)
+                .onChange(of: appLanguageRaw) { _ in syncCollectorLanguage() }
+            }
+        }
+    }
+
+    /// 设置变更同步 collector 语言（~/.tokei/config.json 的 language）。
+    private func syncCollectorLanguage() {
+        let code = (AppLanguage(rawValue: appLanguageRaw) ?? .system).collectorCode
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".tokei/config.json")
+        var cfg: [String: Any] = [:]
+        if let data = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            cfg = obj
+        }
+        if (cfg["language"] as? String) != code {
+            cfg["language"] = code
+            if let data = try? JSONSerialization.data(withJSONObject: cfg) {
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
     var settingsMenuBarSection: some View {
-        settingsSection("menubar.rectangle", "菜单栏") {
-            settingsStackedValue("样式") {
-                Picker("菜单栏样式", selection: $menuBarStyle) {
+        settingsSection("menubar.rectangle", L10n.t("s475")) {
+            settingsStackedValue(L10n.t("s402")) {
+                Picker(L10n.t("s477"), selection: $menuBarStyle) {
                     ForEach(MenuBarStyle.allCases) { style in
                         Text(style.label).tag(style.rawValue)
                     }
@@ -2736,8 +2769,8 @@ struct PanelView: View {
                 .frame(width: settingsMenuPickerWidth)
             }
 
-            settingsStackedValue("信息") {
-                Picker("菜单栏信息量", selection: $menuBarDensity) {
+            settingsStackedValue(L10n.t("s111")) {
+                Picker(L10n.t("s476"), selection: $menuBarDensity) {
                     ForEach(MenuBarDensity.allCases) { density in
                         Text(density.label).tag(density.rawValue)
                     }
@@ -2748,7 +2781,7 @@ struct PanelView: View {
                 .frame(width: settingsMenuPickerWidth)
             }
 
-            settingsStackedValue("额度来源") {
+            settingsStackedValue(L10n.t("s547")) {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
                                     GridItem(.flexible(), spacing: 7)], spacing: 7) {
                     ForEach(MenuBarQuotaSource.allCases) { source in
@@ -2763,7 +2796,7 @@ struct PanelView: View {
                 .foregroundStyle(Theme.tSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口、或者读数已过期，状态栏会跳过它。")
+            Text(L10n.t("s160"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2790,56 +2823,56 @@ struct PanelView: View {
     }
 
     var settingsUpdateSection: some View {
-        settingsSection("arrow.triangle.2.circlepath", "版本与更新") {
+        settingsSection("arrow.triangle.2.circlepath", L10n.t("s436")) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("当前版本 \(Updater.releaseTag)")
+                    Text(L10n.f("s254", Updater.releaseTag))
                         .font(.system(size: Theme.fontSize(10), weight: .medium))
                         .foregroundStyle(Theme.tPrimary)
-                    Text(Updater.isLocalBuild ? "本地验证版不检查线上更新" : "启动时自动检查，也可在这里手动检查")
+                    Text(Updater.isLocalBuild ? L10n.t("s390") : L10n.t("s186"))
                         .font(.system(size: Theme.fontSize(8.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
                 Spacer()
                 if Updater.isLocalBuild {
-                    Text("本地验证版")
+                    Text(L10n.t("s389"))
                         .font(.system(size: Theme.fontSize(9), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                 } else {
                     switch updater.state {
                     case .idle:
-                        settingsActionButton(icon: "arrow.triangle.2.circlepath", title: "检查更新") {
+                        settingsActionButton(icon: "arrow.triangle.2.circlepath", title: L10n.t("s404")) {
                             updater.checkForUpdate()
                         }
                     case .checking:
                         HStack(spacing: 5) {
                             ProgressView().controlSize(.small)
-                            Text("正在检查")
+                            Text(L10n.t("s419"))
                         }
                         .font(.system(size: Theme.fontSize(9), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                     case .upToDate:
-                        Label("已是最新版本", systemImage: "checkmark.circle.fill")
+                        Label(L10n.t("s239"), systemImage: "checkmark.circle.fill")
                             .font(.system(size: Theme.fontSize(9), weight: .medium))
                             .foregroundStyle(.green)
                     case .available(let tag, _, _):
-                        settingsActionButton(icon: "arrow.down.circle.fill", title: "升级到 \(tag)") {
+                        settingsActionButton(icon: "arrow.down.circle.fill", title: L10n.f("s145", tag)) {
                             updater.performUpdate()
                         }
                     case .downloading(let progress):
-                        Text("下载中 \(Int(progress * 100))%")
+                        Text(L10n.f("s094", Int(progress * 100)))
                             .font(.system(size: Theme.fontSize(9), weight: .medium, design: .monospaced))
                             .foregroundStyle(Theme.tSecondary)
                     case .installing:
                         HStack(spacing: 5) {
                             ProgressView().controlSize(.small)
-                            Text("正在安装")
+                            Text(L10n.t("s417"))
                         }
                         .font(.system(size: Theme.fontSize(9), weight: .medium))
                         .foregroundStyle(Theme.tSecondary)
                     case .failed(let message):
                         VStack(alignment: .trailing, spacing: 3) {
-                            settingsActionButton(icon: "arrow.clockwise", title: "重试") {
+                            settingsActionButton(icon: "arrow.clockwise", title: L10n.t("s528")) {
                                 updater.checkForUpdate()
                             }
                             Text(message)
@@ -2858,9 +2891,9 @@ struct PanelView: View {
     }
 
     var settingsSystemSection: some View {
-        settingsSection("gearshape.2", "系统") {
+        settingsSection("gearshape.2", L10n.t("s456")) {
             settingsToggleRow(
-                "登录时启动",
+                L10n.t("s446"),
                 isOn: Binding(
                     get: { loginItem.enabled },
                     set: { loginItem.setEnabled($0) }
@@ -2869,11 +2902,11 @@ struct PanelView: View {
 
             if loginItem.requiresApproval {
                 HStack(spacing: 7) {
-                    Text("需要在系统设置中允许")
+                    Text(L10n.t("s534"))
                         .font(.system(size: Theme.fontSize(8.5)))
                         .foregroundStyle(Theme.tTertiary)
                     Spacer()
-                    settingsActionButton(icon: "gear", title: "打开设置") {
+                    settingsActionButton(icon: "gear", title: L10n.t("s267")) {
                         loginItem.openSystemSettings()
                     }
                 }
@@ -2887,7 +2920,7 @@ struct PanelView: View {
     }
 
     var settingsAgentsSection: some View {
-        settingsSection("square.grid.2x2", "显示卡片") {
+        settingsSection("square.grid.2x2", L10n.t("s349")) {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
                                 GridItem(.flexible(), spacing: 7)], spacing: 7) {
                 settingsRow("Claude", tint: Theme.claude, isOn: $showClaude)
@@ -2914,7 +2947,7 @@ struct PanelView: View {
                 settingsRow("DeepSeek Harness", tint: Theme.deepseekHarness, isOn: $showDeepSeekHarness)
                 settingsRow("OpenCode", tint: Theme.opencode, isOn: $showOpenCode)
                 settingsRow("Qwen Code", tint: Theme.qwencode, isOn: $showQwenCode)
-                settingsRow("千问办公", tint: Theme.qwenwork, isOn: $showQwenWork)
+                settingsRow(L10n.t("s142"), tint: Theme.qwenwork, isOn: $showQwenWork)
                 settingsRow("Kimi Code", tint: Theme.kimicode, isOn: $showKimiCode)
                 settingsRow("Muse Code", tint: Theme.musecode, isOn: $showMuseCode)
                 settingsRow("Command Code", tint: Theme.cmdcode, isOn: $showCmdCode)
@@ -2951,8 +2984,8 @@ struct PanelView: View {
     }
 
     var settingsProviderQuotaSection: some View {
-        settingsSection("key.horizontal.fill", "Provider 额度") {
-            Text("Cursor 复用 Cursor.app 登录态；Zed 首次使用需允许 Tokei 读取其 Keychain 登录态。Tokei 不保存这些登录密钥。")
+        settingsSection("key.horizontal.fill", L10n.t("s033")) {
+            Text(L10n.t("s020"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2961,7 +2994,7 @@ struct PanelView: View {
                 HStack(spacing: 8) {
                     settingsActionButton(
                         icon: "key.fill",
-                        title: zedAuthorizing ? "等待授权…" : "授权 Zed"
+                        title: zedAuthorizing ? L10n.t("s455") : L10n.t("s276")
                     ) {
                         authorizeZedQuota()
                     }
@@ -2988,14 +3021,14 @@ struct PanelView: View {
             )
             providerSettingsField(
                 label: "API Key",
-                placeholder: sub2APIKeyStored ? "已保存，留空不修改" : "Group API Key",
+                placeholder: sub2APIKeyStored ? L10n.t("s234") : "Group API Key",
                 text: $sub2APIKey,
                 secure: true
             )
             if sub2APIKeyStored {
                 HStack {
                     Spacer()
-                    settingsActionButton(icon: "trash", title: "清除 Sub2API 密钥") {
+                    settingsActionButton(icon: "trash", title: L10n.t("s432")) {
                         clearProviderToken(.sub2api)
                     }
                 }
@@ -3007,11 +3040,11 @@ struct PanelView: View {
                 .font(.system(size: Theme.fontSize(10), weight: .semibold))
                 .foregroundStyle(Theme.zai)
             HStack(spacing: 8) {
-                Text("区域")
+                Text(L10n.t("s141"))
                     .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
                     .frame(width: 52, alignment: .leading)
-                Picker("z.ai 区域", selection: $zaiRegion) {
+                Picker(L10n.t("s090"), selection: $zaiRegion) {
                     Text("Global").tag("global")
                     Text("BigModel CN").tag("bigmodel-cn")
                 }
@@ -3021,28 +3054,28 @@ struct PanelView: View {
             }
             providerSettingsField(
                 label: "API Key",
-                placeholder: zaiKeyStored ? "已保存，留空不修改" : "Z_AI_API_KEY",
+                placeholder: zaiKeyStored ? L10n.t("s234") : "Z_AI_API_KEY",
                 text: $zaiKey,
                 secure: true
             )
             if zaiKeyStored {
                 HStack {
                     Spacer()
-                    settingsActionButton(icon: "trash", title: "清除 z.ai 密钥") {
+                    settingsActionButton(icon: "trash", title: L10n.t("s433")) {
                         clearProviderToken(.zai)
                     }
                 }
             }
 
             HStack {
-                settingsActionButton(icon: "checkmark.circle", title: "保存 Provider 设置") {
+                settingsActionButton(icon: "checkmark.circle", title: L10n.t("s107")) {
                     saveProviderSettings()
                 }
                 Spacer()
                 if !providerSettingsResult.isEmpty {
                     Text(providerSettingsResult)
                         .font(.system(size: Theme.fontSize(8.5)))
-                        .foregroundStyle(providerSettingsResult == "已保存" ? Color.green : Color.orange)
+                        .foregroundStyle(providerSettingsResult == L10n.t("s233") ? Color.green : Color.orange)
                 }
             }
         }
@@ -3088,7 +3121,7 @@ struct PanelView: View {
     private func saveProviderSettings() {
         let baseURL = sub2APIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard baseURL.isEmpty || Self.validSub2APIBaseURL(baseURL) else {
-            providerSettingsResult = "Sub2API URL 仅支持 HTTPS 或本机 HTTP"
+            providerSettingsResult = L10n.t("s036")
             return
         }
         let savedURL = SyncManager.setProviderSetting(
@@ -3101,23 +3134,23 @@ struct PanelView: View {
         let savedZaiKey = zaiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || ProviderCredentialStore.setToken(zaiKey, for: .zai)
         guard savedURL, savedRegion, savedSub2APIKey, savedZaiKey else {
-            providerSettingsResult = "保存失败"
+            providerSettingsResult = L10n.t("s108")
             return
         }
         sub2APIKey = ""
         zaiKey = ""
         loadProviderSettings()
-        providerSettingsResult = "已保存"
+        providerSettingsResult = L10n.t("s233")
         store.refresh()
     }
 
     private func clearProviderToken(_ provider: ProviderSecret) {
         guard ProviderCredentialStore.setToken("", for: provider) else {
-            providerSettingsResult = "清除失败"
+            providerSettingsResult = L10n.t("s434")
             return
         }
         loadProviderSettings()
-        providerSettingsResult = "已清除"
+        providerSettingsResult = L10n.t("s240")
         store.refresh()
     }
 
@@ -3146,12 +3179,12 @@ struct PanelView: View {
             DispatchQueue.main.async {
                 zedAuthorizing = false
                 if persistentSucceeded {
-                    zedAuthorizationResult = "授权成功，正在刷新 Zed 额度"
+                    zedAuthorizationResult = L10n.t("s279")
                     store.refresh()
                 } else if interactiveSucceeded {
-                    zedAuthorizationResult = "仅允许了本次读取，请重新授权并选择“始终允许”"
+                    zedAuthorizationResult = L10n.t("s101")
                 } else {
-                    zedAuthorizationResult = "未授权，或 Zed 尚未登录"
+                    zedAuthorizationResult = L10n.t("s374")
                 }
             }
         }
@@ -3169,33 +3202,33 @@ struct PanelView: View {
     }
 
     var settingsPrivacySection: some View {
-        settingsSection("lock.shield", "隐私与额度") {
-            settingsToggleRow("应用活跃统计", isOn: $activityStatisticsEnabled)
-            Text("用于了解应用的活跃安装数量，默认开启，可随时关闭。每次启动仅尝试上报一次随机安装 ID、Tokei 版本及系统名称和主次版本。服务端记录首次和最近活跃时间，并保存最近一次来源 IP。不会上传账号、项目、对话、Token、费用或额度。关闭后停止发送，重新开启于下次启动生效；安装 ID 不参与多设备同步。")
+        settingsSection("lock.shield", L10n.t("s533")) {
+            settingsToggleRow(L10n.t("s249"), isOn: $activityStatisticsEnabled)
+            Text(L10n.t("s440"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
             thinDivider
 
-            settingsToggleRow("Claude Code CLI 额度查询", isOn: $claudeCLIQuotaEnabled)
-            Text("默认关闭。开启后仅在 Claude Desktop 缓存不可用时，使用 Claude Code CLI 已有登录态向 Anthropic 查询 5h、周及模型额度，并缓存 5 分钟。登录 Token 只在内存中使用，不写入 Tokei 文件。")
+            settingsToggleRow(L10n.t("s013"), isOn: $claudeCLIQuotaEnabled)
+            Text(L10n.t("s554"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
             thinDivider
 
-            settingsToggleRow("Grok 实时额度查询", isOn: $grokLiveQuotaEnabled)
-            Text("默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。")
+            settingsToggleRow(L10n.t("s026"), isOn: $grokLiveQuotaEnabled)
+            Text(L10n.t("s557"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
             thinDivider
 
-            settingsToggleRow("Grok Bot 额度查询", isOn: $grokBotQuotaEnabled)
-            Text("开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。")
+            settingsToggleRow(L10n.t("s022"), isOn: $grokBotQuotaEnabled)
+            Text(L10n.t("s250"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3203,7 +3236,7 @@ struct PanelView: View {
                 HStack(spacing: 8) {
                     settingsActionButton(
                         icon: "key.fill",
-                        title: grokBotAuthorizing ? "等待授权…" : "授权 Grok Bot"
+                        title: grokBotAuthorizing ? L10n.t("s455") : L10n.t("s275")
                     ) {
                         authorizeGrokBotQuota()
                     }
@@ -3220,8 +3253,8 @@ struct PanelView: View {
 
             thinDivider
 
-            settingsToggleRow("千问办公额度查询", isOn: $qwenWorkQuotaEnabled)
-            Text("默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。")
+            settingsToggleRow(L10n.t("s143"), isOn: $qwenWorkQuotaEnabled)
+            Text(L10n.t("s555"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3265,7 +3298,7 @@ struct PanelView: View {
     private func authorizeGrokBotQuota() {
         guard !grokBotAuthorizing else { return }
         guard let executable = GrokBotHelperManager.installIfNeeded() else {
-            grokBotAuthorizationResult = "授权助手不可用，请重新安装 Tokei"
+            grokBotAuthorizationResult = L10n.t("s277")
             return
         }
         grokBotAuthorizing = true
@@ -3291,12 +3324,12 @@ struct PanelView: View {
             DispatchQueue.main.async {
                 grokBotAuthorizing = false
                 if persistentSucceeded {
-                    grokBotAuthorizationResult = "授权成功，可在 Grok Bot 卡片查看"
+                    grokBotAuthorizationResult = L10n.t("s278")
                     store.refresh()
                 } else if interactiveSucceeded {
-                    grokBotAuthorizationResult = "仅允许了本次读取，请重新授权并选择“始终允许”"
+                    grokBotAuthorizationResult = L10n.t("s101")
                 } else {
-                    grokBotAuthorizationResult = "未授权，或 Grok Bot 尚未登录"
+                    grokBotAuthorizationResult = L10n.t("s373")
                 }
             }
         }
@@ -3341,15 +3374,15 @@ struct PanelView: View {
     }
 
     var settingsPricingSection: some View {
-        settingsSection("dollarsign.circle", "价格表") {
+        settingsSection("dollarsign.circle", L10n.t("s103")) {
             HStack(spacing: 8) {
-                settingsActionButton(icon: "arrow.down.circle", title: "全量更新") {
-                    runPriceUpdate("--update-prices", "全量更新中…")
+                settingsActionButton(icon: "arrow.down.circle", title: L10n.t("s114")) {
+                    runPriceUpdate("--update-prices", L10n.t("s115"))
                 }
                 .disabled(priceUpdating)
 
-                settingsActionButton(icon: "magnifyingglass.circle", title: "查漏补缺") {
-                    runPriceUpdate("--update-unknown", "查漏补缺中…")
+                settingsActionButton(icon: "magnifyingglass.circle", title: L10n.t("s398")) {
+                    runPriceUpdate("--update-unknown", L10n.t("s399"))
                 }
                 .disabled(priceUpdating)
 
@@ -3372,7 +3405,7 @@ struct PanelView: View {
     }
 
     var settingsDiagnosticsSection: some View {
-        settingsSection("stethoscope", "诊断") {
+        settingsSection("stethoscope", L10n.t("s483")) {
             HStack(spacing: 8) {
                 settingsActionButton(
                     icon: debugOutput.isEmpty || debugRunning ? "ladybug" : "chevron.up.circle",
@@ -3398,7 +3431,7 @@ struct PanelView: View {
                             .background(Circle().fill(Color.primary.opacity(0.06)))
                     }
                     .buttonStyle(.plain)
-                    .tip("复制诊断")
+                    .tip(L10n.t("s206"))
                 }
             }
 
@@ -3436,13 +3469,13 @@ struct PanelView: View {
     }
 
     var settingsReminderSection: some View {
-        settingsSection("figure.walk.circle", "久坐提醒") {
-            settingsToggleRow("启用", isOn: $sitReminderOn)
+        settingsSection("figure.walk.circle", L10n.t("s099")) {
+            settingsToggleRow(L10n.t("s187"), isOn: $sitReminderOn)
                 .onChange(of: sitReminderOn) { _ in store.sitReminder.updateRunning() }
 
             if sitReminderOn {
                 HStack {
-                    Text("间隔").font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
+                    Text(L10n.t("s531")).font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                     Spacer()
                     Picker("", selection: $sitReminderInterval) {
                         Text("45m").tag(45); Text("60m").tag(60); Text("90m").tag(90)
@@ -3453,11 +3486,11 @@ struct PanelView: View {
                     .onChange(of: sitReminderInterval) { _ in store.sitReminder.updateRunning() }
                 }
 
-                settingsActionButton(icon: "bell.badge", title: "测试提醒") {
+                settingsActionButton(icon: "bell.badge", title: L10n.t("s428")) {
                     store.sitReminder.testPing()
                 }
 
-                Text("基于系统空闲判断连续用机时长,看视频或开会不操作会被当作离开。")
+                Text(L10n.t("s203"))
                     .font(.system(size: Theme.fontSize(8.5)))
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3466,8 +3499,8 @@ struct PanelView: View {
     }
 
     var settingsSyncSection: some View {
-        settingsSection("arrow.triangle.2.circlepath", "多设备同步") {
-            settingsToggleRow("启用", isOn: $store.syncEnabled)
+        settingsSection("arrow.triangle.2.circlepath", L10n.t("s210")) {
+            settingsToggleRow(L10n.t("s187"), isOn: $store.syncEnabled)
                 .onChange(of: store.syncEnabled) { on in
                     if on {
                         if setupSync() {
@@ -3485,7 +3518,7 @@ struct PanelView: View {
                 }
 
             if store.syncEnabled {
-                settingsValueRow("设备名") {
+                settingsValueRow(L10n.t("s480")) {
                     TextField("hostname", text: $deviceName)
                         .font(.system(size: Theme.fontSize(10), design: .monospaced))
                         .textFieldStyle(.plain)
@@ -3507,12 +3540,12 @@ struct PanelView: View {
                         }
                 }
 
-                settingsValueRow("目录") {
-                    Text(syncDir.isEmpty ? "未设置" : (syncDir as NSString).lastPathComponent)
+                settingsValueRow(L10n.t("s447")) {
+                    Text(syncDir.isEmpty ? L10n.t("s376") : (syncDir as NSString).lastPathComponent)
                         .font(.system(size: Theme.fontSize(10), design: .monospaced))
                         .foregroundStyle(syncDir.isEmpty ? Theme.tTertiary : Theme.tSecondary)
                         .lineLimit(1)
-                    Button("选择") { pickSyncDir() }
+                    Button(L10n.t("s520")) { pickSyncDir() }
                         .font(.system(size: Theme.fontSize(10)))
                         .buttonStyle(.plain)
                         .foregroundStyle(Theme.claude)
@@ -3522,7 +3555,7 @@ struct PanelView: View {
                 HStack(spacing: 6) {
                     settingsActionButton(
                         icon: "arrow.triangle.2.circlepath",
-                        title: store.syncing ? "同步中" : "同步",
+                        title: store.syncing ? L10n.t("s166") : L10n.t("s165"),
                         width: 86
                     ) {
                         if saveSync() { store.doSync() }
@@ -3530,7 +3563,7 @@ struct PanelView: View {
                     .disabled(store.syncing || syncDir.isEmpty)
 
                     Spacer(minLength: 6)
-                    Text("自动")
+                    Text(L10n.t("s474"))
                         .font(.system(size: Theme.fontSize(10)))
                         .foregroundStyle(Theme.tTertiary)
                         .fixedSize(horizontal: true, vertical: false)
@@ -3576,7 +3609,7 @@ struct PanelView: View {
                     HStack(spacing: 4) {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle.fill")
-                        Text("有 \(store.peerLoadIssues.count) 个设备快照读取异常")
+                        Text(L10n.f("s371", store.peerLoadIssues.count))
                     }
                     .font(.system(size: Theme.fontSize(8.5), weight: .medium))
                     .foregroundStyle(Theme.claude)
@@ -3587,7 +3620,7 @@ struct PanelView: View {
 
                 if store.syncEnabled {
                     let dataRepo = cachedRemoteUrl
-                    let hasRemote = !dataRepo.isEmpty && !dataRepo.contains("未配置")
+                    let hasRemote = !dataRepo.isEmpty && !dataRepo.contains(L10n.t("s378"))
                         && (dataRepo.hasPrefix("http") || dataRepo.hasPrefix("git@") || dataRepo.hasPrefix("ssh://"))
                     Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
                     VStack(alignment: .leading, spacing: 8) {
@@ -3595,28 +3628,28 @@ struct PanelView: View {
                             Image(systemName: "plus.circle")
                                 .font(.system(size: Theme.fontSize(10), weight: .semibold))
                                 .foregroundStyle(Theme.hermes)
-                            Text("添加设备")
+                            Text(L10n.t("s431"))
                                 .font(.system(size: Theme.fontSize(10), weight: .semibold))
                                 .foregroundStyle(Theme.tSecondary)
                         }
 
                         if syncDir.isEmpty {
-                            Text("请先点击「选择」设置同步目录(需为 Git 仓库)")
+                            Text(L10n.t("s487"))
                                 .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
-                            copyBlock("读取 \(Self.skillPath) 并帮我创建 Tokei 私有数据仓库,配置多设备同步")
+                            copyBlock(L10n.f("s495", Self.skillPath))
                         } else if hasRemote {
-                            Text("另一台 Mac").font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
-                            Text("安装 Tokei.app 后选择同一个数据仓库")
+                            Text(L10n.t("s158")).font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
+                            Text(L10n.t("s217"))
                                 .font(.system(size: Theme.fontSize(8.5))).foregroundStyle(Theme.tTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Rectangle().fill(Color.primary.opacity(0.04)).frame(height: 1)
-                            Text("远程 Linux").font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
+                            Text(L10n.t("s513")).font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
                             copyBlock(linuxSetupCommand(remote: dataRepo))
                         } else {
-                            Text("数据目录未关联 Git 仓库")
+                            Text(L10n.t("s290"))
                                 .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
-                            copyBlock("读取 \(Self.skillPath) 并帮我创建 Tokei 私有数据仓库,配置多设备同步")
+                            copyBlock(L10n.f("s495", Self.skillPath))
                         }
                     }
                 }
@@ -3625,12 +3658,12 @@ struct PanelView: View {
     }
 
     var settingsRemoteHintSection: some View {
-        settingsSection("antenna.radiowaves.left.and.right", "远程采集") {
-            Text("多台 Mac 或远程服务器的数据可通过私有 Git 仓库同步,每台设备独立采集、自动加和。")
+        settingsSection("antenna.radiowaves.left.and.right", L10n.t("s514")) {
+            Text(L10n.t("s209"))
                 .font(.system(size: Theme.fontSize(9)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
-            copyBlock("读取 \(Self.skillPath) 帮我配置 Tokei 多设备同步")
+            copyBlock(L10n.f("s494", Self.skillPath))
         }
     }
 
@@ -3639,15 +3672,15 @@ struct PanelView: View {
             HStack(spacing: 5) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: Theme.fontSize(8))).foregroundStyle(.green)
-                Text(deviceName.isEmpty ? "本机" : deviceName)
+                Text(deviceName.isEmpty ? L10n.scopeLocal : deviceName)
                     .font(.system(size: Theme.fontSize(10), weight: .medium)).foregroundStyle(Theme.tPrimary)
-                Text("(本机)").font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
+                Text(L10n.t("s005")).font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
             }
             if store.peers.isEmpty {
                 HStack(spacing: 5) {
                     Image(systemName: "clock")
                         .font(.system(size: Theme.fontSize(8))).foregroundStyle(Theme.tTertiary)
-                    Text("等待其他设备…")
+                    Text(L10n.t("s454"))
                         .font(.system(size: Theme.fontSize(10))).foregroundStyle(Theme.tTertiary)
                 }
             } else {
@@ -3680,14 +3713,14 @@ struct PanelView: View {
             .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("设置")
+                    Text(L10n.t("settings"))
                         .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.tPrimary)
                     Text("\(Updater.releaseTag) · \(Self.buildVersion)")
                         .font(.system(size: Theme.fontSize(8), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary.opacity(0.6))
                 }
-                Text("显示、同步和诊断")
+                Text(L10n.t("s348"))
                     .font(.system(size: Theme.fontSize(9.5)))
                     .foregroundStyle(Theme.tTertiary)
             }
@@ -3703,10 +3736,10 @@ struct PanelView: View {
             .buttonStyle(.plain)
             .tip("GitHub")
             if Updater.isLocalBuild {
-                Text("本地验证版")
+                Text(L10n.t("s389"))
                     .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
-                    .tip("此版本包含尚未发布的改动，不检查线上更新")
+                    .tip(L10n.t("s421"))
             } else if case .idle = updater.state {
                 Button { updater.checkForUpdate() } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -3716,7 +3749,7 @@ struct PanelView: View {
                         .background(Circle().fill(Color.primary.opacity(0.06)))
                 }
                 .buttonStyle(.plain)
-                .tip("检查更新")
+                .tip(L10n.t("s404"))
             } else if case .checking = updater.state {
                 ProgressView()
                     .controlSize(.small)
@@ -3738,7 +3771,7 @@ struct PanelView: View {
                     .background(Circle().fill(Color.primary.opacity(0.06)))
             }
             .buttonStyle(.plain)
-            .tip("关闭设置")
+            .tip(L10n.t("s121"))
         }
         .padding(.bottom, 2)
     }
@@ -3875,8 +3908,8 @@ struct PanelView: View {
                 ?? Self.validSyncDeviceID(deviceName) else {
             if let priorLockedID { deviceName = priorLockedID }
             store.syncSucceeded = false
-            store.syncStatus = "设备名不合法"
-            store.syncDetail = "设备名不能为空，且不能包含斜杠或控制字符"
+            store.syncStatus = L10n.t("s481")
+            store.syncDetail = L10n.t("s482")
             return false
         }
         let interval = SyncManager.normalizedSyncInterval(syncInterval)
@@ -3896,7 +3929,7 @@ struct PanelView: View {
                 deviceName = fallbackID
             }
             store.syncSucceeded = false
-            store.syncStatus = "同步配置保存失败"
+            store.syncStatus = L10n.t("s182")
             store.syncDetail = SyncManager.configPath.path
             return false
         }
@@ -3923,7 +3956,7 @@ struct PanelView: View {
                 } else {
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let count = json["count"] as? Int {
-                        priceResult = count > 0 ? "补全 \(count) 个模型" : "所有模型已匹配 ✓"
+                        priceResult = count > 0 ? L10n.f("s478", count) : L10n.t("s265")
                     } else {
                         priceResult = output.trimmingCharacters(in: .whitespacesAndNewlines)
                     }
@@ -3934,8 +3967,8 @@ struct PanelView: View {
     }
 
     private var debugButtonTitle: String {
-        if debugRunning { return "检查中…" }
-        return debugOutput.isEmpty ? "运行诊断" : "收起诊断"
+        if debugRunning { return L10n.t("s403") }
+        return debugOutput.isEmpty ? L10n.t("s508") : L10n.t("s288")
     }
 
     func toggleDiagnostics() {
@@ -4012,7 +4045,7 @@ struct PanelView: View {
     }
 
     static var buildVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "TokeiBuildDate") as? String ?? "未打包"
+        Bundle.main.object(forInfoDictionaryKey: "TokeiBuildDate") as? String ?? L10n.t("s372")
     }
 
     static var skillPath: String {
@@ -4031,7 +4064,11 @@ struct PanelView: View {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         let url = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return url.isEmpty ? "<未配置 git remote>" : url
+        return url.isEmpty ? L10n.t("s011") : url
+    }
+
+    private static func shellQuote(_ s: String) -> String {
+        ShellEscaping.singleQuoted(s)
     }
 
     func linuxSetupCommand(remote: String) -> String {
@@ -4157,7 +4194,7 @@ struct PanelView: View {
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
                 if error.errno in (errno.EACCES, errno.EAGAIN):
-                    print("Tokei sync error: 另一同步任务正在运行", file=sys.stderr)
+                    print(\(Self.shellQuote(L10n.t("s037"))), file=sys.stderr)
                     sys.exit(75)
                 raise
             os.set_inheritable(lock_fd, True)
@@ -4222,20 +4259,20 @@ struct PanelView: View {
             try:
                 return_code = process.wait(timeout=240)
             except subprocess.TimeoutExpired:
-                print("Tokei sync error: 同步事务超过 240 秒，已终止进程组",
+                print(\(Self.shellQuote(L10n.t("s038"))),
                       file=sys.stderr)
                 stop_process_group()
                 sys.exit(124)
             sys.exit(return_code)
         except (OSError, ValueError, json.JSONDecodeError,
                 subprocess.CalledProcessError) as error:
-            print("Tokei sync error: 同步配置或仓库不可用: {}".format(error),
+            print(\(Self.shellQuote(L10n.t("s039"))).format(error),
                   file=sys.stderr)
             sys.exit(20)
         PY
         fi
 
-        [ "$#" -eq 5 ] || fail 75 "同步锁参数不完整"
+        [ "$#" -eq 5 ] || fail 75 \(Self.shellQuote(L10n.t("s184")))
         lock_fd="$2"
         repo="$3"
         lock_path="$4"
@@ -4243,7 +4280,7 @@ struct PanelView: View {
 
         # 拒绝绕过锁直接进入事务，并确认继承的描述符指向当前仓库锁文件。
         python3 - "$lock_fd" "$lock_path" <<'PY' \
-          || fail 75 "无法确认同步锁"
+          || fail 75 \(Self.shellQuote(L10n.t("s328")))
         import fcntl
         import os
         import sys
@@ -4268,19 +4305,19 @@ struct PanelView: View {
         export SSH_ASKPASS=/usr/bin/false
         export GCM_INTERACTIVE=Never
         export SSH_ASKPASS_REQUIRE=never
-        cd "$repo" || fail 20 "无法进入同步目录"
+        cd "$repo" || fail 20 \(Self.shellQuote(L10n.t("s336")))
 
         git_dir=$(sync_git rev-parse --absolute-git-dir 2>/dev/null) \
-          || fail 20 "同步目录不是有效的 Git 仓库"
+          || fail 20 \(Self.shellQuote(L10n.t("s180")))
         declared_root=$(sync_git rev-parse --show-toplevel 2>/dev/null) \
-          || fail 20 "无法读取同步仓库工作树"
+          || fail 20 \(Self.shellQuote(L10n.t("s333")))
         declared_root=$(cd -- "$declared_root" 2>/dev/null && /bin/pwd -P) \
-          || fail 20 "无法解析同步仓库工作树"
+          || fail 20 \(Self.shellQuote(L10n.t("s329")))
         current_root=$(/bin/pwd -P)
         [ "$declared_root" = "$current_root" ] \
-          || fail 20 "同步仓库 core.worktree 指向其他目录，已停止"
+          || fail 20 \(Self.shellQuote(L10n.t("s167")))
         [ "$git_dir/tokei-sync.lock" = "$lock_path" ] \
-          || fail 75 "同步仓库与锁文件不匹配"
+          || fail 75 \(Self.shellQuote(L10n.t("s168")))
         marker="$git_dir/tokei-sync-rebase"
         rebase_merge="$git_dir/rebase-merge"
         rebase_apply="$git_dir/rebase-apply"
@@ -4314,81 +4351,81 @@ struct PanelView: View {
             if [ "$actual_head" = "$expected_head" ] \
               && [ "$actual_branch" = "refs/heads/main" ] \
               && [ "$actual_onto" = "$expected_onto" ]; then
-              fail 21 "检测到 Tokei 上次遗留的 rebase，现场已保留，请人工确认"
+              fail 21 \(Self.shellQuote(L10n.t("s405")))
             fi
           fi
-          fail 21 "检测到未完成或无法确认归属的 rebase，现场已保留"
+          fail 21 \(Self.shellQuote(L10n.t("s407")))
         elif [ -f "$marker" ]; then
-          validate_marker || fail 21 "发现格式异常的 Tokei rebase 标记，现场已保留"
-          fail 21 "发现 Tokei 遗留的 rebase 标记，现场已保留，请人工确认"
+          validate_marker || fail 21 \(Self.shellQuote(L10n.t("s154")))
+          fail 21 \(Self.shellQuote(L10n.t("s152")))
         fi
 
         for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_START; do
           operation_path=$(sync_git rev-parse --git-path "$operation")
           [ ! -e "$operation_path" ] \
-            || fail 21 "检测到未完成的 $operation，已停止且未改动仓库"
+            || fail 21 \(Self.shellQuote(L10n.t("s408")))
         done
         sequencer_path=$(sync_git rev-parse --git-path sequencer)
         [ ! -d "$sequencer_path" ] \
-          || fail 21 "检测到未完成的 Git sequencer 操作，已停止且未改动仓库"
-        unmerged_state=$(sync_git ls-files -u) || fail 21 "无法检查索引冲突状态"
+          || fail 21 \(Self.shellQuote(L10n.t("s409")))
+        unmerged_state=$(sync_git ls-files -u) || fail 21 \(Self.shellQuote(L10n.t("s327")))
         [ -z "$unmerged_state" ] \
-          || fail 21 "索引包含未解决冲突，已停止且未改动仓库"
+          || fail 21 \(Self.shellQuote(L10n.t("s459")))
 
         branch=$(sync_git symbolic-ref --quiet --short HEAD 2>/dev/null) \
-          || fail 22 "同步仓库处于 detached HEAD，已停止"
+          || fail 22 \(Self.shellQuote(L10n.t("s171")))
         [ "$branch" = "main" ] \
-          || fail 22 "同步仓库必须位于 main 分支，当前为 $branch"
+          || fail 22 \(Self.shellQuote(L10n.t("s172")))
 
         sync_git remote get-url origin >/dev/null 2>&1 \
-          || fail 20 "同步仓库缺少 origin 远端"
-        sync_git fetch origin main || fail 25 "拉取 origin/main 失败"
+          || fail 20 \(Self.shellQuote(L10n.t("s173")))
+        sync_git fetch origin main || fail 25 \(Self.shellQuote(L10n.t("s270")))
         sync_git show-ref --verify --quiet refs/remotes/origin/main \
-          || fail 25 "origin/main 不存在"
+          || fail 25 \(Self.shellQuote(L10n.t("s077")))
         tracked_peer_files=$(sync_git ls-files --cached -- \
           "$peer_json_pathspec" "$exclude_pathspec") \
-          || fail 23 "无法枚举其他设备快照"
+          || fail 23 \(Self.shellQuote(L10n.t("s316")))
         if [ -n "$tracked_peer_files" ]; then
           sync_git restore --source=HEAD --staged --worktree -- \
             "$peer_json_pathspec" "$exclude_pathspec" \
-            || fail 23 "无法恢复其他设备快照"
+            || fail 23 \(Self.shellQuote(L10n.t("s315")))
         fi
         other_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
           -- . "$exclude_pathspec") \
-          || fail 23 "无法检查同步仓库工作区状态"
+          || fail 23 \(Self.shellQuote(L10n.t("s318")))
         [ -z "$other_changes" ] \
-          || fail 23 "同步仓库包含本机快照以外的未提交改动"
+          || fail 23 \(Self.shellQuote(L10n.t("s169")))
 
         ensure_local_commits_only_device() {
           audit_base=$(sync_git rev-parse --verify "$1^{commit}") \
-            || fail 23 "无法固定待审计基线"
+            || fail 23 \(Self.shellQuote(L10n.t("s300")))
           audit_target=$(sync_git rev-parse --verify "$2^{commit}") \
-            || fail 23 "无法固定待审计提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s301")))
           audit_commits=$(sync_git rev-list --reverse "$audit_base..$audit_target") \
-            || fail 23 "无法列出本地待推送提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s295")))
           for audit_commit in $audit_commits; do
             audit_parent_line=$(sync_git rev-list --parents -n 1 "$audit_commit") \
-              || fail 23 "无法读取待推送提交的父提交"
+              || fail 23 \(Self.shellQuote(L10n.t("s334")))
             set -- $audit_parent_line
             [ "$#" -eq 2 ] \
-              || fail 23 "本地待推送历史包含 merge 或 root 提交"
+              || fail 23 \(Self.shellQuote(L10n.t("s381")))
             audit_parent="$2"
 
             if sync_git diff-tree --quiet --no-renames "$audit_parent" "$audit_commit" --; then
-              fail 23 "本地待推送历史包含空提交"
+              fail 23 \(Self.shellQuote(L10n.t("s383")))
             else
               audit_status="$?"
               [ "$audit_status" -eq 1 ] \
-                || fail 23 "无法审计待推送提交内容"
+                || fail 23 \(Self.shellQuote(L10n.t("s312")))
             fi
 
             if sync_git diff-tree --quiet --no-renames "$audit_parent" "$audit_commit" \
               -- "$device_pathspec"; then
-              fail 23 "待推送提交没有修改本机设备快照"
+              fail 23 \(Self.shellQuote(L10n.t("s258")))
             else
               audit_status="$?"
               [ "$audit_status" -eq 1 ] \
-                || fail 23 "无法审计本机设备快照提交"
+                || fail 23 \(Self.shellQuote(L10n.t("s314")))
             fi
 
             if sync_git diff-tree --quiet --no-renames "$audit_parent" "$audit_commit" \
@@ -4397,30 +4434,30 @@ struct PanelView: View {
             else
               audit_status="$?"
               [ "$audit_status" -ne 1 ] \
-                || fail 23 "待推送提交触碰了其他设备或非快照文件"
-              fail 23 "无法审计待推送提交的其他路径"
+                || fail 23 \(Self.shellQuote(L10n.t("s259")))
+              fail 23 \(Self.shellQuote(L10n.t("s313")))
             fi
           done
         }
 
         pre_snapshot_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-          || fail 23 "无法固定快照前本地提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s303")))
         pre_snapshot_base=$(sync_git rev-parse --verify "origin/main^{commit}") \
-          || fail 23 "无法固定快照前远端提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s304")))
         ensure_local_commits_only_device "$pre_snapshot_base" "$pre_snapshot_head"
         verified_pre_snapshot_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-          || fail 23 "无法复核快照前本地提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s310")))
         [ "$verified_pre_snapshot_head" = "$pre_snapshot_head" ] \
-          || fail 23 "快照前历史审计期间 HEAD 已被其他进程修改"
+          || fail 23 \(Self.shellQuote(L10n.t("s260")))
         python3 - "$HOME/.tokei/usage.30s.py" "$repo" "$device_id" <<'PY' \
-          || fail 24 "生成本机数据快照失败"
+          || fail 24 \(Self.shellQuote(L10n.t("s438")))
         import importlib.util
         import sys
 
         script_path, sync_dir, device_id = sys.argv[1:]
         spec = importlib.util.spec_from_file_location("tokei_usage_sync", script_path)
         if spec is None or spec.loader is None:
-            raise RuntimeError("无法加载 usage 脚本")
+            raise RuntimeError(\(Self.shellQuote(L10n.t("s296"))))
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -4430,42 +4467,42 @@ struct PanelView: View {
         }
         writer = getattr(module, "write_sync_snapshot", None)
         if not callable(writer):
-            raise RuntimeError("usage 脚本缺少 write_sync_snapshot")
+            raise RuntimeError(\(Self.shellQuote(L10n.t("s089"))))
         raise SystemExit(writer())
         PY
 
         matches=$(sync_git ls-files --cached --others --exclude-standard \
           -- "$device_pathspec") \
-          || fail 24 "无法检查本机设备快照"
+          || fail 24 \(Self.shellQuote(L10n.t("s325")))
         match_count=$(printf '%s\n' "$matches" \
           | awk 'NF { count++ } END { print count + 0 }')
         [ "$match_count" -eq 1 ] \
-          || fail 24 "本机设备快照缺失或存在大小写重名文件"
+          || fail 24 \(Self.shellQuote(L10n.t("s394")))
 
         other_changes=$(sync_git status --porcelain=v1 --untracked-files=all \
           -- . "$exclude_pathspec") \
-          || fail 23 "无法检查生成快照后的工作区状态"
+          || fail 23 \(Self.shellQuote(L10n.t("s326")))
         [ -z "$other_changes" ] \
-          || fail 23 "生成快照时检测到其他文件被修改"
+          || fail 23 \(Self.shellQuote(L10n.t("s437")))
 
-        sync_git add -- "$device_pathspec" || fail 26 "暂存本机快照失败"
+        sync_git add -- "$device_pathspec" || fail 26 \(Self.shellQuote(L10n.t("s350")))
         if ! sync_git diff --cached --quiet -- "$device_pathspec"; then
           sync_git commit --only -m "tokei sync $device_id" -- "$device_pathspec" \
-            || fail 26 "提交本机快照失败"
+            || fail 26 \(Self.shellQuote(L10n.t("s284")))
         fi
         post_commit_changes=$(sync_git status --porcelain=v1 --untracked-files=all) \
-          || fail 26 "无法检查提交后的工作区状态"
+          || fail 26 \(Self.shellQuote(L10n.t("s321")))
         [ -z "$post_commit_changes" ] \
-          || fail 26 "提交后同步仓库仍有未提交改动"
+          || fail 26 \(Self.shellQuote(L10n.t("s282")))
         post_commit_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-          || fail 23 "无法固定提交后的本地提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s306")))
         post_commit_base=$(sync_git rev-parse --verify "origin/main^{commit}") \
-          || fail 23 "无法固定提交后的审计基线"
+          || fail 23 \(Self.shellQuote(L10n.t("s305")))
         ensure_local_commits_only_device "$post_commit_base" "$post_commit_head"
         verified_post_commit_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-          || fail 23 "无法复核提交后的本地提交"
+          || fail 23 \(Self.shellQuote(L10n.t("s311")))
         [ "$verified_post_commit_head" = "$post_commit_head" ] \
-          || fail 23 "提交后历史审计期间 HEAD 已被其他进程修改"
+          || fail 23 \(Self.shellQuote(L10n.t("s281")))
 
         write_marker() {
           marker_head="$1"
@@ -4480,20 +4517,20 @@ struct PanelView: View {
             printf '%s\n' "$marker_onto"
             printf 'pid=%s\n' "$$"
             date -u '+started_at=%Y-%m-%dT%H:%M:%SZ'
-          } > "$marker_tmp" || fail 28 "无法写入 rebase 恢复标记"
-          mv -f "$marker_tmp" "$marker" || fail 28 "无法保存 rebase 恢复标记"
+          } > "$marker_tmp" || fail 28 \(Self.shellQuote(L10n.t("s294")))
+          mv -f "$marker_tmp" "$marker" || fail 28 \(Self.shellQuote(L10n.t("s293")))
         }
 
         rebase_onto_origin() {
           pre_rebase_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-            || fail 27 "无法读取 rebase 前提交"
+            || fail 27 \(Self.shellQuote(L10n.t("s331")))
           pre_rebase_onto=$(sync_git rev-parse --verify "origin/main^{commit}") \
-            || fail 27 "无法读取 rebase 上游提交"
+            || fail 27 \(Self.shellQuote(L10n.t("s330")))
           ensure_local_commits_only_device "$pre_rebase_onto" "$pre_rebase_head"
           checked_rebase_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-            || fail 27 "无法复核 rebase 前提交"
+            || fail 27 \(Self.shellQuote(L10n.t("s309")))
           [ "$checked_rebase_head" = "$pre_rebase_head" ] \
-            || fail 23 "rebase 前 HEAD 已被其他进程修改"
+            || fail 23 \(Self.shellQuote(L10n.t("s086")))
           if sync_git merge-base --is-ancestor "$pre_rebase_onto" "$pre_rebase_head"; then
             return 0
           fi
@@ -4503,54 +4540,54 @@ struct PanelView: View {
             return 0
           fi
           if [ -d "$rebase_merge" ] || [ -d "$rebase_apply" ]; then
-            fail 27 "rebase 未完成，现场与恢复标记已保留，请人工检查同步仓库"
+            fail 27 \(Self.shellQuote(L10n.t("s088")))
           fi
           rm -f "$marker"
-          fail 27 "本机快照无法安全 rebase 到 origin/main"
+          fail 27 \(Self.shellQuote(L10n.t("s393")))
         }
 
         attempt=1
         while [ "$attempt" -le 3 ]; do
           rebase_onto_origin
           candidate_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-            || fail 23 "无法固定 push 候选提交"
+            || fail 23 \(Self.shellQuote(L10n.t("s297")))
           audit_base=$(sync_git rev-parse --verify "origin/main^{commit}") \
-            || fail 23 "无法固定 push 审计基线"
+            || fail 23 \(Self.shellQuote(L10n.t("s298")))
           ensure_local_commits_only_device "$audit_base" "$candidate_head"
           push_changes=$(sync_git status --porcelain=v1 --untracked-files=all) \
-            || fail 23 "无法检查 push 前的工作区状态"
+            || fail 23 \(Self.shellQuote(L10n.t("s317")))
           [ -z "$push_changes" ] \
-            || fail 23 "push 前同步仓库出现未提交改动"
+            || fail 23 \(Self.shellQuote(L10n.t("s078")))
           push_head=$(sync_git rev-parse --verify "HEAD^{commit}") \
-            || fail 23 "无法复核 push 前 HEAD"
+            || fail 23 \(Self.shellQuote(L10n.t("s307")))
           [ "$push_head" = "$candidate_head" ] \
-            || fail 23 "审计后 HEAD 已被其他进程修改"
+            || fail 23 \(Self.shellQuote(L10n.t("s223")))
           if sync_git push origin "$candidate_head:refs/heads/main"; then
             pushed_head=$(sync_git rev-parse --verify "HEAD^{commit}" 2>/dev/null || true)
             [ "$pushed_head" = "$candidate_head" ] \
-              || fail 23 "push 期间 HEAD 已被其他进程修改"
+              || fail 23 \(Self.shellQuote(L10n.t("s083")))
             printf '多设备同步完成\n'
             exit 0
           fi
 
-          sync_git fetch origin main || fail 25 "push 失败后重新拉取 origin/main 失败"
+          sync_git fetch origin main || fail 25 \(Self.shellQuote(L10n.t("s081")))
           retry_head=$(sync_git rev-parse --verify "HEAD^{commit}" 2>/dev/null || true)
           [ "$retry_head" = "$candidate_head" ] \
-            || fail 23 "push 重试前 HEAD 已被其他进程修改"
+            || fail 23 \(Self.shellQuote(L10n.t("s085")))
           if sync_git merge-base --is-ancestor "$candidate_head" origin/main; then
             printf '远端已包含本机同步提交\n'
             exit 0
           fi
           if sync_git merge-base --is-ancestor origin/main "$candidate_head"; then
-            fail 29 "远端没有竞争更新，push 仍失败，请检查认证或分支权限"
+            fail 29 \(Self.shellQuote(L10n.t("s516")))
           fi
-          [ "$attempt" -lt 3 ] || fail 29 "远端持续更新，三次同步重试均失败"
+          [ "$attempt" -lt 3 ] || fail 29 \(Self.shellQuote(L10n.t("s515")))
           /bin/sleep "$attempt"
           attempt=$((attempt + 1))
           printf '检测到其他设备同时更新，正在重试 %s/3\n' "$attempt"
         done
 
-        fail 29 "push 失败"
+        fail 29 \(Self.shellQuote(L10n.t("s080")))
         SH
         chmod +x ~/.tokei/tokei-sync.sh
         (crontab -l 2>/dev/null | grep -v 'tokei-sync.sh'; echo '*/30 * * * * ~/.tokei/tokei-sync.sh') | crontab -
@@ -4584,7 +4621,7 @@ struct PanelView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "选择同步目录"
+        panel.prompt = L10n.t("s521")
         if panel.runModal() == .OK, let url = panel.url {
             syncDir = url.path
             saveSync()

@@ -18,6 +18,7 @@ class LoginItemManagerTests(unittest.TestCase):
                     "-framework", "Combine",
                     "-framework", "ServiceManagement",
                     str(ROOT / "Tokei/Sources/Tokei/LoginItemManager.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/LoginItemManagerCheck.swift"),
                     "-o", str(binary),
                 ],

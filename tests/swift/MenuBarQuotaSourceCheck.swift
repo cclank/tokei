@@ -54,8 +54,8 @@ struct MenuBarQuotaSourceCheck {
 
         // 标签必须写清是哪个窗口，这是用户能分辨谁是谁的前提。
         let labels = MenuBarQuotaSource.allCases.map(\.label)
-        try expect(labels == ["Claude 5h", "Claude 周", "Claude Fable",
-                              "Codex 5h", "Codex 周", "Kimi 5h", "Kimi 订阅", "Grok"],
+        try expect(labels == ["Claude 5h", L10n.t("s016"), "Claude Fable",
+                              "Codex 5h", L10n.t("s017"), "Kimi 5h", L10n.t("s031"), "Grok"],
                    "window labels changed: \(labels)")
 
         let defaultOn = MenuBarQuotaSource.allCases.filter(\.defaultEnabled).map(\.rawValue)
@@ -98,7 +98,7 @@ struct MenuBarQuotaSourceCheck {
 
         let usage = try decodeFixture(fixtureJSON)
         let metrics = MenuBarQuotaSource.metrics(in: usage)
-        try expect(metrics.map(\.kind.displayName) == ["Claude 5h", "Codex 周"],
+        try expect(metrics.map(\.kind.displayName) == ["Claude 5h", L10n.t("s017")],
                    "default pair changed: \(metrics.map(\.kind.displayName))")
         try expect(metrics.map(\.value) == ["80", "65"],
                    "default values changed: \(metrics.map(\.value))")
@@ -128,8 +128,8 @@ struct MenuBarQuotaSourceCheck {
         var missingFable = usage
         missingFable.claude.qf = nil
         try expect(MenuBarQuotaSource.metrics(in: missingFable).map(\.kind.displayName)
-                    == ["Claude 5h", "Claude 周", "Codex 5h", "Codex 周",
-                        "Kimi 5h", "Kimi 订阅", "Grok"],
+                    == ["Claude 5h", L10n.t("s016"), "Codex 5h", L10n.t("s017"),
+                        "Kimi 5h", L10n.t("s031"), "Grok"],
                    "a nil window must drop out entirely")
 
         // 数据过期 → 也不出现，别在状态栏上挂个陈旧数字。

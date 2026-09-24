@@ -100,9 +100,9 @@ enum UsageSummaryBuilder {
         updated: String? = nil
     ) -> String {
         let lines = toolLines(usage: usage, range: range, visibility: visibility)
-        var out: [String] = ["Tokei 用量 · \(range.label)"]
+        var out: [String] = [L10n.f("s043", range.label)]
         if lines.isEmpty {
-            out.append("（当前范围无可复制的用量）")
+            out.append(L10n.t("s558"))
         } else {
             for line in lines {
                 out.append(formatLine(line))
@@ -111,18 +111,18 @@ enum UsageSummaryBuilder {
             var totalParts: [String] = []
             if t.cost > 0 || t.cost_cny > 0 { totalParts.append(nativeMoney(t.cost, t.cost_cny)) }
             if t.tokens > 0 { totalParts.append("\(Fmt.human(t.tokens)) tok") }
-            if t.sessions > 0 { totalParts.append("\(t.sessions) 会话") }
-            if t.tools > 0 { totalParts.append("\(t.tools) 工具") }
+            if t.sessions > 0 { totalParts.append(L10n.f("s072", t.sessions)) }
+            if t.tools > 0 { totalParts.append(L10n.f("s073", t.tools)) }
             if !totalParts.isEmpty {
-                out.append("合计  " + totalParts.joined(separator: " · "))
+                out.append(L10n.t("s162") + totalParts.joined(separator: " · "))
             }
             var detail: [String] = []
-            if t.input > 0 { detail.append("输入 \(Fmt.human(t.input))") }
-            if t.output > 0 { detail.append("输出 \(Fmt.human(t.output))") }
-            if t.cacheRead > 0 { detail.append("缓存读 \(Fmt.human(t.cacheRead))") }
-            if t.cacheWrite > 0 { detail.append("缓存写 \(Fmt.human(t.cacheWrite))") }
-            if t.reason > 0 { detail.append("推理 \(Fmt.human(t.reason))") }
-            if t.calls > 0 { detail.append("调用 \(t.calls)") }
+            if t.input > 0 { detail.append(L10n.f("s505", Fmt.human(t.input))) }
+            if t.output > 0 { detail.append(L10n.f("s506", Fmt.human(t.output))) }
+            if t.cacheRead > 0 { detail.append(L10n.f("s468", Fmt.human(t.cacheRead))) }
+            if t.cacheWrite > 0 { detail.append(L10n.f("s463", Fmt.human(t.cacheWrite))) }
+            if t.reason > 0 { detail.append(L10n.f("s280", Fmt.human(t.reason))) }
+            if t.calls > 0 { detail.append(L10n.f("s498", t.calls)) }
             if !detail.isEmpty {
                 out.append(detail.joined(separator: " · "))
             }
@@ -133,23 +133,25 @@ enum UsageSummaryBuilder {
         return out.joined(separator: "\n")
     }
 
-    /// Normalize store timestamps like `"更新 HH:mm:ss"` so we never emit `"更新于 更新 …"`.
+    /// Normalize store timestamps like `L10n.t("s356")` so we never emit `L10n.t("s359")`.
     static func formatUpdatedLine(_ updated: String?) -> String? {
         guard let updated else { return nil }
         let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed == "加载中…" || trimmed.hasPrefix("加载中")
-            || trimmed == "加载失败" || trimmed == "预览" {
+        if trimmed == L10n.loading || trimmed.hasPrefix(L10n.t("s137"))
+            || trimmed == L10n.t("s139") || trimmed == L10n.t("s538") {
             return nil
         }
         var body = trimmed
-        if body.hasPrefix("更新于") {
-            body = String(body.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-        } else if body.hasPrefix("更新") {
-            body = String(body.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        let updatedPrefix = L10n.t("s357")
+        let updatePrefix = L10n.t("s354")
+        if body.hasPrefix(updatedPrefix) {
+            body = String(body.dropFirst(updatedPrefix.count)).trimmingCharacters(in: .whitespaces)
+        } else if body.hasPrefix(updatePrefix) {
+            body = String(body.dropFirst(updatePrefix.count)).trimmingCharacters(in: .whitespaces)
         }
         guard !body.isEmpty else { return nil }
-        return "更新于 \(body)"
+        return L10n.f("s358", body)
     }
 
     static func toolLines(
@@ -237,7 +239,7 @@ enum UsageSummaryBuilder {
                 cacheRead: accountUsage.cr > 0 ? accountUsage.cr : nil,
                 cacheWrite: accountUsage.cw > 0 ? accountUsage.cw : nil,
                 reason: nil, hit: nil,
-                extra: r.turns > 0 ? "\(r.turns) 条消息" : nil
+                extra: r.turns > 0 ? L10n.f("s062", r.turns) : nil
             )
             if !line.isEmpty { lines.append(line) }
         }
@@ -388,10 +390,10 @@ enum UsageSummaryBuilder {
             parts.append("\(Fmt.human(tokens)) tok")
         }
         if let sessions = line.sessions, sessions > 0 {
-            parts.append("\(sessions) 会话")
+            parts.append(L10n.f("s070", sessions))
         }
         if let calls = line.calls, calls > 0 {
-            parts.append("\(calls) 次调用")
+            parts.append(L10n.f("s048", calls))
         }
         if let extra = line.extra, !extra.isEmpty {
             parts.append(extra)

@@ -65,10 +65,10 @@ class DeepSeekHarnessTests(unittest.TestCase):
                   / "PanelView.swift").read_text(encoding="utf-8")
 
         self.assertIn("inclusiveIO: true", source)
-        self.assertIn('"输入", Fmt.human(r.in + r.cr + r.cw)', source)
-        self.assertIn('"输出", Fmt.human(r.out + r.reason)', source)
-        self.assertIn('componentsAreSubtotals ? "其中缓存读" : "缓存读"', source)
-        self.assertIn('componentsAreSubtotals ? "其中推理" : "推理"', source)
+        self.assertIn("L10n.metricIn, Fmt.human(r.in + r.cr + r.cw)", source)
+        self.assertIn("L10n.metricOut, Fmt.human(r.out + r.reason)", source)
+        self.assertIn('componentsAreSubtotals ? L10n.t("s125") : L10n.metricCacheRead', source)
+        self.assertIn('componentsAreSubtotals ? L10n.t("s123") : L10n.metricReason', source)
 
     def test_final_message_replaces_usage_chunk_and_splits_reasoning(self):
         timestamp = 1_704_672_000_000

@@ -11,6 +11,7 @@ mkdir -p "$MODULE_CACHE"
 swiftc -parse-as-library \
   -j 1 \
   -module-cache-path "$MODULE_CACHE" \
+  Sources/Tokei/L10n.swift \
   Sources/Tokei/Model.swift \
   Sources/Tokei/SyncManager.swift \
   Tests/SyncManagerIntegrationCheck.swift \

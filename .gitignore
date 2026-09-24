@@ -7,6 +7,8 @@ __pycache__/
 .wrangler/
 .playwright-mcp/
 *.png
+!docs/**/*.png
 tokei-article.md
 Tokei-feature/
 .qoder/
+.commandcode/

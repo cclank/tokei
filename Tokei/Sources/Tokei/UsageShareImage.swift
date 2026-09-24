@@ -129,6 +129,7 @@ enum UsageShareImage {
         case "Qoder Desktop": return Theme.qoder
         case "QoderWork": return Theme.qoderwork
         case "Qoder CLI": return Theme.qodercli
+        case "Qoder CN": return Theme.qodercliCn
         case "Hermes": return Theme.hermes
         case "ZCode": return Theme.zcode
         case "MiMoCode": return Theme.mimocode

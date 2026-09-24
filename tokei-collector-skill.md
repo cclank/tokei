@@ -37,6 +37,7 @@ curl -sL https://raw.githubusercontent.com/<user>/tokei-sync/main/install.sh | b
 - Qoder Desktop (`~/Library/Application Support/Qoder/`)
 - QoderWork (`~/Library/Application Support/QoderWork/`)
 - Qoder CLI (`~/.qoder/projects/`)
+- Qoder CN (`~/.qoder-cn/projects/`)
 - Hermes (`~/.hermes/`)
 - ZCode (`~/.zcode/cli/db/db.sqlite`)
 - MiMoCode (`~/.local/share/mimocode/` 或 `~/Library/Application Support/mimocode/`)

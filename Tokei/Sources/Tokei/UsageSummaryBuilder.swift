@@ -10,6 +10,7 @@ struct UsageToolVisibility: Equatable {
     var qoder = true
     var qoderwork = true
     var qodercli = true
+    var qodercliCN = true
     var hermes = true
     var zcode = true
     var mimocode = true
@@ -265,6 +266,17 @@ enum UsageSummaryBuilder {
             let r = usage.qodercli.ranges.get(range)
             let line = Line(
                 id: "qodercli", name: "Qoder CLI", cost: nil,
+                tokens: r.totalTokens, sessions: r.sessions, calls: r.calls,
+                input: r.in, output: r.out, cacheRead: r.cr, cacheWrite: r.cw,
+                reason: nil, hit: r.hit > 0 ? r.hit : nil,
+                extra: r.credits > 0 ? "\(Fmt.credits(r.credits)) Credits" : nil
+            )
+            if !line.isEmpty { lines.append(line) }
+        }
+        if visibility.qodercliCN {
+            let r = usage.qodercliCN.ranges.get(range)
+            let line = Line(
+                id: "qodercli_cn", name: "Qoder CN", cost: nil,
                 tokens: r.totalTokens, sessions: r.sessions, calls: r.calls,
                 input: r.in, output: r.out, cacheRead: r.cr, cacheWrite: r.cw,
                 reason: nil, hit: r.hit > 0 ? r.hit : nil,

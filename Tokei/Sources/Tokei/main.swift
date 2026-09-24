@@ -377,6 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     let showQ = ud.object(forKey: "showQoderIde") as? Bool ?? false
                     let showQW = ud.object(forKey: "showQoderWork") as? Bool ?? true
                     let showQoderCli = ud.object(forKey: "showQoderCli") as? Bool ?? true
+                    let showQoderCliCn = ud.object(forKey: "showQoderCliCn") as? Bool ?? true
                     let showZ = ud.object(forKey: "showZcode") as? Bool ?? true
                     let showM = ud.object(forKey: "showMimoCode") as? Bool ?? true
                     var total = 0
@@ -396,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     if showQ { let r = u.qoder.ranges.get(.today); total += Int(r.in + r.out + r.cached) }
                     if showQW { let r = u.qoderwork.ranges.get(.today); total += r.totalTokens }
                     if showQoderCli { let r = u.qodercli.ranges.get(.today); total += r.totalTokens }
+                    if showQoderCliCn { let r = u.qodercliCN.ranges.get(.today); total += r.totalTokens }
                     if showZ { let r = u.zcode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
                     if showM { let r = u.mimocode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
                     if total > 0 {

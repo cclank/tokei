@@ -454,6 +454,8 @@ final class SyncManager {
             u.qoder.model = mergeModelName(u.qoder.model, peer.usage.qoder.model)
             mergeRanges(&u.qodercli.ranges, peer.usage.qodercli.ranges, pairs)
             u.qodercli.model = mergeModelName(u.qodercli.model, peer.usage.qodercli.model)
+            mergeRanges(&u.qodercliCN.ranges, peer.usage.qodercliCN.ranges, pairs)
+            u.qodercliCN.model = mergeModelName(u.qodercliCN.model, peer.usage.qodercliCN.model)
             mergeRanges(&u.hermes.ranges, peer.usage.hermes.ranges, pairs)
             mergeRanges(&u.zcode.ranges, peer.usage.zcode.ranges, pairs)
             mergeRanges(&u.mimocode.ranges, peer.usage.mimocode.ranges, pairs)

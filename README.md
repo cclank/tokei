@@ -37,6 +37,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 | **Qoder Desktop** | Token、缓存、会话、调用次数、模型 |
 | **QoderWork** | Token、调用次数、子 Agent、时长、上下文 |
 | **Qoder CLI** | 会话、调用、工具、活跃时长、估算 Token |
+| **Qoder CN** | 会话、调用、工具、活跃时长、估算 Token、Credits（国内版独立统计） |
 | **Hermes** | Token、成本、缓存命中率、模型 |
 | **ZCode** | Token（输入/输出/缓存/推理）、成本、模型 |
 | **MiMoCode** | Token（输入/输出/缓存/推理）、成本、模型 |
@@ -224,6 +225,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | Qoder Desktop | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` |
 | QoderWork | `~/Library/Application Support/QoderWork/data/agents.db` |
 | Qoder CLI | `~/.qoder/projects/**/*.jsonl` |
+| Qoder CN | `~/.qoder-cn/projects/**/*.jsonl`（可用 `TOKEI_QODERCLI_CN_DIR` 覆盖） |
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | MiMoCode | `~/Library/Application Support/mimocode/mimocode*.db` 或 `~/.local/share/mimocode/mimocode*.db` |
 | Devin | Token：`~/.local/share/devin/cli/sessions.db`；额度：`~/Library/Application Support/{Devin,Windsurf}/User/globalStorage/state.vscdb`（桌面端启动时写入的套餐缓存，落款取自 `logs/` 目录名） |
@@ -394,7 +396,7 @@ Tokei is a **macOS menu bar app** that tracks usage, cost, and quotas across **2
 
 **Features:** Real-time monitoring (30s refresh, seven menu bar styles, three density modes) · Cost estimation (317 models, OpenRouter pricing) · Dashboard (daily chart, weekly heatmap) · Time ranges (today/week/month/year) · Project-level tracking · Multi-device sync (Git-based, Mac + Linux) · Annual Wrapped · Keep awake · Sit reminder · Privacy-first (local usage logs, explicit quota controls) · [Compare with CodexBar](https://tokei.lanshuagent.com#compare)
 
-**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Qoder Desktop, QoderWork, Qoder CLI, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin
+**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Qoder Desktop, QoderWork, Qoder CLI, Qoder CN, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin
 
 For full documentation, visit [tokei.lanshuagent.com](https://tokei.lanshuagent.com).
 

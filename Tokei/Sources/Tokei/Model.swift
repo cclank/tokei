@@ -975,6 +975,7 @@ struct Usage: Codable {
     var qoderwork: QoderStat
     var qoder: QoderIdeStat
     var qodercli: QoderStat
+    var qodercliCN: QoderStat
     var hermes: HermesStat
     var zcode: TokenUsageStat
     var mimocode: TokenUsageStat
@@ -1000,7 +1001,7 @@ struct Usage: Codable {
 
     enum CodingKeys: String, CodingKey {
         case claude, codex, gemini, grok, grokBot = "grok_bot"
-        case qoder, qoderwork, qodercli, hermes, zcode, mimocode
+        case qoder, qoderwork, qodercli, qodercliCN = "qodercli_cn", hermes, zcode, mimocode
         case openclaw, pi, workbuddy, workbuddyAI = "workbuddy_ai"
         case codebuddy
         case deepseekHarness = "deepseek_harness", opencode, qwencode
@@ -1019,6 +1020,8 @@ struct Usage: Codable {
         qoder = (try? c.decodeIfPresent(QoderIdeStat.self, forKey: .qoder))
             ?? QoderIdeStat(ranges: .empty, model: nil)
         qodercli = (try? c.decodeIfPresent(QoderStat.self, forKey: .qodercli))
+            ?? QoderStat(ranges: .empty, model: nil)
+        qodercliCN = (try? c.decodeIfPresent(QoderStat.self, forKey: .qodercliCN))
             ?? QoderStat(ranges: .empty, model: nil)
         hermes = try c.decode(HermesStat.self, forKey: .hermes)
         zcode = try c.decodeIfPresent(TokenUsageStat.self, forKey: .zcode) ?? TokenUsageStat(ranges: .empty)

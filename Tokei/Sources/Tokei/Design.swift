@@ -344,10 +344,12 @@ struct SegmentedTabs: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard sel != k else { return }
-                        sel = k
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
                             highlighted = k
                         }
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) { sel = k }
                     }
             }
         }

@@ -265,6 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     static let visibleRefreshInterval: TimeInterval = 10
     var globalMouseMonitor: Any?
     weak var popoverAnchorButton: NSStatusBarButton?
+    private var popoverResizeObserver: NSObjectProtocol?
+    private var reanchoringPopover = false
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -540,10 +542,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidShow(_ notification: Notification) {
         store.popoverVisible = true
+        popover.contentViewController?.view.window?.animationBehavior = .none
+        observePopoverResize()
     }
 
     func popoverDidClose(_ notification: Notification) {
         store.popoverVisible = false
+        stopObservingPopoverResize()
+    }
+
+    private func observePopoverResize() {
+        stopObservingPopoverResize()
+        guard let window = popover.contentViewController?.view.window else { return }
+        popoverResizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reanchorPopover()
+        }
+    }
+
+    private func stopObservingPopoverResize() {
+        if let popoverResizeObserver {
+            NotificationCenter.default.removeObserver(popoverResizeObserver)
+            self.popoverResizeObserver = nil
+        }
+    }
+
+    private func reanchorPopover() {
+        guard !reanchoringPopover, popover.isShown else { return }
+        guard let button = popoverAnchorButton ?? statusItem.button else { return }
+        reanchoringPopover = true
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        reanchoringPopover = false
     }
 }
 

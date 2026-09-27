@@ -646,6 +646,7 @@ final class DataLoader {
     import os
     import sys
 
+    sys.dont_write_bytecode = True
     script_path, device_id, sync_dir, claude_quota = sys.argv[1:5]
     if claude_quota:
         os.environ["TOKEI_CLAUDE_QUOTA_JSON"] = claude_quota

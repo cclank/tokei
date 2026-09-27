@@ -10044,8 +10044,9 @@ def scan_deepseek_harness(bounds, cache):
 # ---------- OpenCode ----------
 # SQLite: ~/.local/share/opencode/opencode.db；旧版 JSON 作为补充来源。
 # JSON 文件: ~/.local/share/opencode/storage/message/<session>/msg_*.json
-# 每条 assistant 消息有 tokens{input,output,reasoning,cache{read,write}} + cost + modelID。
-_OPENCODE_COST_CACHE_VERSION = 2
+# V1 在 message.data 中保存消息；V2 改为 session_message，角色在 type，模型在 model.id。
+# 两种表会同时保留迁移过来的历史消息，因此合并时按消息 ID 去重。
+_OPENCODE_COST_CACHE_VERSION = 3
 
 
 def _opencode_db_paths():
@@ -10131,25 +10132,42 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
         connection.execute("PRAGMA query_only=ON")
         # 会话自带工作目录，让 OpenCode / MiMoCode 参与项目足迹与回顾页。
         session_projects = {}
-        session_columns = {row[1] for row in connection.execute("PRAGMA table_info(session)")}
-        if {"id", "directory"} <= session_columns:
+        for table in ("session", "session_v2"):
+            session_columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if not {"id", "directory"} <= session_columns:
+                continue
             try:
                 for session_id, directory in connection.execute(
-                        "SELECT id, directory FROM session"):
+                        f"SELECT id, directory FROM {table}"):
                     if isinstance(directory, str) and directory.startswith("/"):
                         session_projects[session_id] = directory
             except sqlite3.Error:
                 pass
-        rows = connection.execute("SELECT id, session_id, time_created, data FROM message")
-        for message_id, session_id, created_ms, raw in rows:
+
+        def add_message(message_id, session_id, created_ms, raw, role=None):
+            if message_id and str(message_id) in message_ids:
+                return
             try:
                 message = json.loads(raw)
             except (TypeError, ValueError):
-                continue
+                return
+            if not isinstance(message, dict):
+                return
+            if role is not None:
+                if role != "assistant":
+                    return
+                v2_model = message.get("model")
+                message = dict(message)
+                message["role"] = "assistant"
+                message["sessionID"] = session_id or message.get("sessionID")
+                if isinstance(v2_model, dict):
+                    message["modelID"] = message.get("modelID") or v2_model.get("id", "")
+                    message["providerID"] = message.get("providerID") or v2_model.get("providerID")
+
             day = _opencode_message_day(message, session_id or "", created_ms or 0,
                                         estimate_missing_cost=estimate_missing_cost)
             if not day:
-                continue
+                return
             if message_id:
                 message_ids.add(str(message_id))
             day_key = day.pop("date")
@@ -10178,6 +10196,21 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
                 marker = day.get("session") or session_id
                 if marker and marker not in bucket["sessions"]:
                     bucket["sessions"].append(str(marker))
+
+        try:
+            rows = connection.execute("SELECT id, session_id, time_created, data FROM message")
+        except sqlite3.Error:
+            rows = ()
+        for message_id, session_id, created_ms, raw in rows:
+            add_message(message_id, session_id, created_ms, raw)
+
+        try:
+            v2_rows = connection.execute(
+                "SELECT id, session_id, time_created, type, data FROM session_message")
+        except sqlite3.Error:
+            v2_rows = ()
+        for message_id, session_id, created_ms, message_type, raw in v2_rows:
+            add_message(message_id, session_id, created_ms, raw, role=message_type)
     finally:
         connection.close()
     for day_key, ids in sessions.items():

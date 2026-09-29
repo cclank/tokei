@@ -7,6 +7,8 @@ private enum TestFailure: Error {
 @main
 struct QuotaHistoryStoreCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("tokei-quota-history-\(UUID().uuidString)")
         let fileURL = directory.appendingPathComponent("quota_history.json")

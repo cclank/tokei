@@ -62,11 +62,11 @@ struct ProjectTrailView: View {
 
     private func groupLabel(_ g: Group) -> String {
         switch g {
-        case .pinned: return "置顶"
-        case .today: return "今天"
-        case .week: return "本周"
-        case .earlier: return "更早"
-        case .dormant: return "沉睡"
+        case .pinned: return L("置顶")
+        case .today: return L("今天")
+        case .week: return L("本周")
+        case .earlier: return L("更早")
+        case .dormant: return L("沉睡")
         }
     }
 
@@ -83,13 +83,13 @@ struct ProjectTrailView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .tip("刷新")
+                .tip(L("刷新"))
             }
             if loading || cached == nil {
                 HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
                     .frame(height: 120)
             } else if filtered.isEmpty {
-                HStack { Spacer(); Text("无匹配项目").font(.system(size: Theme.fontSize(11))).foregroundStyle(Theme.tTertiary); Spacer() }
+                HStack { Spacer(); Text(L("无匹配项目")).font(.system(size: Theme.fontSize(11))).foregroundStyle(Theme.tTertiary); Spacer() }
                     .frame(height: 80)
             } else {
                 let grouped = Dictionary(grouping: filtered, by: { group(for: $0) })
@@ -112,7 +112,7 @@ struct ProjectTrailView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: Theme.fontSize(10), weight: .medium))
                 .foregroundStyle(Theme.tTertiary)
-            TextField("搜索项目…", text: $query)
+            TextField(L("搜索项目…"), text: $query)
                 .font(.system(size: Theme.fontSize(11)))
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.tPrimary)
@@ -171,7 +171,7 @@ struct ProjectTrailView: View {
                     Text(nativeMoney(p.cost, p.cost_cny))
                         .font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(Theme.tSecondary)
                     if !p.top_model.isEmpty {
-                        Text(p.top_model)
+                        Text(L10n.data(p.top_model))
                             .font(.system(size: Theme.fontSize(8), design: .monospaced))
                             .foregroundStyle(Theme.tTertiary)
                             .lineLimit(1)
@@ -211,7 +211,7 @@ struct ProjectTrailView: View {
                     .foregroundStyle(pinned.contains(p.path) ? Theme.qoder : Theme.tTertiary)
             }
             .buttonStyle(.plain)
-            .tip(pinned.contains(p.path) ? "取消置顶" : "置顶")
+            .tip(pinned.contains(p.path) ? L("取消置顶") : L("置顶"))
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -219,14 +219,14 @@ struct ProjectTrailView: View {
         .contentShape(Rectangle())
         .onTapGesture { openInTerminal(p.path) }
         .contextMenu {
-            Button("在终端打开") { openInTerminal(p.path) }
-            Button("在 Ghostty 打开") { openInGhostty(p.path) }
-            Button("在 iTerm 打开") { openInITerm(p.path) }
+            Button(L("在终端打开")) { openInTerminal(p.path) }
+            Button(L("在 Ghostty 打开")) { openInGhostty(p.path) }
+            Button(L("在 iTerm 打开")) { openInITerm(p.path) }
             Divider()
-            Button("在 Finder 中显示") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
-            Button("用 VS Code 打开") { openInVSCode(p.path) }
+            Button(L("在 Finder 中显示")) { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
+            Button(L("用 VS Code 打开")) { openInVSCode(p.path) }
             Divider()
-            Button("复制路径") {
+            Button(L("复制路径")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(p.path, forType: .string)
             }
@@ -238,7 +238,7 @@ struct ProjectTrailView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         let earliestStr = earliest.map { fmt.string(from: $0) } ?? "?"
-        return Text("共 \(projects.count) 个项目 · 最远 \(earliestStr)")
+        return Text(L("共 %@ 个项目 · 最远 %@", projects.count, earliestStr))
             .font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary)
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
@@ -260,6 +260,12 @@ struct ProjectTrailView: View {
         case "workbuddy_ai": return Theme.workbuddyAI
         case "codebuddy": return Theme.codebuddy
         case "deepseek_harness": return Theme.deepseekHarness
+        case "opencode": return Theme.opencode
+        case "kimicode": return Theme.kimicode
+        case "musecode": return Theme.musecode
+        case "cmdcode": return Theme.cmdcode
+        case "devin": return Theme.devin
+        case "minimax": return Theme.minimax
         default: return Theme.tTertiary
         }
     }

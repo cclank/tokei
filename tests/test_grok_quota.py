@@ -210,10 +210,13 @@ class GrokQuotaTests(unittest.TestCase):
         self.assertIsNone(quota["reset"])
         self.assertEqual(quota["products"][0]["pct"], 0.0)
 
-    def _write_auth(self, token="test-token"):
+    def _write_auth(self, token="test-token", expires_at=None):
         Path(USAGE.GROK_AUTH).parent.mkdir(parents=True, exist_ok=True)
+        entry = {"key": token, "auth_mode": "oidc"}
+        if expires_at is not None:
+            entry["expires_at"] = expires_at
         Path(USAGE.GROK_AUTH).write_text(json.dumps({
-            "https://auth.x.ai::id": {"key": token, "auth_mode": "oidc"},
+            "https://auth.x.ai::id": entry,
         }), encoding="utf-8")
 
     def _fake_billing_response(self, body, final_url=None):
@@ -394,6 +397,68 @@ class GrokQuotaTests(unittest.TestCase):
 
         self.assertEqual(quota["source"], "log")
         self.assertEqual(quota["pct"], 22.0)
+
+    def enable_live(self, root):
+        (root / ".tokei" / "config.json").write_text(
+            json.dumps({"grok_live_quota_enabled": True}), encoding="utf-8")
+
+    def test_an_expired_login_skips_the_request_and_says_why(self):
+        """access token 过期后以前照样发请求，401 被吞掉再悄悄退回本地日志：
+        开关看着开着，界面却不知道已经不是实时值了。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.configure(root)
+            self.enable_live(root)
+            # 固定时钟是 2026-07-19 12:00 UTC
+            self._write_auth(expires_at="2026-07-19T10:00:00.028992Z")
+            write_jsonl(Path(USAGE.GROK_LOG), [
+                self.billing_line(41.0, "2026-07-14T08:24:06+00:00",
+                                  "2026-07-21T08:24:06+00:00", ts="2026-07-19T03:00:00+00:00"),
+            ])
+            with mock.patch("urllib.request.urlopen") as opener:
+                quota = USAGE.scan_grok_quota()
+            opener.assert_not_called()
+
+        self.assertEqual(quota["pct"], 41.0)
+        self.assertEqual(quota["source"], "log")
+        self.assertTrue(quota["auth_expired"])
+
+    def test_an_expired_login_without_any_local_value_still_reports_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.configure(root)
+            self.enable_live(root)
+            self._write_auth(expires_at="2026-07-19T10:00:00Z")
+            with mock.patch("urllib.request.urlopen") as opener:
+                quota = USAGE.scan_grok_quota()
+            opener.assert_not_called()
+        self.assertEqual(quota, {"auth_expired": True})
+
+    def test_a_token_about_to_expire_counts_as_expired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.configure(root)
+            self._write_auth(expires_at="2026-07-19T12:00:30Z")
+            self.assertEqual(USAGE._grok_auth_state(), ("test-token", True))
+            self._write_auth(expires_at="2026-07-19T18:00:00Z")
+            self.assertEqual(USAGE._grok_auth_state(), ("test-token", False))
+
+    def test_a_valid_or_undated_token_still_queries_live(self):
+        body = {"config": {"creditUsagePercent": 33.0, "currentPeriod": {
+            "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-07-14T08:24:06+00:00", "end": "2026-07-21T08:24:06+00:00"}}}
+        for expires_at in ("2026-07-19T18:00:00Z", None):
+            with self.subTest(expires_at=expires_at), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.configure(root)
+                self.enable_live(root)
+                self._write_auth(expires_at=expires_at)
+                with mock.patch("urllib.request.urlopen",
+                                return_value=self._fake_billing_response(body)) as opener:
+                    quota = USAGE.scan_grok_quota()
+                opener.assert_called_once()
+                self.assertEqual((quota["pct"], quota["source"]), (33.0, "live"))
+                self.assertNotIn("auth_expired", quota)
 
     def test_compute_surfaces_live_quota_fields(self):
         """compute() 输出的 grok 块应带上 pct/reset/products/source。"""

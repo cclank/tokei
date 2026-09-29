@@ -200,5 +200,94 @@ class ClaudeQuotaCacheTests(unittest.TestCase):
         scan.assert_called_once_with()
 
 
+    def test_a_future_dated_file_does_not_become_the_watermark(self):
+        """Chromium 缓存里残留过 mtime 为 2037 年的文件。它若成了水位线，
+        之后真实的新 /usage 永远比水位线旧，增量扫描就再也捡不到。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "decoy", "junk", self.now + 11 * 365 * 86400)
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            payloads = {"old": self._payload(37.0, 62.0)}
+            self.assertEqual(self._scan(cache_dir, state_file, self._decoder(payloads))["q5"], 37.0)
+            watermark = json.loads(state_file.read_text(encoding="utf-8"))["scan_mtime_ns"]
+            self.assertEqual(watermark, (self.now - 500) * 1_000_000_000)
+
+            # 六小时全量兜底之内，新条目只能靠增量扫描捡到
+            self._write_entry(cache_dir, "new", "new", self.now + 600)
+            payloads["new"] = self._payload(41.0, 65.0)
+            second = self._scan(cache_dir, state_file, self._decoder(payloads), now=self.now + 700)
+            self.assertEqual(second["q5"], 41.0)
+
+    def test_a_future_dated_file_is_never_decoded_or_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "future", "future", self.now + 3600)
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            payloads = {"future": self._payload(99.0, 99.0), "old": self._payload(37.0, 62.0)}
+            seen = []
+
+            def spy(data):
+                seen.append(data[len(MAGIC):].decode("ascii"))
+                return self._decoder(payloads)(data)
+
+            result = self._scan(cache_dir, state_file, spy)
+            self.assertEqual(result["q5"], 37.0)
+            self.assertNotIn("future", seen)
+
+            # 时间真走到它之后，它就是普通的新文件
+            later = self._scan(cache_dir, state_file, spy, now=self.now + 3700)
+            self.assertEqual(later["q5"], 99.0)
+
+    def test_a_small_clock_skew_is_still_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "skewed", "skewed", self.now + 120)
+            payloads = {"skewed": self._payload(12.0, 34.0)}
+            self.assertEqual(self._scan(cache_dir, state_file, self._decoder(payloads))["q5"], 12.0)
+
+    def test_a_state_poisoned_by_an_earlier_version_is_discarded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            state_file = Path(tmp) / "state.json"
+            self._write_entry(cache_dir, "old", "old", self.now - 500)
+            state_file.write_text(json.dumps({
+                "version": 2,
+                "scan_mtime_ns": (self.now + 11 * 365 * 86400) * 1_000_000_000,
+                "last_full_scan": self.now,
+                "snapshot": {"q5": 1.0, "q_updated": self.now - 60},
+            }), encoding="utf-8")
+            payloads = {"old": self._payload(37.0, 62.0)}
+            result = self._scan(cache_dir, state_file, self._decoder(payloads))
+            self.assertEqual(result["q5"], 37.0)
+            self.assertEqual(json.loads(state_file.read_text(encoding="utf-8"))["version"],
+                             USAGE._CLAUDE_QUOTA_STATE_VERSION)
+
+
+
+class ClaudeQuotaSwiftParityTests(unittest.TestCase):
+    """App 内置的 Swift 解码器与采集器是同一套算法，两边必须一起改。"""
+
+    def setUp(self):
+        root = Path(__file__).resolve().parents[1]
+        self.swift = (root / "Tokei/Sources/Tokei/DataLoader.swift").read_text(encoding="utf-8")
+
+    def test_swift_ignores_future_dated_files_with_the_same_skew(self):
+        self.assertIn("claudeQuotaFutureSkew: TimeInterval = 5 * 60", self.swift)
+        self.assertEqual(USAGE._CLAUDE_QUOTA_FUTURE_SKEW, 5 * 60)
+        self.assertIn("claudeCacheRecords().filter { $0.modified <= horizon }", self.swift)
+
+    def test_swift_state_version_moves_with_the_collector(self):
+        version = USAGE._CLAUDE_QUOTA_STATE_VERSION
+        self.assertIn(f"var version = {version}", self.swift)
+        self.assertIn(f"state.version == {version} else", self.swift)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,9 +9,10 @@ enum QuotaHistoryTool: String, CaseIterable, Identifiable {
     var windowNames: [String] {
         switch self {
         case .claude:
-            return ["5 小时", "周 · 全部", "周 · Fable"]
+            // 数据里的窗口标识（历史记录按它存），显示时再过 L()。
+            return ["5 小时", "周 · 全部", "周 · Fable"] // l10n-ignore
         case .codex:
-            return ["周"]
+            return ["周"] // l10n-ignore
         }
     }
 }
@@ -239,7 +240,7 @@ struct QuotaHistoryProjection {
         tool: QuotaHistoryTool
     ) -> [QuotaModelActivity] {
         let all = activity(for: point, tool: tool)
-        guard tool == .claude, window == "周 · Fable" else { return all }
+        guard tool == .claude, window == "周 · Fable" else { return all } // l10n-ignore
         return all.filter { $0.model.localizedCaseInsensitiveContains("fable") }
     }
 
@@ -249,13 +250,13 @@ struct QuotaHistoryProjection {
         tool: QuotaHistoryTool
     ) -> Double? {
         switch (tool, window) {
-        case (.claude, "5 小时"):
+        case (.claude, "5 小时"): // l10n-ignore
             return point.claudeFiveHourRemaining
-        case (.claude, "周 · 全部"):
+        case (.claude, "周 · 全部"): // l10n-ignore
             return point.claudeWeekRemaining
-        case (.claude, "周 · Fable"):
+        case (.claude, "周 · Fable"): // l10n-ignore
             return point.claudeFableWeekRemaining
-        case (.codex, "周"):
+        case (.codex, "周"): // l10n-ignore
             return point.codexWeekRemaining
         default:
             return nil

@@ -16,6 +16,7 @@ class QoderUsageModelTests(unittest.TestCase):
                     "swiftc",
                     "-parse-as-library",
                     str(ROOT / "Tokei/Sources/Tokei/Model.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/QoderUsageModelCheck.swift"),
                     "-o",
                     str(binary),

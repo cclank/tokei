@@ -41,6 +41,7 @@ curl -sL https://raw.githubusercontent.com/<user>/tokei-sync/main/install.sh | b
 - Hermes (`~/.hermes/`)
 - ZCode (`~/.zcode/cli/db/db.sqlite`)
 - MiMoCode (`~/.local/share/mimocode/` 或 `~/Library/Application Support/mimocode/`)
+- MiniMax Code (`~/.minimax/v2/`)
 - OpenClaw (`~/.openclaw/`)
 - Pi Coding Agent CLI (`~/.pi/agent/sessions/`)
 - WorkBuddy (`~/.workbuddy/projects/`)

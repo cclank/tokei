@@ -118,5 +118,54 @@ class ModelNameTests(unittest.TestCase):
             USAGE._OV_MODELS = old_override_models
 
 
+class ClaudeModelNameTests(unittest.TestCase):
+    """Claude 的型号写法有好几种：Claude Code 写 claude-opus-5-5，价格表与数据面板用
+    anthropic/claude-opus-5.5，API 还会给 -20260921 日期快照或 -latest。"""
+
+    def test_every_spelling_shows_the_version(self):
+        cases = {
+            "claude-opus-5-5": "Opus 5.5",
+            "claude-opus-5.5": "Opus 5.5",
+            "anthropic/claude-opus-5.5": "Opus 5.5",
+            "claude-opus-5-5-20260921": "Opus 5.5",
+            "claude-opus-5": "Opus 5",
+            "claude-sonnet-5": "Sonnet 5",
+            "claude-fable-5-1": "Fable 5.1",
+            "anthropic/claude-fable-5.1": "Fable 5.1",
+            "claude-sonnet-4-5-20250929": "Sonnet 4.5",
+            "claude-3-5-sonnet-20240620": "Sonnet 3.5",
+            "claude-3-opus-20240229": "Opus 3",
+        }
+        for model, expected in cases.items():
+            with self.subTest(model=model):
+                self.assertEqual(USAGE.nice_model(model), expected)
+
+    def test_sonnet_5_5_is_its_own_model_at_the_official_price(self):
+        """OpenRouter 还没收录 Sonnet 5.5 时，靠内置价认出它，而不是按 sonnet 家族兜底成 Sonnet 5。"""
+        for model in ("claude-sonnet-5-5", "claude-sonnet-5.5", "claude-sonnet-5-5-20260915"):
+            with self.subTest(model=model):
+                self.assertEqual(USAGE._pricing_id(model), "anthropic/claude-sonnet-5.5")
+                self.assertEqual(USAGE.nice_model(model), "Sonnet 5.5")
+        price = USAGE._raw_price("claude-sonnet-5-5")
+        self.assertEqual((price["in"], price["out"], price["cache_read"], price["cache_write"]),
+                         (2.0, 10.0, 0.2, 2.5))
+        self.assertEqual(price["write1h"], 4.0)
+
+    def test_dated_snapshots_and_latest_price_as_their_base_model(self):
+        """以前日期后缀被当成版本号，最后按家族兜底：Opus 5.5 被算成 Opus 4.8（贵 25%），
+        Sonnet 4.5 被算成 Sonnet 5。"""
+        cases = {
+            "claude-opus-5-5-20260921": "anthropic/claude-opus-5.5",
+            "claude-opus-5-5-latest": "anthropic/claude-opus-5.5",
+            "claude-sonnet-4-5-20250929": "anthropic/claude-sonnet-4.5",
+            "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
+            "claude-opus-5-5": "anthropic/claude-opus-5.5",
+        }
+        for model, expected in cases.items():
+            with self.subTest(model=model):
+                self.assertEqual(USAGE._pricing_id(model), expected)
+                self.assertEqual(USAGE._raw_price(model), USAGE._raw_price(expected))
+
+
 if __name__ == "__main__":
     unittest.main()

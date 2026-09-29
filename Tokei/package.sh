@@ -68,6 +68,10 @@ cp "$PROJ_DIR/usage.30s.py" "$APP/Contents/Resources/"
 [ -f "AppIcon.icns" ] && cp "AppIcon.icns" "$APP/Contents/Resources/"
 [ -d "Sources/Tokei/Resources/sit" ] && cp -R "Sources/Tokei/Resources/sit" "$APP/Contents/Resources/"
 [ -f "Sources/Tokei/Resources/github-mark.png" ] && cp "Sources/Tokei/Resources/github-mark.png" "$APP/Contents/Resources/"
+# 界面词表：中文是源语言（代码里的原文就是 key），其他语言各一份 <lang>.lproj
+for lproj in Localization/*.lproj; do
+    [ -d "$lproj" ] && cp -R "$lproj" "$APP/Contents/Resources/"
+done
 
 # Info.plist
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -85,6 +89,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Tokei</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
+    <key>CFBundleLocalizations</key>
+    <array><string>zh-Hans</string><string>en</string><string>fr</string><string>ja</string><string>ko</string></array>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

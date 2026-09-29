@@ -7,6 +7,25 @@ private enum TestFailure: Error {
 @main
 struct PopoverPlacementCheck {
     static func main() throws {
+        // 换页只在宽度真的变了时才请 App 重新摆放弹窗（issue #105），其余一律不动（issue #97）。
+        let layout = PanelLayoutContext(contentSize: CGSize(width: 322, height: 600))
+        var refits = 0
+        layout.onPageWidthChange = { refits += 1 }
+        layout.pageDidChange("cards", width: 322)
+        try expect(refits == 0, "reporting the current page again must not refit")
+        layout.pageDidChange("settings", width: 640)
+        try expect(refits == 1 && layout.page == "settings", "a wider page must refit once")
+        layout.pageDidChange("settings", width: 640)
+        try expect(refits == 1, "staying on the same page must not refit")
+        let wide = PanelLayoutContext(contentSize: CGSize(width: 640, height: 600))
+        var wideRefits = 0
+        wide.onPageWidthChange = { wideRefits += 1 }
+        wide.pageDidChange("settings", width: 640)
+        wide.pageDidChange("dashboard", width: 640)
+        wide.pageDidChange("cards", width: 640)
+        try expect(wideRefits == 0 && wide.page == "cards",
+                   "pages with the same width keep the fixed frame")
+
         let external = NSRect(x: 1920, y: 0, width: 1920, height: 1040)
         let focused = NSRect(x: 0, y: 0, width: 1512, height: 900)
 

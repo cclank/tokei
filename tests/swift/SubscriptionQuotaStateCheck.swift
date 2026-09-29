@@ -3,6 +3,8 @@ import Foundation
 @main
 struct SubscriptionQuotaStateCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         try expect(
             SubscriptionQuotaState.resolve([
                 (value: nil, stale: nil),

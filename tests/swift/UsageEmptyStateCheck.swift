@@ -11,6 +11,8 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
 @main
 struct UsageEmptyStateCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         let none: (RangeKey) -> Int = { _ in 0 }
 
         // 正在刷新时先说自己在刷：这一刻「空」还不是结论。

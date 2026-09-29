@@ -34,7 +34,8 @@ final class KeepAwake: ObservableObject {
 
     func start(minutes: Int?) {
         clear()
-        let name = "Tokei 防休眠" as CFString
+        // 系统电源断言的名字（pmset -g assertions 里看得到），不是界面文案。
+        let name = "Tokei 防休眠" as CFString // l10n-ignore
         let level = IOPMAssertionLevel(kIOPMAssertionLevelOn)
         // 保持亮屏 = 防关屏 + 防系统睡眠;允许关屏 = 仅防系统睡眠
         if !allowDisplaySleep {
@@ -117,7 +118,7 @@ struct KeepAwakeMenu: View {
             HStack(spacing: 4) {
                 Image(systemName: ka.active ? "cup.and.saucer.fill" : "cup.and.saucer")
                     .font(.system(size: Theme.fontSize(10), weight: .semibold))
-                Text(ka.active ? ka.statusLabel : "防休眠")
+                Text(ka.active ? ka.statusLabel : L("防休眠"))
                     .font(.system(size: Theme.fontSize(11), weight: .medium))
             }
             .foregroundStyle(ka.active ? AnyShapeStyle(Theme.claude) : AnyShapeStyle(.secondary))
@@ -127,26 +128,26 @@ struct KeepAwakeMenu: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("左键开关 · 右键配置时长/模式")
+        .help(L("左键开关 · 右键配置时长/模式"))
         .contextMenu {
-            Button { ka.start(minutes: nil) } label: { Label("无限期", systemImage: "infinity") }
-            Button { ka.start(minutes: 15) }  label: { Text("15 分钟") }
-            Button { ka.start(minutes: 30) }  label: { Text("30 分钟") }
-            Button { ka.start(minutes: 60) }  label: { Text("1 小时") }
-            Button { ka.start(minutes: 120) } label: { Text("2 小时") }
+            Button { ka.start(minutes: nil) } label: { Label(L("无限期"), systemImage: "infinity") }
+            Button { ka.start(minutes: 15) }  label: { Text(L("15 分钟")) }
+            Button { ka.start(minutes: 30) }  label: { Text(L("30 分钟")) }
+            Button { ka.start(minutes: 60) }  label: { Text(L("1 小时")) }
+            Button { ka.start(minutes: 120) } label: { Text(L("2 小时")) }
             Divider()
-            Picker("模式", selection: Binding(
+            Picker(L("模式"), selection: Binding(
                 get: { ka.allowDisplaySleep },
                 set: { ka.setMode(allowDisplaySleep: $0) })) {
-                Text("保持亮屏").tag(false)
-                Text("允许关屏").tag(true)
+                Text(L("保持亮屏")).tag(false)
+                Text(L("允许关屏")).tag(true)
             }
-            Toggle("低电量保护", isOn: Binding(
+            Toggle(L("低电量保护"), isOn: Binding(
                 get: { ka.lowBatteryGuard }, set: { ka.lowBatteryGuard = $0 }))
             if ka.active {
                 Divider()
                 Button(role: .destructive) { ka.stop() } label: {
-                    Label("关闭防休眠", systemImage: "xmark.circle")
+                    Label(L("关闭防休眠"), systemImage: "xmark.circle")
                 }
             }
         }

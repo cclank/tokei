@@ -27,6 +27,7 @@ struct UsageToolVisibility: Equatable {
     var musecode = true
     var cmdcode = true
     var devin = true
+    var minimax = true
 
     static let allVisible = UsageToolVisibility()
 }
@@ -101,9 +102,9 @@ enum UsageSummaryBuilder {
         updated: String? = nil
     ) -> String {
         let lines = toolLines(usage: usage, range: range, visibility: visibility)
-        var out: [String] = ["Tokei 用量 · \(range.label)"]
+        var out: [String] = [L("Tokei 用量 · %@", range.label)]
         if lines.isEmpty {
-            out.append("（当前范围无可复制的用量）")
+            out.append(L("（当前范围无可复制的用量）"))
         } else {
             for line in lines {
                 out.append(formatLine(line))
@@ -112,18 +113,18 @@ enum UsageSummaryBuilder {
             var totalParts: [String] = []
             if t.cost > 0 || t.cost_cny > 0 { totalParts.append(nativeMoney(t.cost, t.cost_cny)) }
             if t.tokens > 0 { totalParts.append("\(Fmt.human(t.tokens)) tok") }
-            if t.sessions > 0 { totalParts.append("\(t.sessions) 会话") }
-            if t.tools > 0 { totalParts.append("\(t.tools) 工具") }
+            if t.sessions > 0 { totalParts.append(L("%@ 会话", t.sessions)) }
+            if t.tools > 0 { totalParts.append(L("%@ 工具", t.tools)) }
             if !totalParts.isEmpty {
-                out.append("合计  " + totalParts.joined(separator: " · "))
+                out.append(L("合计  %@", totalParts.joined(separator: " · ")))
             }
             var detail: [String] = []
-            if t.input > 0 { detail.append("输入 \(Fmt.human(t.input))") }
-            if t.output > 0 { detail.append("输出 \(Fmt.human(t.output))") }
-            if t.cacheRead > 0 { detail.append("缓存读 \(Fmt.human(t.cacheRead))") }
-            if t.cacheWrite > 0 { detail.append("缓存写 \(Fmt.human(t.cacheWrite))") }
-            if t.reason > 0 { detail.append("推理 \(Fmt.human(t.reason))") }
-            if t.calls > 0 { detail.append("调用 \(t.calls)") }
+            if t.input > 0 { detail.append(L("输入 %@", Fmt.human(t.input))) }
+            if t.output > 0 { detail.append(L("输出 %@", Fmt.human(t.output))) }
+            if t.cacheRead > 0 { detail.append(L("缓存读 %@", Fmt.human(t.cacheRead))) }
+            if t.cacheWrite > 0 { detail.append(L("缓存写 %@", Fmt.human(t.cacheWrite))) }
+            if t.reason > 0 { detail.append(L("推理 %@", Fmt.human(t.reason))) }
+            if t.calls > 0 { detail.append(L("调用 %@", t.calls)) }
             if !detail.isEmpty {
                 out.append(detail.joined(separator: " · "))
             }
@@ -139,18 +140,20 @@ enum UsageSummaryBuilder {
         guard let updated else { return nil }
         let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed == "加载中…" || trimmed.hasPrefix("加载中")
-            || trimmed == "加载失败" || trimmed == "预览" {
+        // 状态文字是按当前语言写进去的，这里也按当前语言认。
+        if [L("加载失败"), L("预览")].contains(trimmed) || trimmed.hasPrefix(L("加载中")) {
             return nil
         }
         var body = trimmed
-        if body.hasPrefix("更新于") {
-            body = String(body.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-        } else if body.hasPrefix("更新") {
-            body = String(body.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        for template in ["更新于 %@", "更新 %@"] { // l10n-ignore
+            let prefix = L(template, "").trimmingCharacters(in: .whitespaces)
+            if !prefix.isEmpty, body.hasPrefix(prefix) {
+                body = String(body.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                break
+            }
         }
         guard !body.isEmpty else { return nil }
-        return "更新于 \(body)"
+        return L("更新于 %@", body)
     }
 
     static func toolLines(
@@ -238,7 +241,7 @@ enum UsageSummaryBuilder {
                 cacheRead: accountUsage.cr > 0 ? accountUsage.cr : nil,
                 cacheWrite: accountUsage.cw > 0 ? accountUsage.cw : nil,
                 reason: nil, hit: nil,
-                extra: r.turns > 0 ? "\(r.turns) 条消息" : nil
+                extra: r.turns > 0 ? L("%@ 条消息", r.turns) : nil
             )
             if !line.isEmpty { lines.append(line) }
         }
@@ -359,6 +362,10 @@ enum UsageSummaryBuilder {
             appendTokenTool(&lines, id: "devin", name: "Devin",
                             range: usage.devin.ranges.get(range))
         }
+        if visibility.minimax {
+            appendTokenTool(&lines, id: "minimax", name: "MiniMax Code",
+                            range: usage.minimax.ranges.get(range))
+        }
         return lines
     }
 
@@ -400,10 +407,10 @@ enum UsageSummaryBuilder {
             parts.append("\(Fmt.human(tokens)) tok")
         }
         if let sessions = line.sessions, sessions > 0 {
-            parts.append("\(sessions) 会话")
+            parts.append(L("%@ 会话", sessions))
         }
         if let calls = line.calls, calls > 0 {
-            parts.append("\(calls) 次调用")
+            parts.append(L("%@ 次调用", calls))
         }
         if let extra = line.extra, !extra.isEmpty {
             parts.append(extra)

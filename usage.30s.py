@@ -182,7 +182,11 @@ DEVIN_CLI_DB_PATHS = _path_candidates(
     os.path.join(HOME, "Library", "Application Support", "devin", "cli", "sessions.db"),
     os.path.join(APPDATA, "devin", "cli", "sessions.db"),
     os.path.join(LOCALAPPDATA, "devin", "cli", "sessions.db"))
-OPENCLAW_DB = os.path.join(OPENCLAW_STATE_DIR, "tasks", "runs.sqlite")
+# MiniMax Code 桌面端的本地运行时库；模型名在同级的 observability/logs 里。
+MINIMAX_DB_PATHS = _path_candidates(
+    "TOKEI_MINIMAX_DB",
+    os.path.join(HOME, ".minimax", "v2", "sqlite", "runtime-state.sqlite"))
+OPENCLAW_DB =os.path.join(OPENCLAW_STATE_DIR, "tasks", "runs.sqlite")
 OPENCLAW_STATE_DB = os.path.join(OPENCLAW_STATE_DIR, "state", "openclaw.sqlite")
 OPENCLAW_AGENTS = os.path.join(OPENCLAW_STATE_DIR, "agents")
 PI_AGENT_DIR = os.path.expanduser(os.environ.get("PI_CODING_AGENT_DIR", os.path.join(HOME, ".pi", "agent")))
@@ -249,6 +253,8 @@ ANTIGRAVITY_SCAN_CACHE = _writable_path("antigravity_scan_cache.json")
 _DEFAULT_PRICES = {
     "anthropic/claude-fable-5.1":   {"in": 10.0,  "out": 50.0, "cache_read": 0.25,   "cache_write": 12.5, "write1h": 20.0},
     "anthropic/claude-sonnet-5":    {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
+    # OpenRouter 目录还没收录 Sonnet 5.5；官方价与 Sonnet 5 相同。收录后以目录为准。
+    "anthropic/claude-sonnet-5.5":  {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
     "anthropic/claude-opus-4.8":     {"in": 5.0,   "out": 25.0, "cache_read": 0.5,    "cache_write": 6.25},
     "anthropic/claude-sonnet-4.6":   {"in": 3.0,   "out": 15.0, "cache_read": 0.3,    "cache_write": 3.75},
     "anthropic/claude-haiku-4.5":    {"in": 1.0,   "out": 5.0,  "cache_read": 0.1,    "cache_write": 1.25},
@@ -459,6 +465,9 @@ def _normalize(model: str):
     if "/" in m:
         return m                                      # 已是 OpenRouter 格式
     if m.startswith("claude"):
+        # 日期快照与 -latest 同基础版一个价：claude-opus-5-5-20260921 → claude-opus-5-5。
+        # 不剥的话下一行会把「5-20260921」当成版本号，最后按家族兜底成别的型号计价。
+        m = re.sub(r"-(?:\d{8}|latest)$", "", m)
         m = re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)    # claude-opus-4-8 → claude-opus-4.8
         return "anthropic/" + m
     if re.match(r"(gpt|o\d|chatgpt)", m):
@@ -477,6 +486,8 @@ def _normalize(model: str):
         return "meta/" + m
     if m.startswith("mimo"):
         return "xiaomi/" + m
+    if m.startswith("minimax"):
+        return "minimax/" + m
     if m == "hy3":
         return "tencent/hy3"
     if m in ("hy3-preview", "hy3 preview"):
@@ -663,10 +674,17 @@ def nice_model(m: str) -> str:
         return "未知"
     import re
     s = m.lower()
-    for key, disp in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")):
+    for key, disp in (("fable", "Fable"), ("opus", "Opus"), ("sonnet", "Sonnet"),
+                      ("haiku", "Haiku")):
         if key in s:
-            mt = re.search(r"(\d+)-(\d+)", s)
-            return f"{disp} {mt.group(1)}.{mt.group(2)}" if mt else disp
+            # 新写法版本在家族名之后（opus-5-5 / opus-5.5 / opus-5，可能再带日期），
+            # 老写法在之前（claude-3-5-sonnet）。版本段最多两位，日期不会被当成版本。
+            mt = (re.search(rf"{key}[-_ ]?(\d{{1,2}})(?:[-.](\d{{1,2}}))?(?!\d)", s)
+                  or re.search(rf"(\d{{1,2}})(?:[-.](\d{{1,2}}))?[-_ ]{key}", s))
+            if not mt:
+                return disp
+            major, minor = mt.group(1), mt.group(2)
+            return f"{disp} {major}.{minor}" if minor else f"{disp} {major}"
     if "gpt" in s:
         # Luna Reserve 的内部标识,展示为 Luna Reserve 而不是裸 GPT。
         if re.search(r"(?:^|[-_/ ])reserve(?:$|[-_/ ])", s):
@@ -688,6 +706,11 @@ def nice_model(m: str) -> str:
             return "MiMo"
         head = "MiMo-V" + parts[0] if parts[0][0].isdigit() else "MiMo-" + parts[0]
         return "-".join([head] + [part.capitalize() for part in parts[1:]])
+    if s.split("/")[-1].startswith("minimax"):
+        # minimax/minimax-m3 → MiniMax M3，MiniMax-M2.7-highspeed → MiniMax M2.7 Highspeed
+        rest = m.split("/")[-1][len("minimax"):]
+        parts = [part for part in re.split(r"[-\s]+", rest) if part]
+        return " ".join(["MiniMax"] + [part[:1].upper() + part[1:] for part in parts])
     name = re.sub(r"[-:](free|preview|latest)$", "", m.split("/")[-1]).replace("-", " ")
     return " ".join(w[:1].upper() + w[1:] if w[:1].isalpha() else w
                     for w in name.split())
@@ -1049,7 +1072,36 @@ def ledger_flush():
             os.close(lock_fd)
 
 
+# _sources 保留多少天。
+#
+# 它记的是「当天这笔用量分别来自哪个会话」，只有当前扫描还能重新看到那些会话时
+# 才需要——用来在会话贡献变化时替换而不是重复累加。更老的日子永远不会再被扫到，
+# 明细只是每次 compute 都被递归遍历一遍再整份写回：实测 codex 的 _sources 占了
+# 整个账本 1.56 MB 里的 1.2 MB，对应 _ledger_values 的 9.7 万次调用。
+#
+# 收拢只丢来源明细，当天的合计值原样保留；万一某天又出现在实时扫描里，
+# _ledger_merge_sources 本来就有「没有 _sources 的老记录」那条 legacy 分支兜底。
+_LEDGER_SOURCES_RETAIN_DAYS = 45
+
+
+def _prune_ledger_sources(ledger, today=None):
+    """把过了保留期的天的 _sources 收拢掉，合计值不动。返回是否有改动。"""
+    today = today or date.today()
+    cutoff = (today - timedelta(days=_LEDGER_SOURCES_RETAIN_DAYS)).isoformat()
+    pruned = False
+    for days in (ledger.get("tools") or {}).values():
+        if not isinstance(days, dict):
+            continue
+        for day_key, day in days.items():
+            if day_key >= cutoff or not isinstance(day, dict):
+                continue
+            if day.pop("_sources", None) is not None:
+                pruned = True
+    return pruned
+
+
 def _save_ledger(ledger):
+    _prune_ledger_sources(ledger)
     tmp = None
     try:
         directory = os.path.dirname(_LEDGER_FILE)
@@ -1479,6 +1531,10 @@ def _empty_devin():
 
 
 def _empty_mimocode():
+    return _empty_opencode()
+
+
+def _empty_minimax():
     return _empty_opencode()
 
 
@@ -3370,6 +3426,12 @@ def _iter_codex_token_lines(path, chunk_size=64 * 1024, header_limit=4 * 1024):
 # 按最近活跃优先：项目足迹本来就按 last_active 排序，用户看得见的那几行
 # 第一轮就补齐，长尾在后台几分钟内自然补完。
 _CODEX_PROJECT_BACKFILL_PER_SCAN = 150
+# 只给这么多天内活跃过的会话补项目路径。
+#
+# 打开一个会话文件约 10ms，几千个历史会话合起来是几十秒；而项目足迹按最近活跃
+# 排序，几个月前的会话补上了也排在看不见的地方。超出这个窗口的条目写空串占位，
+# 之后不再重试——宁可老项目缺席，也不让每轮扫描替它们反复开文件。
+_CODEX_PROJECT_BACKFILL_DAYS = 60
 
 
 def _codex_session_cwd(path, max_lines=8, max_line_bytes=128 * 1024):
@@ -3422,10 +3484,14 @@ def _codex_session_meta(path, max_lines=20, max_line_bytes=2 * 1024 * 1024):
                     spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
                     if isinstance(spawn, dict):
                         parent_id = spawn.get("parent_thread_id")
-                return meta.get("id") or meta.get("session_id"), parent_id
+                # 分页续页（history_mode=paginated）用 history_base 标明接在哪一页之后。
+                history_base = meta.get("history_base")
+                if not isinstance(history_base, dict) or not history_base:
+                    history_base = None
+                return meta.get("id") or meta.get("session_id"), parent_id, history_base
     except OSError:
         pass
-    return None, None
+    return None, None, None
 
 
 def _codex_rollout_files():
@@ -3445,8 +3511,29 @@ def _codex_rollout_files():
     return files
 
 
+_CODEX_UNKNOWN = object()
+
+
+def _codex_page_key(path, entry):
+    """同一会话里「这是哪一页」。
+
+    Codex Desktop 会把一个长会话分页写成多个文件，续页的 session_meta 带
+    history_base（接在第几条之后）。同一页的镜像（sessions/ 与 archived_sessions/
+    各一份）history_base 相同；不同续页各不相同；第一页没有 history_base。
+    早先缓存的条目没存这个字段，用到时再读一次文件头补上。
+    """
+    if "history_base" not in entry:
+        entry["history_base"] = _codex_session_meta(path)[2]
+    base = entry.get("history_base")
+    return json.dumps(base, sort_keys=True) if isinstance(base, dict) else None
+
+
 def _codex_canonical_file_cache(file_cache):
-    """Keep resumed segments; discard only copies covered by another segment."""
+    """Keep resumed segments; discard only copies covered by another segment.
+
+    有 response_ids 的文件按 id 覆盖去重；没有 id 的旧式文件无法逐条比对，
+    同一会话、同一页只留最完整的一份。续页各是一页，不会被当成前一页的副本丢掉。
+    """
     canonical = {}
     groups = {}
     for path, entry in file_cache.items():
@@ -3464,7 +3551,9 @@ def _codex_canonical_file_cache(file_cache):
                 int(entry.get("parsed_size", 0) or 0))
     for copies in groups.values():
         covered = set()
-        legacy_selected = False
+        legacy_pages = set()
+        # 只有同一会话里有两个以上无 id 的文件时才需要分页，平常不碰文件。
+        paged = sum(1 for _, entry in copies if not entry.get("response_ids")) > 1
         for path, entry in sorted(copies, key=score, reverse=True):
             ids = set(entry.get("response_ids") or [])
             if ids:
@@ -3472,9 +3561,10 @@ def _codex_canonical_file_cache(file_cache):
                     continue
                 covered.update(ids)
             else:
-                if legacy_selected:
+                page = _codex_page_key(path, entry) if paged else None
+                if page in legacy_pages:
                     continue
-                legacy_selected = True
+                legacy_pages.add(page)
             canonical[path] = entry
     return canonical
 
@@ -3548,7 +3638,7 @@ def scan_codex(bounds, cache):
 
             if append_from is None:
                 events = []
-                session_id, forked_from_id = _codex_session_meta(f)
+                session_id, forked_from_id, history_base = _codex_session_meta(f)
                 file_limits = None; file_limits_ts = None; file_plan = None
                 file_g_limits = None; file_g_ts = None; file_g_plan = None
                 file_r_limits = None; file_r_ts = None
@@ -3563,6 +3653,8 @@ def scan_codex(bounds, cache):
                 events = []
                 session_id = entry.get("session_id")
                 forked_from_id = entry.get("forked_from_id")
+                # 老缓存没有这个键时保持「未知」，由 _codex_page_key 按需补读。
+                history_base = entry.get("history_base", _CODEX_UNKNOWN)
                 file_limits = entry.get("limits"); file_limits_ts = entry.get("limits_ts")
                 file_plan = entry.get("plan")
                 file_g_limits = entry.get("g_limits"); file_g_ts = entry.get("g_ts")
@@ -3754,6 +3846,8 @@ def scan_codex(bounds, cache):
                 "canonical": was_canonical,
                 "dedupe_peers": entry.get("dedupe_peers") if isinstance(entry, dict) else None,
             }
+            if history_base is not _CODEX_UNKNOWN:
+                fc[f]["history_base"] = history_base
             cache["_dirty"] = True
             if _time.monotonic() >= next_checkpoint:
                 _save_scan_cache(cache)
@@ -3769,11 +3863,18 @@ def scan_codex(bounds, cache):
         dedupe_paths.update(linked_paths)
     # 项目路径按需补齐,让 Codex 参与项目足迹与回顾页。没读到也写空串占位,
     # 免得每轮扫描都为同一批读不出 cwd 的会话重复开文件。
-    pending = [(str(entry.get("last_event_ts") or ""), f, entry)
-               for f, entry in fc.items()
-               if isinstance(entry, dict) and "proj" not in entry]
-    if pending:
-        pending.sort(reverse=True)      # 最近活跃的会话先补，排序用缓存里现成的时间戳
+    horizon = (datetime.now() - timedelta(days=_CODEX_PROJECT_BACKFILL_DAYS)).isoformat()
+    pending, skipped = [], []
+    for f, entry in fc.items():
+        if not isinstance(entry, dict) or "proj" in entry:
+            continue
+        stamp = str(entry.get("last_event_ts") or "")
+        (pending if stamp >= horizon else skipped).append((stamp, f, entry))
+    if pending or skipped:
+        # 窗口外的直接占位，不开文件；窗口内的最近活跃优先，按轮次上限分摊。
+        for _, _f, entry in skipped:
+            entry["proj"] = ""
+        pending.sort(reverse=True)
         for _, f, entry in pending[:_CODEX_PROJECT_BACKFILL_PER_SCAN]:
             entry["proj"] = _codex_session_cwd(f) or ""
         cache["_dirty"] = True
@@ -4746,17 +4847,30 @@ def _grok_live_quota_enabled():
     return bool(_tokei_config().get("grok_live_quota_enabled"))
 
 
-def _grok_auth_token():
+# access token 大约 6 小时过期；离过期不足一分钟也按已过期处理。
+_GROK_AUTH_EXPIRY_SKEW = 60
+
+
+def _grok_auth_state(now_epoch=None):
+    """返回 (token, 是否已过期)。
+
+    只读 access token，不代刷：auth.json 与 Grok CLI / OpenUsage 共用，refresh_token
+    会轮换，抢刷会把它们自己的登录顶掉。过期了就交给界面说明，等 grok 下次运行时续期。
+    """
     auth = _load_json(GROK_AUTH, {})
     if not isinstance(auth, dict):
-        return None
+        return None, False
     for entry in auth.values():
         if not isinstance(entry, dict):
             continue
         token = entry.get("key") or entry.get("access_token")
         if isinstance(token, str) and token.strip():
-            return token.strip()
-    return None
+            expires = _iso_to_epoch(entry.get("expires_at")) \
+                if isinstance(entry.get("expires_at"), str) else None
+            now = now_epoch if now_epoch is not None \
+                else datetime.now(timezone.utc).timestamp()
+            return token.strip(), bool(expires and expires - now <= _GROK_AUTH_EXPIRY_SKEW)
+    return None, False
 
 
 def _normalize_grok_billing(config, *, plan=None, source=None, updated=None,
@@ -4924,9 +5038,12 @@ def fetch_grok_live_quota():
     cached = _cached_grok_quota(_GROK_QUOTA_TTL)
     if cached and cached.get("source") == "live":
         return cached
-    token = _grok_auth_token()
+    token, expired = _grok_auth_state()
     if not token:
         return _cached_grok_quota(_GROK_QUOTA_FALLBACK_TTL)
+    if expired:
+        # 过期的 token 只会换来 401；以前每次刷新都白敲一次接口，再悄悄退回本地日志。
+        return {"auth_expired": True}
     try:
         import urllib.request
         req = urllib.request.Request(
@@ -4966,13 +5083,19 @@ def scan_grok_quota():
     if log_quota and not log_quota.get("stale"):
         _save_grok_quota_cache(log_quota)
 
+    auth_expired = False
     if _grok_live_quota_enabled():
         live = fetch_grok_live_quota()
         if live and live.get("pct") is not None:
             return live
+        auth_expired = bool(live and live.get("auth_expired"))
+
+    def with_auth_state(quota):
+        # 实时开关开着却只能给本地值时，把原因带给界面，不装作还在查实时。
+        return {**quota, "auth_expired": True} if auth_expired else quota
 
     if log_quota and log_quota.get("pct") is not None:
-        return log_quota
+        return with_auth_state(log_quota)
 
     cached = _cached_grok_quota(_GROK_QUOTA_FALLBACK_TTL * 12)  # 本地缓存放宽到约 1 小时
     if cached and cached.get("pct") is not None:
@@ -4985,8 +5108,8 @@ def scan_grok_quota():
             out["stale"] = True
             out["pct"] = 0.0
             out["reset"] = None
-        return out
-    return {}
+        return with_auth_state(out)
+    return {"auth_expired": True} if auth_expired else {}
 
 
 # ---------- 千问办公额度 (官方桌面端本机 MCP；需显式开启) ----------
@@ -5407,6 +5530,7 @@ _PROVIDER_QUOTA_ENV = {
     "zai": "TOKEI_ZAI_QUOTA",
     "antigravity": "TOKEI_ANTIGRAVITY_QUOTA",
     "devin": "TOKEI_DEVIN_QUOTA",
+    "minimax": "TOKEI_MINIMAX_QUOTA",
 }
 
 
@@ -7432,6 +7556,168 @@ def scan_devin_quota():
     return fetch_devin_quota() if _provider_quota_enabled("devin") else {}
 
 
+# ---------- MiniMax Token Plan（用户自愿填写的 Key，联网查询）----------
+# 本地库只有 token 没有额度。额度要拿 Token Plan 的 Subscription Key（sk-cp-…）
+# 去官方接口查，所以默认关闭：用户在设置里填了 Key 才会联网。
+# 返回的 model_remains 有几种写法并存，桌面端自己也是分别解析的：
+#   current_interval_remaining_percent        剩余百分比（数字）
+#   current_interval_used/total_percent       已用 / 总额（字符串，加赠时总额 > 100）
+#   current_interval_total/usage_count        次数；注意 usage_count 其实是「剩余」次数
+# weekly 同理（current_weekly_*），*_status == 3 表示不限量。
+# 中国区与国际区的 Key 不通用：拿错区域的 Key 会得到 1004，此时换另一个区域再试。
+_MINIMAX_QUOTA_ENDPOINTS = {
+    "cn": ("https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+           "https://www.minimax.cn/v1/token_plan/remains"),
+    "global": ("https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+               "https://www.minimax.io/v1/token_plan/remains"),
+}
+_MINIMAX_UNAUTHORIZED = 1004
+_MINIMAX_UNLIMITED_STATUS = 3
+
+
+def _minimax_number(value):
+    if isinstance(value, str):
+        value = value.strip().rstrip("%").strip()
+    return _provider_number(value)
+
+
+def _minimax_window_usage(entry, prefix):
+    """返回 (已用百分比, 说明)；拿不到时百分比为 None。"""
+    if _provider_number(entry.get(f"{prefix}_status")) == _MINIMAX_UNLIMITED_STATUS:
+        return 0.0, "不限量"
+    remaining = _minimax_number(entry.get(f"{prefix}_remaining_percent"))
+    if remaining is not None:
+        return 100.0 - remaining, None
+    used = _minimax_number(entry.get(f"{prefix}_used_percent"))
+    if used is not None:
+        total = _minimax_number(entry.get(f"{prefix}_total_percent"))
+        return (used / total * 100.0 if total and total > 0 else used), None
+    total = _provider_number(entry.get(f"{prefix}_total_count"))
+    left = _provider_number(entry.get(f"{prefix}_usage_count"))
+    if total and total > 0 and left is not None:
+        used = max(0.0, total - left)
+        return used / total * 100.0, f"{int(used):,}/{int(total):,} 次"
+    return None, None
+
+
+def _minimax_reset(entry, end_key, remains_key, now):
+    reset = _provider_epoch(entry.get(end_key))
+    if reset:
+        return reset
+    remains = _provider_number(entry.get(remains_key))
+    return int(now + remains / 1000.0) if remains and remains > 0 else None
+
+
+def _minimax_status_code(payload):
+    base = payload.get("base_resp") if isinstance(payload, dict) else None
+    code = _provider_number(base.get("status_code")) if isinstance(base, dict) else None
+    return int(code) if code is not None else None
+
+
+def _normalize_minimax_quota(payload, *, region="cn", updated=None):
+    now = int(updated if updated is not None else datetime.now().timestamp())
+    entries = payload.get("model_remains") if isinstance(payload, dict) else None
+    entries = [item for item in entries or [] if isinstance(item, dict)]
+
+    def is_video(item):
+        return "video" in str(item.get("model_name") or "").lower()
+
+    text = next((item for item in entries if item.get("model_name") == "general"), None) \
+        or next((item for item in entries if not is_video(item)), None)
+    windows = []
+    if text:
+        for window_id, title, prefix, end_key, remains_key, minutes in (
+                ("minimax-5h", "5小时额度", "current_interval",
+                 "end_time", "remains_time", 300),
+                ("minimax-weekly", "周额度", "current_weekly",
+                 "weekly_end_time", "weekly_remains_time", 10080)):
+            used, detail = _minimax_window_usage(text, prefix)
+            if used is not None:
+                windows.append(_provider_window(
+                    window_id, title, used, _minimax_reset(text, end_key, remains_key, now),
+                    minutes, detail))
+    video = next((item for item in entries if is_video(item)
+                  and (_provider_number(item.get("current_interval_total_count")) or 0) > 0),
+                 None)
+    if video:
+        used, detail = _minimax_window_usage(video, "current_interval")
+        if used is not None:
+            windows.append(_provider_window(
+                "minimax-video", "视频额度", used,
+                _minimax_reset(video, "end_time", "remains_time", now), None, detail))
+    return {
+        "available": bool(windows),
+        "plan": "Token Plan" if windows else None,
+        "account": None,
+        "windows": windows,
+        "details": [],
+        "source": "minimax-api",
+        "region": region,
+        "updated": now,
+        "stale": False,
+    }
+
+
+def _minimax_regions():
+    configured = (_provider_config_string("TOKEI_MINIMAX_REGION", "minimax_region") or "").lower()
+    if configured in _MINIMAX_QUOTA_ENDPOINTS:
+        return (configured,)
+    # 上次查通的区域先试，省掉一次注定 1004 的请求。
+    last = _latest_cached_provider_quota("minimax") or {}
+    return ("global", "cn") if last.get("region") == "global" else ("cn", "global")
+
+
+def _minimax_quota_payload(api_key, region):
+    """同一区域有新旧两个入口；404 或非 JSON 换下一个，网络错误直接抛出。"""
+    last_error = None
+    for url in _MINIMAX_QUOTA_ENDPOINTS[region]:
+        try:
+            return _provider_json_request(
+                url, headers={"Authorization": f"Bearer {api_key}"}, timeout=8)
+        except (RuntimeError, ValueError) as error:
+            last_error = error
+    raise last_error or RuntimeError("MiniMax quota endpoint unavailable")
+
+
+def fetch_minimax_quota():
+    api_key = _provider_config_string("TOKEI_MINIMAX_API_KEY", "minimax_api_key")
+    if not api_key:
+        return {}
+    marker = _provider_credential_marker("minimax-remains-v1", api_key)
+    cached = _cached_provider_quota("minimax", marker, _PROVIDER_QUOTA_TTL)
+    if cached:
+        return cached
+    fallback = _cached_provider_quota(
+        "minimax", marker, _PROVIDER_QUOTA_FALLBACK_TTL, stale=True)
+    # 失败后同样按 TTL 节流，Key 填错时不至于每次刷新都去敲接口。
+    if _provider_quota_recent_attempt_result("minimax", marker, _PROVIDER_QUOTA_TTL):
+        return fallback or {}
+    try:
+        for region in _minimax_regions():
+            payload = _minimax_quota_payload(api_key, region)
+            code = _minimax_status_code(payload)
+            if code == _MINIMAX_UNAUTHORIZED:
+                continue
+            if code not in (None, 0):
+                raise RuntimeError(f"MiniMax quota error {code}")
+            quota = _normalize_minimax_quota(payload, region=region)
+            if not quota["available"]:
+                _save_provider_quota_attempt("minimax", marker, result="empty")
+                return fallback or {}
+            _save_provider_quota_cache("minimax", marker, quota)
+            return quota
+        raise PermissionError("MiniMax rejected the Token Plan key")
+    except Exception:
+        _save_provider_quota_attempt("minimax", marker)
+        if fallback:
+            return fallback
+        raise
+
+
+def scan_minimax_quota():
+    return fetch_minimax_quota() if _provider_quota_enabled("minimax") else {}
+
+
 def scan_provider_quotas(errors=None):
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -7441,6 +7727,7 @@ def scan_provider_quotas(errors=None):
         "zai": scan_zai_quota,
         "antigravity": scan_antigravity_quota,
         "devin": scan_devin_quota,
+        "minimax": scan_minimax_quota,
     }
     result = {name: {} for name in (*all_scans, "cursor", "grok_bot")}
     scans = {name: scan for name, scan in all_scans.items()
@@ -10053,7 +10340,9 @@ def scan_deepseek_harness(bounds, cache):
 # SQLite: ~/.local/share/opencode/opencode.db；旧版 JSON 作为补充来源。
 # JSON 文件: ~/.local/share/opencode/storage/message/<session>/msg_*.json
 # 每条 assistant 消息有 tokens{input,output,reasoning,cache{read,write}} + cost + modelID。
-_OPENCODE_COST_CACHE_VERSION = 2
+# V2（session_message 表）的助手消息角色在行的 type 列，模型是 {id, providerID}
+# 引用，tokens / cost 与 V1 同形。迁移过来的历史两张表都有，同一条消息 ID 相同。
+_OPENCODE_COST_CACHE_VERSION = 3
 
 
 def _opencode_db_paths():
@@ -10128,6 +10417,42 @@ def _opencode_message_day(message, session_id="", created_ms=0, estimate_missing
     return day
 
 
+def _opencode_v2_message(message, session_id):
+    """V2 助手消息转成 V1 的形状，交给同一个 _opencode_message_day 解析。"""
+    model = message.get("model")
+    converted = dict(message)
+    converted["role"] = "assistant"
+    converted["sessionID"] = message.get("sessionID") or session_id
+    if isinstance(model, dict):
+        converted["modelID"] = message.get("modelID") or model.get("id") or ""
+        converted["providerID"] = message.get("providerID") or model.get("providerID")
+    return converted
+
+
+def _opencode_database_messages(connection, tables):
+    """先读 V2，再用 V1 补 V2 里没有的消息：新消息只写 V2，旧消息两边都有。"""
+    if "session_message" in tables:
+        for message_id, session_id, created_ms, raw in connection.execute(
+                "SELECT id, session_id, time_created, data FROM session_message "
+                "WHERE type = 'assistant'"):
+            try:
+                message = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(message, dict):
+                yield message_id, session_id, created_ms, _opencode_v2_message(
+                    message, session_id or "")
+    if "message" in tables:
+        for message_id, session_id, created_ms, raw in connection.execute(
+                "SELECT id, session_id, time_created, data FROM message"):
+            try:
+                message = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(message, dict):
+                yield message_id, session_id, created_ms, message
+
+
 def _scan_opencode_database(path, estimate_missing_cost=False):
     import sqlite3
 
@@ -10137,22 +10462,28 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
     connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
         # 会话自带工作目录，让 OpenCode / MiMoCode 参与项目足迹与回顾页。
+        # 有的版本把会话放在 session_v2，一并读。
         session_projects = {}
-        session_columns = {row[1] for row in connection.execute("PRAGMA table_info(session)")}
-        if {"id", "directory"} <= session_columns:
+        for table in ("session", "session_v2"):
+            if table not in tables:
+                continue
+            session_columns = {row[1] for row in connection.execute(
+                f"PRAGMA table_info({table})")}
+            if not {"id", "directory"} <= session_columns:
+                continue
             try:
                 for session_id, directory in connection.execute(
-                        "SELECT id, directory FROM session"):
+                        f"SELECT id, directory FROM {table}"):
                     if isinstance(directory, str) and directory.startswith("/"):
-                        session_projects[session_id] = directory
+                        session_projects.setdefault(session_id, directory)
             except sqlite3.Error:
                 pass
-        rows = connection.execute("SELECT id, session_id, time_created, data FROM message")
-        for message_id, session_id, created_ms, raw in rows:
-            try:
-                message = json.loads(raw)
-            except (TypeError, ValueError):
+        for message_id, session_id, created_ms, message in _opencode_database_messages(
+                connection, tables):
+            if message_id and str(message_id) in message_ids:
                 continue
             day = _opencode_message_day(message, session_id or "", created_ms or 0,
                                         estimate_missing_cost=estimate_missing_cost)
@@ -10593,6 +10924,301 @@ def scan_devin(bounds, cache):
         cache["_dirty"] = True
 
     for day_key, day in ledger_reconcile("devin", entry.get("days", {})).items():
+        try:
+            day_date = date.fromisoformat(day_key)
+        except ValueError:
+            continue
+        for range_key in classify_date(day_date, bounds):
+            _merge_token_day(B[range_key], day)
+            B[range_key]["sessions"].update(day.get("sessions", []))
+    return {"ranges": B}
+
+
+# ---------- MiniMax Code ----------
+# 桌面端的本地运行时库：~/.minimax/v2/sqlite/runtime-state.sqlite。
+# local_runtime_token_usage 每轮对话一行，四个桶并列相加（raw 里的
+# totalTokens = input + output + cacheRead + cacheWrite），托管登录下
+# cost_usd 恒为 0。model 列目前是空的，真实模型只出现在按小时轮转的
+# observability 日志里：
+#
+#   llm_response_identifiers {"session_id":…,"turn_id":…,"model":"MiniMax-M3",…}
+#
+# 日志会被轮转删掉，所以对上号的结果按行号区间压缩存进扫描缓存（runs），
+# 日志没了模型也不丢；还没等到库里那一行的 turn 暂存在 pending 里。
+_MINIMAX_SCAN_VERSION = 1
+_MINIMAX_LOG_MARKER = b"llm_response_identifiers"
+_MINIMAX_PENDING_TTL = 2 * 24 * 3600
+
+
+def _minimax_db_path():
+    return _first_existing_file(MINIMAX_DB_PATHS)
+
+
+def _minimax_log_dir(db_path):
+    return os.path.join(os.path.dirname(os.path.dirname(db_path)), "observability", "logs")
+
+
+def _minimax_read_turn_models(log_dir, offsets, pending, now=None):
+    """增量读日志，把 turn_id → 模型记进 pending。返回新认识的 turn 数。
+
+    offsets 是 {文件名: 已读到的字节}；文件变短说明被重写，从头再读。
+    半行留到下一轮，避免把正在写的那行读成坏 JSON。
+    """
+    now = int(now if now is not None else _time.time())
+    try:
+        names = {name for name in os.listdir(log_dir) if name.endswith(".log")}
+    except OSError:
+        names = set()
+    for name in [name for name in offsets if name not in names]:
+        del offsets[name]
+    learned = 0
+    for name in sorted(names):
+        path = os.path.join(log_dir, name)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        offset = offsets.get(name)
+        offset = offset if isinstance(offset, int) and 0 <= offset <= size else 0
+        if offset == size:
+            offsets[name] = offset
+            continue
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(offset)
+                for line in handle:
+                    if not line.endswith(b"\n"):
+                        break
+                    offset += len(line)
+                    marker = line.find(_MINIMAX_LOG_MARKER)
+                    if marker < 0:
+                        continue
+                    start = line.find(b"{", marker)
+                    try:
+                        record = json.loads(line[start:].decode("utf-8")) if start >= 0 else None
+                    except (UnicodeDecodeError, ValueError):
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    turn_id, model = record.get("turn_id"), record.get("model")
+                    if isinstance(turn_id, str) and turn_id \
+                            and isinstance(model, str) and model.strip():
+                        pending[turn_id] = [model.strip(), now]
+                        learned += 1
+        except OSError:
+            continue
+        offsets[name] = offset
+    return learned
+
+
+def _minimax_project_path(workdir, is_default):
+    """会话的工作目录才算项目；应用自己管的目录（每个会话的临时 workspace、
+    ~/.minimax-agent-cn/projects 这类默认根）不算。"""
+    if is_default or not isinstance(workdir, str) or not os.path.isabs(workdir):
+        return None
+    try:
+        relative = os.path.relpath(workdir, HOME)
+    except ValueError:
+        return workdir
+    if relative.split(os.sep)[0].startswith(".minimax"):
+        return None
+    return workdir
+
+
+def _minimax_run_lookup(runs, through):
+    import bisect
+    starts = [start for start, _ in runs]
+
+    def lookup(row_id):
+        if row_id > through:
+            return None
+        index = bisect.bisect_right(starts, row_id) - 1
+        return runs[index][1] if index >= 0 else None
+    return lookup
+
+
+def _scan_minimax_database(path, pending, runs, through):
+    """返回 (days, 新的 runs, 新的 through, 本轮对上的 turn_id)。"""
+    import sqlite3
+
+    def number(value):
+        try:
+            return max(int(value or 0), 0)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "local_runtime_token_usage" not in tables:
+            return {}, [], 0, set()
+        columns = {row[1] for row in connection.execute(
+            "PRAGMA table_info(local_runtime_token_usage)")}
+        if not {"id", "session_id", "ts", "input_tokens", "output_tokens"} <= columns:
+            return {}, [], 0, set()
+
+        def column(name):
+            return name if name in columns else "NULL"
+
+        session_projects = {}
+        if "local_runtime_sessions" in tables:
+            session_columns = {row[1] for row in connection.execute(
+                "PRAGMA table_info(local_runtime_sessions)")}
+            workdir = next((name for name in ("project_workspace_dir", "workspace_dir")
+                            if name in session_columns), None)
+            if workdir:
+                default = "is_default_workspace" \
+                    if "is_default_workspace" in session_columns else "0"
+                try:
+                    for session_id, directory, is_default in connection.execute(
+                            f"SELECT session_id, {workdir}, {default} "
+                            "FROM local_runtime_sessions"):
+                        project = _minimax_project_path(directory, is_default)
+                        if project:
+                            session_projects[session_id] = project
+                except sqlite3.Error:
+                    pass
+
+        rows = connection.execute(f"""
+            SELECT id, session_id, {column("turn_id")}, {column("model")}, ts,
+                   input_tokens, output_tokens, {column("reasoning_tokens")},
+                   {column("cache_read_tokens")}, {column("cache_write_tokens")},
+                   {column("raw")}
+            FROM local_runtime_token_usage
+            ORDER BY id ASC
+        """).fetchall()
+    finally:
+        connection.close()
+
+    # 库被重建过（行号从头再来）时，旧的行号区间不再对应同一批行。
+    if rows and rows[-1][0] < through:
+        runs, through = [], 0
+    known = _minimax_run_lookup(runs, through)
+    matched = set()
+    evidence = []
+    for row in rows:
+        row_id, session_id, turn_id, model = row[0], row[1], row[2], row[3]
+        model = model.strip() if isinstance(model, str) and model.strip() else None
+        if not model and isinstance(turn_id, str) and turn_id in pending:
+            model = pending[turn_id][0]
+            matched.add(turn_id)
+        evidence.append(model or known(row_id))
+
+    # 同一会话里其余轮次的模型给缺失的那几轮兜底；只用于本轮展示，
+    # 不写回 runs，免得猜测被当成证据固化下来。
+    session_models = {}
+    for row, model in zip(rows, evidence):
+        if model:
+            counts = session_models.setdefault(row[1], {})
+            counts[model] = counts.get(model, 0) + 1
+
+    days, sessions = {}, {}
+    for row, model in zip(rows, evidence):
+        _, session_id, _, _, ts, inp, out, reasoning, cache_read, cache_write, raw = row
+        inp, out, cache_read, cache_write = (
+            number(inp), number(out), number(cache_read), number(cache_write))
+        # 思考 token 是否已含在 output 里，以 raw 的 totalTokens 为准；对不上就不计，
+        # 宁可少算这一桶也不重复计。
+        reason = number(reasoning)
+        if reason:
+            try:
+                total_tokens = number(json.loads(raw).get("totalTokens"))
+            except (TypeError, ValueError, AttributeError):
+                total_tokens = 0
+            if total_tokens != inp + out + cache_read + cache_write + reason:
+                reason = 0
+        total = inp + out + cache_read + cache_write + reason
+        if total <= 0:
+            continue
+        stamp = _provider_epoch(ts)
+        if stamp is None:
+            continue
+        try:
+            created = datetime.fromtimestamp(stamp).astimezone()
+        except (OSError, OverflowError, ValueError):
+            continue
+        if not model:
+            counts = session_models.get(session_id)
+            model = max(counts, key=counts.get) if counts else None
+        display_model = (_known_id_or_raw(model) or model) if model else "minimax"
+        cost = 0.0
+        price_id = _pricing_id(model) if model else None
+        if price_id:
+            price = _raw_price(price_id)
+            cost = (inp / 1e6 * price["in"] + (out + reason) / 1e6 * price["out"]
+                    + cache_read / 1e6 * price["cache_read"]
+                    + cache_write / 1e6 * price["cache_write"])
+
+        day_key = created.date().isoformat()
+        day = days.setdefault(day_key, _empty_token_day())
+        day["_cost_version"] = _MINIMAX_SCAN_VERSION
+        _add_token_usage(day, inp, out, cache_read, cache_write, reason, cost, display_model)
+        project = session_projects.get(session_id)
+        if project:
+            bucket = day.setdefault("projects", {}).setdefault(
+                project, {"tokens": 0, "cost": 0.0, "models": {}, "sessions": []})
+            bucket["tokens"] += total
+            bucket["cost"] += cost
+            bucket["models"][display_model] = bucket["models"].get(display_model, 0) + total
+            if session_id not in bucket["sessions"]:
+                bucket["sessions"].append(str(session_id))
+        day["hours"][created.hour] += total
+        sessions.setdefault(day_key, set()).add(str(session_id or "unknown"))
+    for day_key, session_ids in sessions.items():
+        days[day_key]["sessions"] = sorted(session_ids)
+
+    new_runs = []
+    for row, model in zip(rows, evidence):
+        if not new_runs or new_runs[-1][1] != model:
+            new_runs.append([row[0], model])
+    return days, new_runs, (rows[-1][0] if rows else 0), matched
+
+
+def scan_minimax(bounds, cache):
+    ledger_touch("minimax")
+    fc = cache.setdefault("minimax", {})
+    B = _empty_token_ranges()
+    db_path = _minimax_db_path()
+    if not db_path:
+        if fc:
+            fc.clear()
+            cache["_dirty"] = True
+        return {"ranges": B}
+
+    db_path = os.path.realpath(db_path)
+    cache_key = "db:" + db_path
+    entry = fc.get(cache_key)
+    if not isinstance(entry, dict) or entry.get("version") != _MINIMAX_SCAN_VERSION:
+        previous = entry if isinstance(entry, dict) else {}
+        # 口径升级只作废计算结果；runs 是从已轮转掉的日志里攒下来的证据，要留着。
+        entry = {"version": _MINIMAX_SCAN_VERSION, "logs": {}, "pending": {},
+                 "runs": previous.get("runs") or [], "through": previous.get("through") or 0}
+        fc.clear()
+        fc[cache_key] = entry
+        cache["_dirty"] = True
+
+    offsets, pending = entry.setdefault("logs", {}), entry.setdefault("pending", {})
+    before = dict(offsets)
+    learned = _minimax_read_turn_models(_minimax_log_dir(db_path), offsets, pending)
+    if offsets != before:
+        cache["_dirty"] = True
+
+    signature = _sqlite_signature(db_path)
+    if learned or "days" not in entry or entry.get("sig") != signature:
+        days, runs, through, matched = _scan_minimax_database(
+            db_path, pending, entry.get("runs") or [], entry.get("through") or 0)
+        horizon = int(_time.time()) - _MINIMAX_PENDING_TTL
+        for turn_id in [turn_id for turn_id, value in pending.items()
+                        if turn_id in matched or not isinstance(value, list)
+                        or len(value) != 2 or not isinstance(value[1], int)
+                        or value[1] < horizon]:
+            del pending[turn_id]
+        entry.update({"sig": signature, "days": days, "runs": runs, "through": through})
+        cache["_dirty"] = True
+
+    for day_key, day in ledger_reconcile("minimax", entry.get("days", {})).items():
         try:
             day_date = date.fromisoformat(day_key)
         except ValueError:
@@ -12189,12 +12815,16 @@ def _zstd_decompress(data):
 
 
 # 首次全量定位 /usage，之后只检查变化项并复用最近一次有效候选。
-_CLAUDE_QUOTA_STATE_VERSION = 2
+_CLAUDE_QUOTA_STATE_VERSION = 3
 _CLAUDE_QUOTA_STALE_TTL = 1800
 _CLAUDE_QUOTA_FULL_SCAN_INTERVAL = 6 * 3600
 _CLAUDE_QUOTA_RETRY_SCAN_INTERVAL = 5 * 60
 _CLAUDE_CACHE_FILE_LIMIT = 16 * 1024 * 1024
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+# 修改时间晚于「现在 + 5 分钟」的缓存文件不可信（实机见过 2037 年的残留）：
+# 一旦记成水位线，真正的新文件永远比它旧，增量扫描就此失效且无法自愈。
+# 这类文件当作还不存在，不解析也不参与水位线；等时间真走到它，再按普通文件处理。
+_CLAUDE_QUOTA_FUTURE_SKEW = 5 * 60
 
 
 def _claude_record_signature(record):
@@ -12323,7 +12953,9 @@ def _claude_quota_from_environment(now=None):
 def _scan_claude_plan_raw(now=None):
     import time
     now = int(time.time()) if now is None else int(now)
-    records = _claude_cache_records()
+    horizon_ns = (now + _CLAUDE_QUOTA_FUTURE_SKEW) * 1_000_000_000
+    records = [record for record in _claude_cache_records()
+               if record["mtime_ns"] <= horizon_ns]
     records_by_path = {record["path"]: record for record in records}
     original = _load_claude_quota_state()
     state = dict(original)
@@ -12433,6 +13065,7 @@ def compute():
     hm = _safe_scan("hermes", lambda: scan_hermes(bounds, cache), _empty_hermes, errors)
     zc = _safe_scan("zcode", lambda: scan_zcode(bounds, cache), _empty_zcode, errors)
     dv = _safe_scan("devin", lambda: scan_devin(bounds, cache), _empty_devin, errors)
+    mm = _safe_scan("minimax", lambda: scan_minimax(bounds, cache), _empty_minimax, errors)
     mc = _safe_scan("mimocode", lambda: scan_mimocode(bounds, cache), _empty_mimocode, errors)
     oc = _safe_scan("openclaw", lambda: scan_openclaw(bounds, cache), _empty_openclaw, errors)
     pi = _safe_scan("pi", lambda: scan_pi(bounds, cache), _empty_pi, errors)
@@ -12597,6 +13230,7 @@ def compute():
     paranges = {k: token_usage_range(prime["ranges"][k]) for k in RANGE_KEYS}
     zcranges = {k: token_usage_range(zc["ranges"][k]) for k in RANGE_KEYS}
     dvranges = {k: token_usage_range(dv["ranges"][k]) for k in RANGE_KEYS}
+    mmranges = {k: token_usage_range(mm["ranges"][k]) for k in RANGE_KEYS}
     mcranges = {k: token_usage_range(mc["ranges"][k]) for k in RANGE_KEYS}
     wbranges = {k: token_usage_range(wb["ranges"][k]) for k in RANGE_KEYS}
     wbairanges = {k: token_usage_range(wbai["ranges"][k]) for k in RANGE_KEYS}
@@ -12688,6 +13322,10 @@ def compute():
             "ranges": dvranges,
             "quota": provider_quotas["devin"],
         },
+        "minimax": {
+            "ranges": mmranges,
+            "quota": provider_quotas["minimax"],
+        },
         "cursor": provider_quotas["cursor"],
         "zed": provider_quotas["zed"],
         "sub2api": provider_quotas["sub2api"],
@@ -12703,6 +13341,7 @@ def compute():
             "source": grok_quota.get("source"),
             "q_updated": grok_quota.get("updated"),
             "stale": grok_quota.get("stale"),
+            "auth_expired": bool(grok_quota.get("auth_expired")),
         },
         "grok_bot": {
             "ranges": grok_bot_ranges,
@@ -12786,7 +13425,7 @@ def _recalc_costs(result):
     """只重算缺少权威账单的工具；已有日志成本的工具保留原值。"""
     for tool_key in ("gemini", "grok", "hermes", "zcode", "mimocode", "workbuddy",
                      "workbuddy_ai", "codebuddy",
-                     "deepseek_harness", "qwencode", "devin"):
+                     "deepseek_harness", "qwencode", "devin", "minimax"):
         tool = result.get(tool_key)
         if not tool or "ranges" not in tool:
             continue
@@ -12837,7 +13476,7 @@ def _recalc_costs(result):
                     cost = authoritative_cost or (
                         ti / 1e6 * p["in"] + (to + reason) / 1e6 * p["out"]
                         + cr / 1e6 * p["cache_read"] + cw / 1e6 * p["cache_write"])
-                elif tool_key in ("hermes", "zcode", "mimocode", "devin"):
+                elif tool_key in ("hermes", "zcode", "mimocode", "devin", "minimax"):
                     cr = m.get("cr", 0)
                     cw = m.get("cw", 0)
                     reason = m.get("reason", 0)
@@ -12933,6 +13572,14 @@ def _sync_safe_usage_payload(payload):
     # contain an email/login label. Keep them in the local cache only.
     for key in ("cursor", "zed", "sub2api", "zai", "antigravity"):
         snapshot.pop(key, None)
+    # Devin / MiniMax Code 把 token 与账号额度放在同一个键下：token 要同步，
+    # 额度（Devin 的那行带着登录邮箱）同样只留在本机。
+    for key in ("devin", "minimax"):
+        tool = snapshot.get(key)
+        if isinstance(tool, dict) and "quota" in tool:
+            tool = dict(tool)
+            tool.pop("quota", None)
+            snapshot[key] = tool
     kimi = snapshot.get("kimicode")
     if isinstance(kimi, dict):
         kimi = dict(kimi)
@@ -13528,7 +14175,8 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
 
     _empty = lambda: {"claude": 0.0, "codex": 0.0, "codex_reserve": 0.0,
                        "gemini": 0.0, "grok": 0.0,
-                       "zcode": 0.0, "mimocode": 0.0, "devin": 0.0, "pi": 0.0,
+                       "zcode": 0.0, "mimocode": 0.0, "devin": 0.0, "minimax": 0.0,
+                       "pi": 0.0,
                        "workbuddy": 0.0, "workbuddy_ai": 0.0, "codebuddy": 0.0,
                        "deepseek_harness": 0.0,
                        "opencode": 0.0, "qwencode": 0.0, "kimicode": 0.0,
@@ -13693,7 +14341,7 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
                 m[key] += mv.get(key, 0)
 
     for tool_key, suffix in (("zcode", "ZCode"), ("mimocode", "MiMoCode"),
-                             ("devin", "Devin")):
+                             ("devin", "Devin"), ("minimax", "MiniMax Code")):
         for dk, day_data in _iter_cached_token_days(cache.get(tool_key, {})):
             if cutoff and dk < cutoff:
                 continue
@@ -13908,7 +14556,8 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
     # 输出结构保持完全不变(qoderwork/qoder_ide/qodercli 无成本列,只参与 token 合并)。
     _LEDGER_COST_COLUMNS = frozenset((
         "claude", "codex", "codex_reserve", "gemini", "grok", "hermes", "openclaw", "zcode",
-        "mimocode", "devin", "pi", "workbuddy", "workbuddy_ai", "codebuddy", "deepseek_harness",
+        "mimocode", "devin", "minimax", "pi", "workbuddy", "workbuddy_ai", "codebuddy",
+        "deepseek_harness",
         "opencode", "qwencode", "musecode", "cmdcode"))
     for tool, tool_days in _load_ledger().get("tools", {}).items():
         if not isinstance(tool_days, dict):
@@ -13962,7 +14611,8 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
               "hermes": round(v["hermes"], 2),
               "openclaw": round(v["openclaw"], 2),
               "zcode": round(v["zcode"], 2), "mimocode": round(v["mimocode"], 2),
-              "devin": round(v["devin"], 2), "pi": round(v["pi"], 2),
+              "devin": round(v["devin"], 2), "minimax": round(v["minimax"], 2),
+              "pi": round(v["pi"], 2),
               "workbuddy": round(v["workbuddy"], 2),
               "workbuddy_ai": round(v["workbuddy_ai"], 2),
               "codebuddy": round(v["codebuddy"], 2),
@@ -13978,7 +14628,7 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
                              + v["codebuddy"]
                              + v["deepseek_harness"] + v["opencode"] + v["qwencode"]
                              + v["kimicode"] + v["musecode"] + v["cmdcode"] + v["prime_agent"] + v["hermes"]
-                             + v["openclaw"] + v["devin"], 2),
+                             + v["openclaw"] + v["devin"] + v["minimax"], 2),
               "c_in": v["c_in"], "c_out": v["c_out"], "c_cr": v["c_cr"], "c_cw": v["c_cw"],
               "x_in": v["x_in"], "x_out": v["x_out"], "x_cached": v["x_cached"], "x_reason": v["x_reason"],
               "xr_in": v["xr_in"], "xr_out": v["xr_out"],
@@ -14241,9 +14891,9 @@ def build_wrapped(period="all", refresh=True, _cache=None):
             name = f"{nice_model(model)} (OpenCode)"
             model_tok[name] = model_tok.get(name, 0) + token_total(usage)
 
-    # --- ZCode / MiMoCode / Devin ---
+    # --- ZCode / MiMoCode / Devin / MiniMax Code ---
     for tool_key, suffix in (("zcode", "ZCode"), ("mimocode", "MiMoCode"),
-                             ("devin", "Devin")):
+                             ("devin", "Devin"), ("minimax", "MiniMax Code")):
         for dk, day in _iter_cached_token_days(cache.get(tool_key, {})):
             if cutoff and dk < cutoff:
                 continue
@@ -14530,18 +15180,27 @@ def build_wrapped(period="all", refresh=True, _cache=None):
     night_share = round(night / hours_total * 100, 1) if hours_total else 0.0
 
     ach = []
-    def add(icon, title, desc, tint):
-        ach.append({"icon": icon, "title": title, "desc": desc, "tint": tint})
+    def add(icon, title, desc, tint, tokens=None, template=None):
+        # desc 是给中文界面的现成句子；带「亿」的另给原始数和不含单位的模板，
+        # 其他语言的界面用 K / M / B 重写数字（「亿」没法靠套模板换算）。
+        item = {"icon": icon, "title": title, "desc": desc, "tint": tint}
+        if tokens is not None and template:
+            item.update({"tokens": int(tokens), "tokens_template": template})
+        ach.append(item)
 
     # Token 里程碑(金,取最高档)
     if total_tokens >= 1_000_000_000_000:
-        add("crown.fill", "万亿先生", f"{total_tokens/1e12:.2f} 万亿 token", "gold")
+        add("crown.fill", "万亿先生", f"{total_tokens/1e12:.2f} 万亿 token", "gold",
+            total_tokens, "%@ token")
     elif total_tokens >= 100_000_000_000:
-        add("hexagon.fill", "千亿先生", f"{total_tokens/1e8:.0f} 亿 token", "gold")
+        add("hexagon.fill", "千亿先生", f"{total_tokens/1e8:.0f} 亿 token", "gold",
+            total_tokens, "%@ token")
     elif total_tokens >= 10_000_000_000:
-        add("diamond.fill", "百亿先生", f"{total_tokens/1e8:.0f} 亿 token", "gold")
+        add("diamond.fill", "百亿先生", f"{total_tokens/1e8:.0f} 亿 token", "gold",
+            total_tokens, "%@ token")
     elif total_tokens >= 1_000_000_000:
-        add("diamond", "十亿先生", f"{total_tokens/1e8:.1f} 亿 token", "gold")
+        add("diamond", "十亿先生", f"{total_tokens/1e8:.1f} 亿 token", "gold",
+            total_tokens, "%@ token")
 
     # 成本里程碑(绿,取最高档)
     if total_cost >= 100000:
@@ -14561,7 +15220,8 @@ def build_wrapped(period="all", refresh=True, _cache=None):
 
     # 单日爆发(火橙)
     if busiest_tok >= 1_000_000_000:
-        add("bolt.fill", "爆肝日", f"单日 {busiest_tok/1e8:.0f} 亿 token", "coral")
+        add("bolt.fill", "爆肝日", f"单日 {busiest_tok/1e8:.0f} 亿 token", "coral",
+            busiest_tok, "单日 %@ token")
 
     # 项目维度(青蓝)
     if max_projs_day >= 5:
@@ -15166,6 +15826,7 @@ _PROJECT_SOURCES = (
 _PROJECT_DAY_SOURCES = (
     # tool_key,  显示名
     ("devin",    "Devin"),
+    ("minimax",  "MiniMax Code"),
     ("hermes",   "Hermes"),
     ("opencode", "OpenCode"),
     ("mimocode", "MiMoCode"),

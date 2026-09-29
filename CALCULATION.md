@@ -33,6 +33,7 @@ Tokei 主要读取本地 AI 工具日志，统计 token 用量与成本。额度
 | Kimi Code(额度) | `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json` → `api.kimi.com/coding/v1/usages` | 本机登录态只读查询，见 §5 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | SQLite, `model_usage` Token 明细 |
 | MiMoCode | `$XDG_DATA_HOME/mimocode/mimocode*.db`，macOS 使用 `~/Library/Application Support/mimocode/` | SQLite, OpenCode-compatible `message` 数据 |
+| MiniMax Code | `~/.minimax/v2/sqlite/runtime-state.sqlite` + `~/.minimax/v2/observability/logs/runtime-*.log` | SQLite `local_runtime_token_usage` 四桶并列（input / output / cacheRead / cacheWrite）；库里无模型名，按 `turn_id` 关联日志 `llm_response_identifiers` 的 `model`，对上的结果按行号区间存进扫描缓存，日志轮转后不丢 |
 
 ---
 

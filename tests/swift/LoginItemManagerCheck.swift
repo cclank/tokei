@@ -30,6 +30,8 @@ private final class FakeLoginItemService: LoginItemServicing {
 struct LoginItemManagerCheck {
     @MainActor
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         let suiteName = "com.tokei.tests.login-item.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             throw TestFailure.assertion("could not create isolated defaults")

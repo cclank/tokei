@@ -3,7 +3,17 @@ import SwiftUI
 struct WrappedAchievement: Codable, Identifiable {
     var icon: String; var title: String; var desc: String
     var tint: String = "coral"
+    /// 带「亿」的描述另附原始数和模板，其他语言按 K / M / B 重写，见 displayDesc。
+    var tokens: Int? = nil
+    var tokens_template: String? = nil
     var id: String { title }
+
+    var displayDesc: String {
+        if !L10n.isChinese, let tokens, let template = tokens_template {
+            return L(template, Fmt.human(tokens))
+        }
+        return L10n.data(desc)
+    }
 }
 
 struct WrappedProject: Codable, Identifiable {
@@ -41,11 +51,11 @@ enum WrappedPeriod: String, CaseIterable {
     case day = "1d", week = "7d", month = "30d", year = "365d", all = "all"
     var label: String {
         switch self {
-        case .day: return "今日"
-        case .week: return "本周"
-        case .month: return "本月"
-        case .year: return "今年"
-        case .all: return "全部"
+        case .day: return L("今日")
+        case .week: return L("本周")
+        case .month: return L("本月")
+        case .year: return L("今年")
+        case .all: return L("全部")
         }
     }
 }
@@ -106,18 +116,18 @@ struct WrappedView: View {
             HStack(spacing: 5) {
                 Image(systemName: "sparkles").font(.system(size: Theme.fontSize(11), weight: .bold))
                     .foregroundStyle(Theme.claude)
-                Text("回顾").font(.system(size: Theme.fontSize(11), weight: .bold)).tracking(1.5)
+                Text(L("回顾")).font(.system(size: Theme.fontSize(11), weight: .bold)).tracking(1.5)
                     .foregroundStyle(Theme.tSecondary)
                 Spacer()
                 periodPicker
             }
             HStack(spacing: 4) {
                 if !d.first_day.isEmpty {
-                    Text(period == .all ? "自 \(d.first_day)" : d.first_day)
+                    Text(period == .all ? L("自 %@", d.first_day) : d.first_day)
                         .font(.system(size: Theme.fontSize(9), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
                 if d.active_days > 0 {
-                    Text("· \(d.active_days) 天活跃")
+                    Text(L("· %@ 天活跃", d.active_days))
                         .font(.system(size: Theme.fontSize(9), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
             }
@@ -150,11 +160,11 @@ struct WrappedView: View {
     func statChips(_ d: WrappedData) -> some View {
         let avg = d.active_days > 0 ? d.total_cost / Double(d.active_days) : 0
         return HStack(spacing: 7) {
-            chip("总成本", nativeMoney(d.total_cost, d.cost_cny), Theme.claude)
-            chip("连续", "\(d.streak_cur) 天", Theme.hermes, icon: "flame.fill")
-            chip("日均", nativeMoney(avg, (d.cost_cny ?? 0) / Double(max(d.active_days, 1))), Theme.gemini)
-            chip("峰值日", shortDate(d.busiest.date), Color.red.opacity(0.85))
-            chip("本命模型", d.top_model.name, Theme.codex)
+            chip(L("总成本"), nativeMoney(d.total_cost, d.cost_cny), Theme.claude)
+            chip(L("连续"), L("%@ 天", d.streak_cur), Theme.hermes, icon: "flame.fill")
+            chip(L("日均"), nativeMoney(avg, (d.cost_cny ?? 0) / Double(max(d.active_days, 1))), Theme.gemini)
+            chip(L("峰值日"), shortDate(d.busiest.date), Color.red.opacity(0.85))
+            chip(L("本命模型"), L10n.data(d.top_model.name), Theme.codex)
         }
     }
 
@@ -184,7 +194,7 @@ struct WrappedView: View {
         let shown = (achievementsExpanded || !hasMore) ? d.achievements : Array(d.achievements.prefix(limit))
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 5) {
-                Text("成就").font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
+                Text(L("成就")).font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
                 Text("\(d.achievements.count)")
                     .font(.system(size: Theme.fontSize(9.5), weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.claude)
@@ -196,7 +206,7 @@ struct WrappedView: View {
                         withAnimation(.easeInOut(duration: 0.25)) { achievementsExpanded.toggle() }
                     } label: {
                         HStack(spacing: 3) {
-                            Text(achievementsExpanded ? "收起" : "展开全部")
+                            Text(achievementsExpanded ? L("收起") : L("展开全部"))
                                 .font(.system(size: Theme.fontSize(10), weight: .medium))
                             Image(systemName: achievementsExpanded ? "chevron.up" : "chevron.down")
                                 .font(.system(size: Theme.fontSize(8), weight: .bold))
@@ -221,7 +231,7 @@ struct WrappedView: View {
     // MARK: - 巅峰日 Top 3(现存日志 + 持久账本合并的单日高峰)
     func peakDaysSection(_ peaks: [WrappedPeakDay]) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("巅峰日").font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
+            Text(L("巅峰日")).font(.system(size: Theme.fontSize(13), weight: .bold)).foregroundStyle(Theme.tPrimary)
             VStack(spacing: 5) {
                 ForEach(Array(peaks.prefix(3).enumerated()), id: \.element.date) { i, p in
                     HStack(spacing: 8) {
@@ -261,7 +271,7 @@ struct WrappedView: View {
     func peakDate(_ s: String) -> String {
         let parts = s.split(separator: "-")
         guard parts.count == 3, let m = Int(parts[1]), let d = Int(parts[2]) else { return s }
-        return "\(m)月\(d)日"
+        return L("%@月%@日", m, d)
     }
 
     // MARK: - 24h rhythm
@@ -270,10 +280,10 @@ struct WrappedView: View {
         let peak = d.hours.firstIndex(of: d.hours.max() ?? 0) ?? -1
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("活跃时段").font(.system(size: Theme.fontSize(13), weight: .bold))
+                Text(L("活跃时段")).font(.system(size: Theme.fontSize(13), weight: .bold))
                 Spacer()
                 if peak >= 0 {
-                    Text(String(format: "高峰 %02d:00", peak))
+                    Text(L("高峰 %@", String(format: "%02d:00", peak)))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced)).foregroundStyle(Theme.tTertiary)
                 }
             }
@@ -333,9 +343,9 @@ struct WrappedView: View {
         let coffee = Int((d.total_cost / 4).rounded())
         let hotpot = Int((d.total_cost / 40).rounded())
         switch funSeed {
-        case 0:  return "这些花费 ≈ \(coffee.formatted()) 杯咖啡 ☕"
-        case 1:  return "这些花费 ≈ \(hotpot.formatted()) 顿火锅 🍲"
-        default: return "这些 token ≈ 码了 \(Fmt.human(Int(Double(d.total_tokens) * 0.6))) 字 ✍️"
+        case 0:  return L("这些花费 ≈ %@ 杯咖啡 ☕", coffee.formatted())
+        case 1:  return L("这些花费 ≈ %@ 顿火锅 🍲", hotpot.formatted())
+        default: return L("这些 token ≈ 码了 %@ 字 ✍️", Fmt.human(Int(Double(d.total_tokens) * 0.6)))
         }
     }
 
@@ -366,8 +376,9 @@ struct BadgeView: View {
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
                 .shadow(color: Theme.claude.opacity(0.4), radius: 3, y: 1)
             VStack(alignment: .leading, spacing: 1) {
-                Text(a.title).font(.system(size: Theme.fontSize(11.5), weight: .bold)).foregroundStyle(Theme.tPrimary)
-                Text(a.desc).font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary).lineLimit(1)
+                // 成就名与描述来自采集器（中文原文），「已见」记录也按原文存，只在这里翻译。
+                Text(L10n.data(a.title)).font(.system(size: Theme.fontSize(11.5), weight: .bold)).foregroundStyle(Theme.tPrimary)
+                Text(a.displayDesc).font(.system(size: Theme.fontSize(9))).foregroundStyle(Theme.tTertiary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }

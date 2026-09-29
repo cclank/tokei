@@ -18,6 +18,7 @@ class QuotaHistoryTests(unittest.TestCase):
                     "-framework", "Combine",
                     str(ROOT / "Tokei/Sources/Tokei/QuotaHistoryStore.swift"),
                     str(ROOT / "Tokei/Sources/Tokei/QuotaHistoryProjection.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/QuotaHistoryStoreCheck.swift"),
                     "-o", str(binary),
                 ],

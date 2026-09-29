@@ -57,6 +57,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 | **Muse Code** | Token（输入/输出/缓存/推理）、成本、模型、项目 |
 | **Command Code** | Token（输入/输出/缓存）、成本、模型、项目 |
 | **Devin** | Token（输入/输出/缓存）、成本、模型、会话；日/周/消息额度、套餐与账号、超额余额 |
+| **MiniMax Code** | Token（输入/输出/缓存）、成本、模型、会话、项目；可选 Token Plan 5 小时 / 周额度（填入 Key 后联网查询） |
 
 ## 功能一览
 
@@ -111,6 +112,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 - 千问办公额度默认关闭；开启后仅调用官方桌面端的 `127.0.0.1` MCP，由已运行并登录的千问办公查询官方额度
 - Tokei 不读取或解密千问办公的 `auth-v2.dat`、浏览器 Cookie 或 `.status.json` 账号资料；仅用 `.status.json` 文件元数据使切换账号后的额度缓存失效，也不会自动启动千问办公
 - Cursor、Zed、Sub2API、z.ai 卡片默认关闭；开启后才查询额度。Sub2API 与 z.ai API Key 保存于 macOS Keychain，不写入 `config.json` 或额度缓存
+- MiniMax Code 的 Token 统计只读本机运行时库与日志，不联网；额度查询默认关闭，只有在「设置 → Provider 额度」填入 Token Plan Key 后才调用 MiniMax 官方 remains 接口（Key 存 macOS Keychain）。Tokei 不读取、不复用 MiniMax Code 的登录态
 - Cursor 只读取 Cursor.app 的本地登录态数据库；Zed 以禁止交互的方式读取现有 Keychain 登录态，不会弹出授权框
 - Cursor 与 z.ai 的账号级统计在 Dashboard 中单独展示；Grok Bot 本地快照没有 Token 字段，因此官方模型用量直接并入“模型用量”，额度仅在 Grok Bot 主卡片展示
 - 开启多设备同步后，Grok Bot 的官方 Token、模型、费用和额度汇总会进入同步快照；界面采用时间最新的一份账号数据，不会按设备重复相加
@@ -229,6 +231,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | MiMoCode | `~/Library/Application Support/mimocode/mimocode*.db` 或 `~/.local/share/mimocode/mimocode*.db` |
 | Devin | Token：`~/.local/share/devin/cli/sessions.db`；额度：`~/Library/Application Support/{Devin,Windsurf}/User/globalStorage/state.vscdb`（桌面端启动时写入的套餐缓存，落款取自 `logs/` 目录名） |
+| MiniMax Code | Token：`~/.minimax/v2/sqlite/runtime-state.sqlite`（`local_runtime_token_usage`）；模型：同级 `observability/logs/runtime-*.log`；额度：macOS Keychain Token Plan Key + 官方 `coding_plan/remains` 接口（填 Key 后才查询） |
 
 ## 对比 CodexBar
 
@@ -396,7 +399,7 @@ Tokei is a **macOS menu bar app** that tracks usage, cost, and quotas across **2
 
 **Features:** Real-time monitoring (30s refresh, seven menu bar styles, three density modes) · Cost estimation (317 models, OpenRouter pricing) · Dashboard (daily chart, weekly heatmap) · Time ranges (today/week/month/year) · Project-level tracking · Multi-device sync (Git-based, Mac + Linux) · Annual Wrapped · Keep awake · Sit reminder · Privacy-first (local usage logs, explicit quota controls) · [Compare with CodexBar](https://tokei.lanshuagent.com#compare)
 
-**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Qoder Desktop, QoderWork, Qoder CLI, Qoder CN, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin
+**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Qoder Desktop, QoderWork, Qoder CLI, Qoder CN, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin, MiniMax Code
 
 For full documentation, visit [tokei.lanshuagent.com](https://tokei.lanshuagent.com).
 

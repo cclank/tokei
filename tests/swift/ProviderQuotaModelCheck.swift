@@ -11,6 +11,8 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
 @main
 struct ProviderQuotaModelCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         if CommandLine.arguments.contains("--usage-stdin") {
             let data = FileHandle.standardInput.readDataToEndOfFile()
             let usage = try JSONDecoder().decode(Usage.self, from: data)

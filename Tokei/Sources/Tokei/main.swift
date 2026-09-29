@@ -7,7 +7,7 @@ final class Store: ObservableObject {
     @Published var usage: Usage?
     @Published var localUsage: Usage?
     @Published var allDevicesUsage: Usage?
-    @Published var lastUpdated: String = "加载中…"
+    @Published var lastUpdated: String = L("加载中…")
     @Published var loadError: String?
     @Published var peers: [PeerDevice] = []
     @Published var syncing = false
@@ -41,6 +41,9 @@ final class Store: ObservableObject {
     /// 上一次刷新开跑的时刻。调度按它算间隔，所以「面板打开顺手刷的那次」
     /// 也算数，不会开完面板立刻又被定时器刷一遍。
     private(set) var lastRefreshStartedAt = Date.distantPast
+    /// 上一次刷新实际耗时。间隔要按它退避——扫描在数据量大的机器上可能十几秒，
+    /// 固定 10 秒会让刷新首尾相接，还会和自己抢扫描缓存的文件锁，越刷越慢。
+    private(set) var lastRefreshDuration: TimeInterval = 0
 
     func applyDisplayMode(updateStatusTitle: Bool = true) {
         usage = (syncEnabled && showAllDevices) ? (allDevicesUsage ?? localUsage) : localUsage
@@ -63,7 +66,7 @@ final class Store: ObservableObject {
         }
         allDevicesUsage = allDevices
         applyDisplayMode()
-        lastUpdated = "缓存数据 · 后台更新中"
+        lastUpdated = L("缓存数据 · 后台更新中")
     }
 
     func refresh(prewarmQuotaDetail: Bool = false) {
@@ -76,16 +79,22 @@ final class Store: ObservableObject {
         performRefresh()
     }
 
+    /// 打开额度曲线页时立刻取数。
+    ///
+    /// 原本在主刷新进行中会改为「等刷新完再说」，可那个延后链路有两个漏口：
+    /// prewarmQuotaDetailIfReady 见到还有排队的刷新就直接返回，而刷新失败的分支
+    /// 压根不会走到它。面板开着时刷新变密之后，这两个口子叠起来足以让页面一天
+    /// 都不取一次数，只对着上次的缓存。
+    ///
+    /// 取数本身很便宜——脚本会复用 60 秒内的 last_usage.json，实测 3 秒出头，
+    /// 而且 QuotaDetailRepository 自己有 refreshing 门闩挡重入，不需要外面再挡一层。
     func loadQuotaDetail() {
-        if refreshInFlight {
-            quotaDetailPrewarmPending = true
-        } else {
-            QuotaDetailRepository.shared.load(force: true)
-        }
+        QuotaDetailRepository.shared.load(force: true)
     }
 
     private func performRefresh() {
         lastRefreshStartedAt = Date()
+        let startedAt = lastRefreshStartedAt
         DataLoader.load { [weak self] u in
             guard let self = self else { return }
             guard let local = u else {
@@ -93,22 +102,23 @@ final class Store: ObservableObject {
                 let willRetry = self.usage == nil && self.retryCount < 3
                 if willRetry {
                     self.retryCount += 1
-                    self.lastUpdated = "加载中…(\(self.retryCount))"
+                    self.lastUpdated = L("加载中…(%@)", self.retryCount)
                     if !hadPendingRefresh {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.refresh() }
                     }
                 } else if self.usage == nil {
-                    self.loadError = "读取用量失败"
-                    self.lastUpdated = "加载失败"
+                    self.loadError = L("读取用量失败")
+                    self.lastUpdated = L("加载失败")
                 } else {
                     self.loadError = nil
-                    self.lastUpdated = "缓存数据 · 等待刷新"
+                    self.lastUpdated = L("缓存数据 · 等待刷新")
                 }
                 (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
                 if !willRetry { self.prewarmQuotaDetailIfReady() }
                 self.finishRefresh()
                 return
             }
+            self.lastRefreshDuration = Date().timeIntervalSince(startedAt)
             self.retryCount = 0
             self.loadError = nil
             self.recordQuotaHistory(local)
@@ -134,7 +144,7 @@ final class Store: ObservableObject {
             self.allDevicesUsage = allDevices
             self.applyDisplayMode(updateStatusTitle: false)
             let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-            self.lastUpdated = "更新 " + f.string(from: Date())
+            self.lastUpdated = L("更新 %@", f.string(from: Date()))
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
             if !self.refreshPending && !self.dashboardPrewarmStarted {
                 self.dashboardPrewarmStarted = true
@@ -146,7 +156,9 @@ final class Store: ObservableObject {
     }
 
     private func prewarmQuotaDetailIfReady() {
-        guard quotaDetailPrewarmPending, !refreshPending, popoverVisible else { return }
+        // 不再要求「没有排队中的刷新」：面板开着时刷新很密，那个条件几乎总为真，
+        // 预热就一直轮空。重入由 QuotaDetailRepository 自己的门闩挡。
+        guard quotaDetailPrewarmPending, popoverVisible else { return }
         quotaDetailPrewarmPending = false
         QuotaDetailRepository.shared.load(force: true)
     }
@@ -164,7 +176,7 @@ final class Store: ObservableObject {
         let claudeRange = usage.claude.ranges.get(.today)
         let codexRange = usage.codex.ranges.get(.today)
         let claudeModels = claudeRange.models.reduce(into: [String: Int]()) { totals, model in
-            guard model.name != "合成" else { return }
+            guard model.name != "合成" else { return } // l10n-ignore
             totals[model.name, default: 0] += model.in + model.out + model.cr + model.cw
         }
         let codexModels = codexRange.models.reduce(into: [String: Int]()) { totals, model in
@@ -188,13 +200,13 @@ final class Store: ObservableObject {
     func doSync() {
         guard syncEnabled, !syncing else { return }
         guard let cfg = syncManager.config else {
-            syncStatus = "同步配置不可用"
+            syncStatus = L("同步配置不可用")
             syncSucceeded = false
-            syncDetail = "请先完成多设备同步配置"
+            syncDetail = L("请先完成多设备同步配置")
             return
         }
         syncing = true
-        syncStatus = "正在同步"
+        syncStatus = L("正在同步")
         syncSucceeded = nil
         syncDetail = ""
         let deviceID = SyncManager.normalizedDeviceID(cfg.device_id)
@@ -209,17 +221,17 @@ final class Store: ObservableObject {
                 self.syncFailStreak = 0
                 let formatter = DateFormatter()
                 formatter.dateFormat = "HH:mm"
-                self.syncStatus = "已同步 " + formatter.string(from: Date())
+                self.syncStatus = L("已同步 %@", formatter.string(from: Date()))
                 self.refresh()
             } else if result.code == .busy {
                 self.syncSucceeded = nil
-                self.syncStatus = "同步任务已在运行"
+                self.syncStatus = L("同步任务已在运行")
             } else {
                 self.syncSucceeded = false
                 self.syncFailStreak += 1
                 self.syncStatus = self.syncFailStreak > 1
-                    ? "同步失败（连续 \(self.syncFailStreak) 次）"
-                    : "同步失败"
+                    ? L("同步失败（连续 %@ 次）", self.syncFailStreak)
+                    : L("同步失败")
             }
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
@@ -251,13 +263,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let panelLayout = PanelLayoutContext()
     var statusItem: NSStatusItem!
     var popover = NSPopover()
-    lazy var statusMenu: NSMenu = {
+    /// 每次右键现建，跟随当前界面语言。
+    var statusMenu: NSMenu {
         let menu = NSMenu()
-        let quitItem = NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L("退出"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         return menu
-    }()
+    }
     var timer: Timer?
     /// 面板关着时按 30 秒刷；开着时用户正盯着看，30 秒的空窗会让人以为统计坏了，
     /// 所以加密到 10 秒。关上就退回去，免得白白每 10 秒拉起一次 Python。
@@ -273,13 +286,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     static let kimicodeColor = NSColor(red: 0.20, green: 0.78, blue: 0.66, alpha: 1)
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // macOS 26 上用可变宽度初始化时，状态栏项偶发在按钮拿到标题、图标之前就被压没，
+        // 进程在跑、菜单栏却看不到图标（issue #8，用户在 26.5 上复现并验证了这套处理）。
+        // 先按正方形占位并显式设为可见；拿到内容后 fitStatusItemWidth 再按内容定宽。
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.isVisible = true
         if let b = statusItem.button {
             b.action = #selector(handleStatusItemClick(_:))
             b.target = self
             b.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         updateStatusTitle()
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem?.isVisible = true
+            self?.updateStatusTitle()
+        }
+        NotificationCenter.default.addObserver(
+            forName: L10n.languageDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            // 菜单栏标题与「更新于」这类状态文字是按旧语言写好的，换语言后重来一遍。
+            self?.updateStatusTitle()
+            self?.store.refresh()
+        }
 
         let host = NSHostingController(rootView: PanelView(
             store: store,
@@ -290,6 +318,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         host.sizingOptions = []
         popover.contentViewController = host
         popover.contentSize = panelLayout.contentSize
+        panelLayout.onPageWidthChange = { [weak self] in
+            // 等这一轮视图更新结束再动弹窗。
+            DispatchQueue.main.async { self?.refitPanelForPage() }
+        }
         popover.behavior = .applicationDefined
         // SwiftUI 页面切换本身已有动画。禁用 NSPopover 的尺寸动画，避免 AppKit
         // 在外接显示器的全屏 Space 中按错误屏幕重新计算锚点。
@@ -323,8 +355,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // 越是盯着面板翻看越不更新。这里每 2 秒空转一次，到点了才真去刷。
         let tick = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            let due = self.store.popoverVisible
+            // 想要的节奏，再按上次耗时退避：一次刷新至少要留出同样长的空闲，
+            // 否则扫描慢的机器上刷新会连成一片。快的机器不受影响。
+            let wanted = self.store.popoverVisible
                 ? Self.visibleRefreshInterval : Self.idleRefreshInterval
+            let due = max(wanted, self.store.lastRefreshDuration * 2)
             guard Date().timeIntervalSince(self.store.lastRefreshStartedAt) >= due else { return }
             self.store.refresh()
         }
@@ -441,15 +476,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         var summaryParts = displayedMetrics.map { metric in
             let name = metric.kind.displayName
             if metric.remaining != nil {
-                return "\(name) 剩余 \(metric.value)%"
+                return L("%@ 剩余 %@%%", name, metric.value)
             }
             return "\(name) \(metric.value)"
         }
         if store.keepAwake.active {
-            summaryParts.insert("保持唤醒已开启", at: 0)
+            summaryParts.insert(L("保持唤醒已开启"), at: 0)
         }
         if store.syncFailStreak >= 3 {
-            summaryParts.insert("多设备同步已连续失败 \(store.syncFailStreak) 次，请打开设置查看", at: 0)
+            summaryParts.insert(L("多设备同步已连续失败 %@ 次，请打开设置查看", store.syncFailStreak), at: 0)
         }
         let summary = summaryParts.joined(separator: " · ")
         let accessibility = summary.isEmpty ? "Tokei" : "Tokei · \(summary)"
@@ -461,6 +496,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.invalidateIntrinsicContentSize()
         let compactWidth = ceil(button.intrinsicContentSize.width) + 4
         statusItem.length = max(NSStatusBar.system.thickness, compactWidth)
+        // 菜单栏图标是唯一入口，每次定宽都确认一次可见（issue #8）。
+        statusItem.isVisible = true
+    }
+
+    /// 已经在运行时，再从访达、启动台或 Spotlight 打开 Tokei 就直接唤出面板。
+    /// 菜单栏图标被挤掉或系统没显示出来时（issue #8），这是唯一还能进来的入口。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        statusItem?.isVisible = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.popover.isShown,
+                  let button = self.statusItem?.button, button.window != nil else { return }
+            self.popoverAnchorButton = button
+            self.togglePopover(anchorButton: button)
+        }
+        return false
     }
 
     func autoFetchPricing() {
@@ -516,6 +566,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    /// 换到宽度不同的页面（issue #105）：卡片不超过两张时首页是窄版，进设置、额度曲线
+    /// 要更宽，固定画布会把内容裁掉。按新页面重新量，再像打开时一样挂到菜单栏按钮下显示。
+    ///
+    /// 只有 PanelLayoutContext 判断宽度真的变了才会走到这里；切页签、刷新数据、宽版用户
+    /// 换页都不经过这里，画布照旧固定，不会重新挑选屏幕和锚点（issue #97）。
+    private func refitPanelForPage() {
+        guard popover.isShown, let button = popoverAnchorButton ?? statusItem.button else { return }
+        updatePanelLayout(for: button)
+        popover.contentSize = panelLayout.contentSize
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
     private func updatePanelLayout(for button: NSStatusBarButton) {
         panelLayout.update(
             fitting: measuredPanelSize(),
@@ -532,6 +594,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     ///
     /// 只在打开之前调用，开着的时候绝不重量——见 `PanelPlacement.contentSize`。
     private func measuredPanelSize() -> CGSize {
+        // 按面板当前停留的页面量：关掉时停在设置页，重开时也得按设置页的宽度来（issue #105）。
+        let previous = PanelView.initialMode
+        PanelView.initialMode = PanelView.PanelMode(rawValue: panelLayout.page) ?? .cards
+        defer { PanelView.initialMode = previous }
         let probe = NSHostingController(
             rootView: PanelView(store: store, layout: panelLayout, scrollable: false))
         probe.view.layoutSubtreeIfNeeded()
@@ -560,7 +626,7 @@ enum Shot {
         MainActor.assumeIsolated {
             let store = Store()
             store.usage = usage
-            store.lastUpdated = "预览"
+            store.lastUpdated = L("预览")
             let content = PanelView(store: store, scrollable: false)
                 .background(Color(red: 0.22, green: 0.23, blue: 0.26))
             let renderer = ImageRenderer(content: content)
@@ -635,6 +701,21 @@ if let idx = CommandLine.arguments.firstIndex(of: "--make-icon") {
     let out = CommandLine.arguments.count > idx + 1
         ? CommandLine.arguments[idx + 1] : "/tmp/tokei_icon.png"
     Icon.run(path: out)
+}
+
+if let idx = CommandLine.arguments.firstIndex(of: "--lang"),
+   CommandLine.arguments.count > idx + 1 {
+    // 离屏截图检查各语言排版用：Tokei --lang en --shot /tmp/en.png
+    L10n.forcedLanguage = AppLanguage(rawValue: CommandLine.arguments[idx + 1])
+}
+
+if let idx = CommandLine.arguments.firstIndex(of: "--mode"),
+   CommandLine.arguments.count > idx + 1 {
+    let modes: [String: PanelView.PanelMode] = [
+        "cards": .cards, "settings": .settings, "dashboard": .dashboard,
+        "quota": .quotaHistory, "projects": .projects,
+    ]
+    PanelView.initialMode = modes[CommandLine.arguments[idx + 1]] ?? .cards
 }
 
 if let idx = CommandLine.arguments.firstIndex(of: "--shot") {

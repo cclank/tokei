@@ -12,6 +12,8 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
 @main
 struct UsageSummaryBuilderCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         // ImageRenderer needs an AppKit app instance (same as --shot).
         _ = NSApplication.shared
 
@@ -91,6 +93,15 @@ struct UsageSummaryBuilderCheck {
         try expect(devinLine?.sessions == 1, "devin line sessions")
         try expect(todayText.contains("Devin"), "devin line missing: \(todayText)")
 
+        // MiniMax Code 同理，按 toolID "minimax" 取；额度不进复制文本。
+        let miniMaxLine = UsageSummaryBuilder.line(
+            forToolID: "minimax", usage: usage, range: .today, visibility: allVisible
+        )
+        try expect(miniMaxLine?.name == "MiniMax Code", "minimax line name")
+        try expect(miniMaxLine?.tokens == 145303, "minimax line tokens")
+        try expect(miniMaxLine?.sessions == 5, "minimax line sessions")
+        try expect(usage.minimax.quota.available, "minimax quota decodes alongside ranges")
+
         var hideDevin = allVisible
         hideDevin.devin = false
         try expect(!UsageSummaryBuilder.text(
@@ -125,9 +136,10 @@ struct UsageSummaryBuilderCheck {
         let lines = UsageSummaryBuilder.toolLines(
             usage: usage, range: .today, visibility: hideGemini
         )
-        try expect(lines.map(\.name) == ["Claude Code", "Codex", "Luna Reserve", "Devin"],
+        try expect(lines.map(\.name) == ["Claude Code", "Codex", "Luna Reserve", "Devin",
+                                          "MiniMax Code"],
                    "tool order/names: \(lines.map(\.name))")
-        try expect(lines.map(\.id) == ["claude", "codex", "codex_reserve", "devin"],
+        try expect(lines.map(\.id) == ["claude", "codex", "codex_reserve", "devin", "minimax"],
                    "tool ids: \(lines.map(\.id))")
         try expect(lines[0].cost == 1.25, "claude cost value")
         try expect(lines[0].tokens == 1350, "claude tokens 1000+200+100+50")
@@ -148,10 +160,10 @@ struct UsageSummaryBuilderCheck {
                    "OpenClaw reasoning tokens must survive decode and summary aggregation")
 
         let totals = UsageSummaryBuilder.totals(for: lines)
-        try expect(totals.tools == 4, "totals tools")
+        try expect(totals.tools == 5, "totals tools")
         try expect(abs(totals.cost - 2.00) < 0.001, "totals cost")
-        try expect(totals.input == 1140 + 17370, "totals input incl. Devin")
-        try expect(totals.output == 420 + 166, "totals output incl. Devin")
+        try expect(totals.input == 1140 + 17370 + 111819, "totals input incl. Devin + MiniMax")
+        try expect(totals.output == 420 + 166 + 4630, "totals output incl. Devin + MiniMax")
         try expect(hiddenText.contains("输入") || UsageSummaryBuilder.text(
             usage: usage, range: .today, visibility: hideGemini
         ).contains("输入"), "text totals include input detail")
@@ -309,6 +321,17 @@ struct UsageSummaryBuilderCheck {
           "year": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}
         },
         "quota": {"available": true, "plan": "Devin Free"}
+      },
+      "minimax": {
+        "ranges": {
+          "today": {"hit": 1.2, "in": 111819, "out": 4630, "cr": 1457, "cw": 27397, "reason": 0, "cost": 0, "sessions": 5, "models": []},
+          "yesterday": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "week": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "last_week": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "month": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []},
+          "year": {"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}
+        },
+        "quota": {"available": true, "plan": "Token Plan"}
       },
       "opencode": {
         "ranges": {

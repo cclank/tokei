@@ -20,6 +20,8 @@ final class AppDelegate {
 @main
 struct MenuBarQuotaSourceCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         _ = NSApplication.shared
 
         try checkSourceIdentity()

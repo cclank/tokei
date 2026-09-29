@@ -11,6 +11,8 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
 @main
 struct DevinUsageModelCheck {
     static func main() throws {
+        // 断言的是中文输出，不能随跑测试那台机器的系统语言变化。
+        L10n.forcedLanguage = .zh
         // 两个来源同时有数据：CLI 会话库的 token 与桌面端保存的套餐额度。
         let both = try JSONDecoder().decode(DevinStat.self, from: Data("""
         {

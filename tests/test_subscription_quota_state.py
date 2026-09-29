@@ -15,6 +15,7 @@ class SubscriptionQuotaStateTests(unittest.TestCase):
                 [
                     "swiftc",
                     str(ROOT / "Tokei/Sources/Tokei/SubscriptionQuotaState.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/SubscriptionQuotaStateCheck.swift"),
                     "-o",
                     str(binary),

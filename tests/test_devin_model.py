@@ -16,6 +16,7 @@ class DevinUsageModelTests(unittest.TestCase):
                     "swiftc",
                     "-parse-as-library",
                     str(ROOT / "Tokei/Sources/Tokei/Model.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
                     str(ROOT / "tests/swift/DevinUsageModelCheck.swift"),
                     "-o",
                     str(binary),

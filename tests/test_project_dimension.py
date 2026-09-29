@@ -36,7 +36,7 @@ class ProjectSourceRegistryTests(unittest.TestCase):
                       | {tool for tool, *_ in USAGE._PROJECT_RECORD_SOURCES})
         # 有项目路径可取的工具都应在册；没有 cwd 的工具（gemini/qwencode/zcode 等）
         # 不在此列，是因为它们的日志里根本不记工作目录。
-        for tool in ("claude", "codex", "devin", "hermes", "opencode",
+        for tool in ("claude", "codex", "devin", "minimax", "hermes", "opencode",
                      "kimicode", "pi", "prime_agent", "workbuddy",
                      "workbuddy_ai", "deepseek_harness", "mimocode",
                      "musecode", "cmdcode", "codebuddy"):

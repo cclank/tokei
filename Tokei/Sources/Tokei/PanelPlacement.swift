@@ -34,8 +34,9 @@ enum PanelPlacement {
     /// 不写死高度。写死的值对某一台机器也许刚好，换一块屏幕不是浪费就是超出——
     /// 之前的 840 在 1152 高的屏幕上白白少用了两百多点，而在 13 寸上又偏高。
     ///
-    /// 只在面板打开**之前**调用。开着的时候改尺寸会让 NSPopover 重新挑选屏幕和
-    /// 锚点（全屏 Space、外接显示器下尤其明显），那正是固定画布要挡掉的事。
+    /// 在面板打开**之前**调用；开着的时候只在换到宽度不同的页面时调用一次，并像打开时
+    /// 一样挂到菜单栏按钮下重新显示（issue #105）。其余时候开着改尺寸会让 NSPopover 重新
+    /// 挑选屏幕和锚点（全屏 Space、外接显示器下尤其明显），那正是固定画布要挡掉的事。
     static func contentSize(fitting contentSize: CGSize,
                             anchorVisibleFrame: NSRect?,
                             fallbackVisibleFrame: NSRect? = nil) -> CGSize {
@@ -54,8 +55,23 @@ enum PanelPlacement {
 final class PanelLayoutContext: ObservableObject {
     @Published private(set) var contentSize: CGSize
 
+    /// 面板当前停在哪一页（PanelView 报告，值由 App 解释）。
+    ///
+    /// 卡片不超过两张时首页是 322 的窄版，而设置、额度曲线要 640，数据面板、项目要 420。
+    /// 画布在打开前按当前页量好；开着的时候只有「换页并且宽度变了」才需要重新摆放
+    /// 弹窗（issue #105）。切页签、刷新数据宽度都不变，照旧是固定画布（issue #97）。
+    private(set) var page = "cards"
+    var onPageWidthChange: (() -> Void)?
+
     init(contentSize: CGSize = PanelPlacement.provisionalSize) {
         self.contentSize = contentSize
+    }
+
+    func pageDidChange(_ page: String, width: CGFloat) {
+        guard page != self.page else { return }
+        self.page = page
+        guard abs(width - contentSize.width) > 0.5 else { return }
+        onPageWidthChange?()
     }
 
     func update(fitting fittingSize: CGSize,

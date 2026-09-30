@@ -160,22 +160,42 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 现在能不能真在状态栏上写出一个数字：账号有这个窗口，读数也没过期。
-    /// 设置页的提示语和预览必须用同一个判断，否则会描述一个状态栏没画的组合。
-    func isRenderable(in usage: Usage) -> Bool {
-        let reading = reading(in: usage)
-        return reading.value != nil && reading.stale != true
+    /// 该窗口的重置时刻（unix 秒）。
+    func reset(in usage: Usage) -> Int? {
+        switch self {
+        case .claude5h: return usage.claude.q5_reset
+        case .claudeWeek: return usage.claude.q7_reset
+        case .claudeFable: return usage.claude.qf_reset
+        case .codex5h: return usage.codex.r5
+        case .codexWeek: return usage.codex.rw
+        case .kimi5h: return usage.kimicode.r5
+        case .kimiSubscription: return usage.kimicode.rw
+        case .grok: return usage.grok.reset
+        }
     }
 
-    /// 勾选中且数据新鲜的窗口，按 `allCases` 顺序排好。模型里存的是已用百分比，这里换成剩余。
+    /// 状态栏上有没有这一项：账号有这个窗口就有。读数过期也照常占位（和卡片一样保留
+    /// 最后一次读数），不再整项消失——应用退出一晚、工具久没用，读数自然会过期。
+    /// 设置页的提示语和预览必须用同一个判断，否则会描述一个状态栏没画的组合。
+    func isRenderable(in usage: Usage) -> Bool {
+        reading(in: usage).value != nil
+    }
+
+    /// 勾选中的窗口，按 `allCases` 顺序排好。模型里存的是已用百分比，这里换成剩余。
+    /// 过期的读数照常显示（变淡）；窗口已经重置的不拿上一个窗口的数冒充，写「—」。
     static func metrics(in usage: Usage) -> [MenuBarMetric] {
         allCases.compactMap { source in
-            guard source.isEnabled, source.isRenderable(in: usage),
-                  let used = source.reading(in: usage).value else { return nil }
+            let reading = source.reading(in: usage)
+            guard source.isEnabled, let used = reading.value else { return nil }
+            let stale = reading.stale == true
+            if SubscriptionQuotaPresentation.hasResetSinceReading(
+                stale: stale, reset: source.reset(in: usage)) {
+                return MenuBarMetric(kind: .quota(source), value: "—", remaining: nil, stale: true)
+            }
             let remaining = 100 - used
             return MenuBarMetric(kind: .quota(source),
                                  value: String(format: "%.0f", remaining),
-                                 remaining: remaining)
+                                 remaining: remaining, stale: stale)
         }
     }
 }
@@ -217,6 +237,8 @@ struct MenuBarMetric {
     var kind: MenuBarMetricKind
     var value: String
     var remaining: Double? = nil
+    /// 过期读数：数字照常写，颜色变淡。窗口已重置时 value 为「—」、remaining 为 nil。
+    var stale = false
 }
 
 enum MenuBarArtwork {
@@ -696,7 +718,8 @@ enum MenuBarTitleRenderer {
 
     private static func appendDecorated(_ metric: MenuBarMetric, to title: NSMutableAttributedString,
                                         style: MenuBarStyle) {
-        let familyColor = metric.kind.nsColor
+        let familyColor = metric.stale ? metric.kind.nsColor.withAlphaComponent(staleAlpha)
+                                       : metric.kind.nsColor
         switch style {
         case .symbols:
             appendArtwork(MenuBarArtwork.gauge(remaining: metric.remaining, color: familyColor,
@@ -722,12 +745,15 @@ enum MenuBarTitleRenderer {
         }
     }
 
+    /// 过期读数的透明度：还看得清，但一眼能和新鲜读数分开。
+    private static let staleAlpha: CGFloat = 0.45
+
     private static func appendValue(_ metric: MenuBarMetric, color: NSColor,
                                     to title: NSMutableAttributedString) {
         title.append(NSAttributedString(string: metric.value, attributes: [
             .font: valueFont,
             .baselineOffset: 1,
-            .foregroundColor: color,
+            .foregroundColor: metric.stale ? color.withAlphaComponent(staleAlpha) : color,
         ]))
     }
 
@@ -780,8 +806,12 @@ enum MenuBarTitleRenderer {
 
     private static func focusedMetric(in metrics: [MenuBarMetric]) -> MenuBarMetric? {
         let quotas = metrics.filter { $0.remaining != nil }
-        if !quotas.isEmpty {
-            return quotas.min { ($0.remaining ?? 0) < ($1.remaining ?? 0) }
+        // 单额度挑剩得最少的：先在新鲜读数里挑，别让一个过期的旧数字把它挤掉
+        let fresh = quotas.filter { !$0.stale }
+        if let lowest = (fresh.isEmpty ? quotas : fresh).min(by: {
+            ($0.remaining ?? 0) < ($1.remaining ?? 0)
+        }) {
+            return lowest
         }
         return metrics.first
     }

@@ -23,6 +23,7 @@ class MenuBarQuotaSourceTests(unittest.TestCase):
                     str(TOKEI_SRC / "L10n.swift"),
                     str(TOKEI_SRC / "Design.swift"),
                     str(TOKEI_SRC / "PanelTypography.swift"),
+                    str(TOKEI_SRC / "SubscriptionQuotaState.swift"),
                     str(TOKEI_SRC / "MenuBarStyle.swift"),
                     str(ROOT / "tests/swift/MenuBarQuotaSourceCheck.swift"),
                     "-o",

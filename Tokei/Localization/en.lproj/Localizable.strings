@@ -7,6 +7,7 @@
 "%@ token" = "%@ tokens";
 "%@ 万亿 token" = "%@ trillion tokens";
 "%@ 上下文快照" = "%@ context snapshot";
+"%@ 上次读到剩余 %@%%" = "%@ last read %@%% left";
 "%@ 个" = "%@";
 "%@ 个项目" = "%@ projects";
 "%@ 亿 token" = "%@ × 100M tokens";
@@ -20,6 +21,7 @@
 "%@ 天" = "%@ days";
 "%@ 天活跃" = "%@ active days";
 "%@ 工具" = "%@ tools";
+"%@ 已重置，等下一次读数" = "%@ reset, waiting for a new reading";
 "%@ 张" = "%@";
 "%@ 总量" = "%@ total";
 "%@ 条消息" = "%@ messages";
@@ -190,7 +192,7 @@
 "取订阅期最长的一个" = "Using the longest subscription";
 "另一台 Mac" = "Another Mac";
 "另一同步任务正在运行" = "Another sync task is running";
-"只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口、或者读数已过期，状态栏会跳过它。" = "Only affects the remaining-quota readout in the menu bar, not “Show cards”. Each item is a specific window: 5h is a rolling 5-hour window, weekly is this week's quota. Dual quota takes the first two in the order above; single quota shows only the lowest remaining. “Symbol” and “Dot” styles mark 5h with an hourglass and weekly with a bar; other styles show numbers only—hover the menu bar for full window names. Checked items with no such window on your account, or expired readings, are skipped.";
+"只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口，状态栏会跳过它；读数过期时照常显示上次的数字（变淡），窗口已重置、还没读到新数时显示「—」。" = "Only affects the remaining-quota readout in the menu bar, not “Show cards”. Each item is a specific window: 5h is a rolling 5-hour window, weekly is this week's quota. Dual quota takes the first two in the order above; single quota shows only the lowest remaining. “Symbol” and “Dot” styles mark 5h with an hourglass and weekly with a bar; other styles show numbers only—hover the menu bar for full window names. Checked items with no such window on your account are skipped; expired readings still show the last number (dimmed), and a window that has reset without a new reading shows “—”.";
 "合成 (%@)" = "Synthetic (%@)";
 "合成" = "Synthetic";
 "合计  %@" = "Total  %@";

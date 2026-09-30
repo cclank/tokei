@@ -134,12 +134,20 @@ struct MenuBarQuotaSourceCheck {
                         "Kimi 5h", "Kimi 订阅", "Grok"],
                    "a nil window must drop out entirely")
 
-        // 数据过期 → 也不出现，别在状态栏上挂个陈旧数字。
+        // 数据过期 → 照常显示上次读到的数（标记 stale，状态栏变淡），不再整项消失。
         var staleCodex5h = usage
         staleCodex5h.codex.p5_stale = true
-        try expect(!MenuBarQuotaSource.metrics(in: staleCodex5h)
-                    .contains { $0.kind.displayName == "Codex 5h" },
-                   "stale window must be excluded")
+        let stale = MenuBarQuotaSource.metrics(in: staleCodex5h)
+            .first { $0.kind.displayName == "Codex 5h" }
+        try expect(stale?.value == "12" && stale?.stale == true && stale?.remaining == 12,
+                   "a stale window keeps its last reading, marked stale")
+
+        // 窗口已经重置：上一个窗口的数不能冒充，写「—」
+        staleCodex5h.codex.r5 = Int(Date().timeIntervalSince1970) - 60
+        let reset = MenuBarQuotaSource.metrics(in: staleCodex5h)
+            .first { $0.kind.displayName == "Codex 5h" }
+        try expect(reset?.value == "—" && reset?.remaining == nil && reset?.stale == true,
+                   "a window that reset since the reading shows a dash")
     }
 
     private static func checkRenderable() throws {
@@ -150,12 +158,12 @@ struct MenuBarQuotaSourceCheck {
 
         let usage = try decodeFixture(fixtureJSON)
 
-        // 过期的窗口画不出数字。设置页的提示语和预览走这个谓词，
+        // 过期的窗口照常占位。设置页的提示语和预览走这个谓词，
         // 必须和 metrics(in:) 完全一致，否则又会宣布状态栏没画的组合。
         var staleFable = usage
         staleFable.claude.qf_stale = true
-        try expect(!MenuBarQuotaSource.claudeFable.isRenderable(in: staleFable),
-                   "a stale window cannot render a number")
+        try expect(MenuBarQuotaSource.claudeFable.isRenderable(in: staleFable),
+                   "a stale window keeps its place in the menu bar")
         for source in MenuBarQuotaSource.allCases {
             let rendered = MenuBarQuotaSource.metrics(in: staleFable)
                 .contains { $0.kind == .quota(source) }
@@ -190,6 +198,13 @@ struct MenuBarQuotaSourceCheck {
 
         let icon = MenuBarTitleRenderer.metricsForDisplay(metrics, density: .icon)
         try expect(icon.map(\.value) == ["12"], "icon density must track the lowest metric")
+
+        // 单额度先在新鲜读数里挑：过期的旧数字再低也不抢位置
+        var withStale = metrics
+        withStale[2].stale = true
+        let freshFirst = MenuBarTitleRenderer.metricsForDisplay(withStale, density: .lowest)
+        try expect(freshFirst.map(\.value) == ["60"],
+                   "lowest prefers fresh readings over a stale one: \(freshFirst.map(\.value))")
     }
 
     /// 同家族的两个窗口同色，只能靠符号区分——这里就是在守那个符号。

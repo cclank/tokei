@@ -964,9 +964,9 @@ struct PanelView: View {
             if hasUsage {
                 CostHeadline(value: Fmt.human(r.totalTokens),
                              caption: L("%@ 总量", sel.label), tint: tint)
-                metricGrid([.init("dollarsign.circle", L("≈成本"),
-                                  String(format: "$%.2f", r.cost))],
+                metricGrid([.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))],
                            hit: r.hit, extra: tokenUsageMetrics(r), tint: tint)
+                unpricedModelsNote(r.models)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint)
                 }
@@ -1857,21 +1857,9 @@ struct PanelView: View {
                 let creditMetrics: [Metric] = showsCredits && r.credits > 0
                     ? [.init("circle.hexagongrid.fill", "Credits", Fmt.credits(r.credits))]
                     : []
-                metricGrid(showsCost ? [.init("dollarsign.circle", L("≈成本"), nativeMoney(r.cost, r.cost_cny))] : [],
+                metricGrid(showsCost ? [.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))] : [],
                     hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO), tint: tint)
-                // 没有公开价、也没有 Credits 的模型不估美元；写明哪些没算进去，
-                // 免得把「≈成本」当成全部花费
-                let unpriced = showsCost ? r.models.filter {
-                    $0.in + $0.out + $0.cr + $0.cw + $0.reason > 0 && $0.cost == 0
-                        && ($0.cost_cny ?? 0) == 0 && $0.credits == 0
-                } : []
-                if !unpriced.isEmpty {
-                    Text(L("≈成本未计入没有公开价的模型：%@",
-                           unpriced.map { L10n.data($0.name) }.joined(separator: " · ")))
-                        .font(.system(size: Theme.fontSize(9)))
-                        .foregroundStyle(Theme.tTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                if showsCost { unpricedModelsNote(r.models) }
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint,
                                          reasonIncludedInOutput: reasonIncludedInOutput,
@@ -1880,6 +1868,37 @@ struct PanelView: View {
             } else {
                 emptyHint
             }
+        }
+    }
+
+    /// 有 token、却既没有公开价也没有 Credits 的模型。这些不估美元（不按别的模型猜价）。
+    func unpricedModels(_ models: [TokenModelStat]) -> [TokenModelStat] {
+        models.filter {
+            $0.in + $0.out + $0.cr + $0.cw + $0.reason > 0 && $0.cost == 0
+                && ($0.cost_cny ?? 0) == 0 && $0.credits == 0
+        }
+    }
+
+    /// 「≈成本」的值。用到的模型全都没有公开价时写「—」：$0.00 看着像算出来的结果。
+    func estimatedCostLabel(_ r: TokenUsageRange) -> String {
+        let used = r.models.filter { $0.in + $0.out + $0.cr + $0.cw + $0.reason > 0 }
+        if r.cost == 0 && (r.cost_cny ?? 0) == 0 && !used.isEmpty
+            && unpricedModels(used).count == used.count {
+            return "—"
+        }
+        return nativeMoney(r.cost, r.cost_cny)
+    }
+
+    /// 写明哪些模型没算进「≈成本」，免得把部分成本当成全部花费。
+    @ViewBuilder
+    func unpricedModelsNote(_ models: [TokenModelStat]) -> some View {
+        let unpriced = unpricedModels(models)
+        if !unpriced.isEmpty {
+            Text(L("≈成本未计入没有公开价的模型：%@",
+                   unpriced.map { L10n.data($0.name) }.joined(separator: " · ")))
+                .font(.system(size: Theme.fontSize(9)))
+                .foregroundStyle(Theme.tTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -2857,7 +2876,7 @@ struct PanelView: View {
                 .foregroundStyle(Theme.tSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(L("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口、或者读数已过期，状态栏会跳过它。"))
+            Text(L("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口，状态栏会跳过它；读数过期时照常显示上次的数字（变淡），窗口已重置、还没读到新数时显示「—」。"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)

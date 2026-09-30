@@ -475,8 +475,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         fitStatusItemWidth(b)
         var summaryParts = displayedMetrics.map { metric in
             let name = metric.kind.displayName
+            if metric.stale && metric.remaining == nil {
+                return L("%@ 已重置，等下一次读数", name)
+            }
             if metric.remaining != nil {
-                return L("%@ 剩余 %@%%", name, metric.value)
+                return metric.stale ? L("%@ 上次读到剩余 %@%%", name, metric.value)
+                                    : L("%@ 剩余 %@%%", name, metric.value)
             }
             return "\(name) \(metric.value)"
         }

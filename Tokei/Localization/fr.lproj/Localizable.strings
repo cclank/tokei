@@ -5,6 +5,7 @@
 " · 更新中" = " · Mise à jour";
 "%@ Credits" = "Crédits %@";
 "%@ 上下文快照" = "Instantané de contexte %@";
+"%@ 上次读到剩余 %@%%" = "%@ : dernière lecture %@%% restant";
 "%@ 会话" = "%@ sessions";
 "%@ 分钟" = "%@ min";
 "%@ 剩余 %@%%" = "%@ restant %@%%";
@@ -14,6 +15,7 @@
 "%@ 响应" = "%@ réponses";
 "%@ 天" = "%@ jours";
 "%@ 工具" = "%@ outils";
+"%@ 已重置，等下一次读数" = "%@ réinitialisé, en attente d'une nouvelle lecture";
 "%@ 张" = "%@ cartes";
 "%@ 总量" = "Total %@";
 "%@ 条消息" = "%@ messages";
@@ -150,7 +152,7 @@
 "取消置顶" = "Détacher";
 "另一台 Mac" = "Autre Mac";
 "另一同步任务正在运行" = "Une autre tâche de synchronisation est en cours";
-"只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口、或者读数已过期，状态栏会跳过它。" = "Affecte uniquement l'affichage du quota restant dans la barre des menus, sans lien avec « Afficher les cartes ». Chaque élément correspond à une fenêtre spécifique : 5h est une fenêtre glissante de 5 heures, hebdo est le quota de la semaine. Le double quota prend les deux premiers dans l'ordre ; le quota unique affiche le plus bas. Les styles « Symbole » et « Point » utilisent un sablier pour 5h et une barre pour hebdo ; les autres n'affichent que des chiffres. Survolez la barre pour voir le nom complet.";
+"只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口，状态栏会跳过它；读数过期时照常显示上次的数字（变淡），窗口已重置、还没读到新数时显示「—」。" = "Affecte uniquement l'affichage du quota restant dans la barre des menus, sans lien avec « Afficher les cartes ». Chaque élément correspond à une fenêtre spécifique : 5h est une fenêtre glissante de 5 heures, hebdo est le quota de la semaine. Le double quota prend les deux premiers dans l'ordre ; le quota unique affiche le plus bas. Les styles « Symbole » et « Point » utilisent un sablier pour 5h et une barre pour hebdo ; les autres n'affichent que des chiffres. Survolez la barre pour voir le nom complet. Les éléments cochés sans cette fenêtre sur votre compte sont ignorés ; une lecture expirée affiche toujours le dernier chiffre (atténué), et une fenêtre réinitialisée sans nouvelle lecture affiche « — ».";
 "合成" = "Synthétique";
 "合计" = "Total";
 "合计 %@" = "Total %@";

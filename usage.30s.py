@@ -274,6 +274,9 @@ _DEFAULT_PRICES = {
     "x-ai/grok-4.6":                 {"in": 2.0,   "out": 6.0,  "cache_read": 0.5,    "cache_write": 0.0},
     "x-ai/grok-4.5":                 {"in": 2.0,   "out": 6.0,  "cache_read": 0.3,    "cache_write": 0.0},
     "tencent/hy3":                   {"in": 0.14,  "out": 0.58, "cache_read": 0.035,  "cache_write": 0.0},
+    # 阶跃星辰还没有官方价目表，OpenRouter 也未上架；先用 Vercel AI Gateway /
+    # EmpirioLabs 的公开价（2026-09-30 核对）。OpenRouter 一上架就以它为准。
+    "stepfun/step-5-preview":        {"in": 1.0,   "out": 2.7,  "cache_read": 0.05,   "cache_write": 0.0},
     "tencent/hy3-preview":           {"in": 0.063, "out": 0.21, "cache_read": 0.021,  "cache_write": 0.0},
 }
 
@@ -453,11 +456,37 @@ _FAMILY = [
 ]
 
 
+_CATALOG_SUFFIX_INDEX = None
+
+
+def _catalog_id_for_bare_name(name):
+    """不带厂商前缀的模型名（hy4-preview、step-5-preview）到价目表里找同名条目。
+
+    只认唯一匹配：两个厂商都有同名模型时说不清是哪家，宁可不认。OpenRouter 自己的
+    路由占位（openrouter/auto，价格 -1）和 :batch 之类的变体不参与。
+    """
+    global _CATALOG_SUFFIX_INDEX
+    if _CATALOG_SUFFIX_INDEX is None:
+        index = {}
+        for catalog in (_DEFAULT_PRICES, _PRICING_DB, _OV_MODELS):
+            for model_id, price in catalog.items():
+                if ("/" not in model_id or ":" in model_id
+                        or model_id.startswith("openrouter/") or not isinstance(price, dict)):
+                    continue
+                if (price.get("in") or 0) < 0 or (price.get("out") or 0) < 0:
+                    continue
+                index.setdefault(model_id.rsplit("/", 1)[1].lower(), set()).add(model_id)
+        _CATALOG_SUFFIX_INDEX = index
+    matches = _CATALOG_SUFFIX_INDEX.get(name)
+    return next(iter(matches)) if matches and len(matches) == 1 else None
+
+
 def _normalize(model: str):
     """本地 model 名 → OpenRouter canonical id。免费档去 :free 按基础价;preview 后缀保留。"""
     m = (model or "").strip().lower()
     if not m or m == "<synthetic>":
         return None
+    m = re.sub(r"^custom[\w-]*:", "", m)             # WorkBuddy 自配模型：custom-local:step-5-preview
     m = re.sub(r"\s+", "-", m)
     m = re.sub(r"[:\-]free$", "", m)                  # 免费档按基础价
     seg = m.rsplit("/", 1)[-1]
@@ -493,7 +522,8 @@ def _normalize(model: str):
         return "tencent/hy3"
     if m in ("hy3-preview", "hy3 preview"):
         return "tencent/hy3-preview"
-    return m
+    # 其余不带厂商前缀的，按名字到价目表（OpenRouter 为主）里找
+    return _catalog_id_for_bare_name(m) or m
 
 
 def _override_alias(model: str):
@@ -712,7 +742,8 @@ def nice_model(m: str) -> str:
         rest = m.split("/")[-1][len("minimax"):]
         parts = [part for part in re.split(r"[-\s]+", rest) if part]
         return " ".join(["MiniMax"] + [part[:1].upper() + part[1:] for part in parts])
-    name = re.sub(r"[-:](free|preview|latest)$", "", m.split("/")[-1]).replace("-", " ")
+    # 日志里有「Hy4 preview」这种空格写法，和 hy4-preview 一样去掉后缀，同一个模型只有一个名字
+    name = re.sub(r"[-: ](free|preview|latest)$", "", m.split("/")[-1], flags=re.I).replace("-", " ")
     return " ".join(w[:1].upper() + w[1:] if w[:1].isalpha() else w
                     for w in name.split())
 
@@ -1221,23 +1252,39 @@ def _ledger_day_total(day):
 
 
 # 这些工具的旧版本遇到没有公开价的模型会按 Opus 兜底价估美元，账本里存着这些
-# 猜出来的成本（本机见过一个工具被多算四百美元）。清一次，之后新记录本身就不估。
+# 猜出来的成本（本机见过一个工具被多算四百美元）。迁一次，之后新记录本身就对。
+# 2：不带厂商前缀的模型名改按名字到价目表里查价，v1 清零的行有了价就按价补回。
 _UNPRICED_COST_TOOLS = ("workbuddy", "workbuddy_ai", "pi", "qwencode")
-_UNPRICED_COST_SCHEMA = 1
+_UNPRICED_COST_SCHEMA = 2
 
 
-def _drop_unpriced_costs(day):
-    """把账本某天（连同各来源）里没有公开价模型的成本清零，当天合计同步扣掉。"""
+def _reprice_unpriced_costs(day, tool):
+    """账本某天（连同各来源）：没有公开价的模型成本清零，查得到价的按 token 重算。
+    WorkBuddy / Qwen Code 的成本本来就是 token × 单价，全部按现价重算——旧版按 Opus
+    猜的也一并改对；Pi 的日志可能自带真实成本，只补原来是 0 的。当天合计按差额调整。"""
     models = day.get("models")
     if isinstance(models, dict):
         for name, usage in models.items():
-            if (isinstance(usage, dict) and float(usage.get("cost", 0) or 0) > 0
-                    and not _pricing_id(name)):
-                day["cost"] = max(float(day.get("cost", 0) or 0) - float(usage["cost"]), 0.0)
-                usage["cost"] = 0.0
+            if not isinstance(usage, dict):
+                continue
+            old = float(usage.get("cost", 0) or 0)
+            price_id = _pricing_id(name)
+            if not price_id:
+                new = 0.0
+            elif old > 0 and tool == "pi":
+                continue
+            else:
+                p = _raw_price(price_id)
+                out = usage.get("out", 0) + (usage.get("reason", 0) if tool == "qwencode" else 0)
+                new = (usage.get("in", 0) * p["in"] + out * p["out"]
+                       + usage.get("cr", 0) * p["cache_read"]
+                       + usage.get("cw", 0) * p["cache_write"]) / 1e6
+            if new != old:
+                usage["cost"] = new
+                day["cost"] = max(float(day.get("cost", 0) or 0) + new - old, 0.0)
     for source in (day.get("_sources") or {}).values():
         if isinstance(source, dict):
-            _drop_unpriced_costs(source)
+            _reprice_unpriced_costs(source, tool)
 
 
 def _prepare_unpriced_cost_ledger(tool):
@@ -1247,7 +1294,7 @@ def _prepare_unpriced_cost_ledger(tool):
         return
     for day in ledger.setdefault("tools", {}).get(tool, {}).values():
         if isinstance(day, dict):
-            _drop_unpriced_costs(day)
+            _reprice_unpriced_costs(day, tool)
     ledger[schema_key] = _UNPRICED_COST_SCHEMA
     _LEDGER_CACHE["dirty"] = True
 
@@ -9522,7 +9569,8 @@ def _pi_usage_cost(u, model):
 
 
 # 解析口径版本。1：没有公开价的模型不再按 Opus 兜底价估美元。
-_PI_PARSER_VERSION = 1
+# 2：不带厂商前缀的模型名按名字到价目表里查价。
+_PI_PARSER_VERSION = 2
 
 
 def scan_pi(bounds, cache):
@@ -9798,7 +9846,8 @@ def scan_prime_agent(bounds, cache):
 # 每个带 usage 的 item 代表一次模型调用。providerData 中的同一份 usage 仅作字段补全，
 # 不重复累计；reasoning_tokens 已包含在 output_tokens 中。
 # 3：没有公开价的模型不再按 Opus 兜底价估美元（与 CodeBuddy 一致）。
-_WORKBUDDY_PARSER_VERSION = 3
+# 4：不带厂商前缀的模型名（Hy4 preview）按名字到价目表里查价。
+_WORKBUDDY_PARSER_VERSION = 4
 
 
 def _workbuddy_number(obj, *keys):
@@ -11734,11 +11783,11 @@ def scan_qwencode(bounds, cache):
             cache["_dirty"] = True
         return {"ranges": B}
 
-    # 3：没有公开价的模型不再按 Opus 兜底价估美元
-    if fc.get("sig") != sig or fc.get("accounting_version") != 3:
+    # 3：没有公开价的模型不再按 Opus 兜底价估美元；4：不带厂商前缀的模型名按名字查价
+    if fc.get("sig") != sig or fc.get("accounting_version") != 4:
         entries = _qwen_entries(token_files, summary_file)
         fc.clear()
-        fc.update({"sig": sig, "entries": entries, "accounting_version": 3})
+        fc.update({"sig": sig, "entries": entries, "accounting_version": 4})
         cache["_dirty"] = True
 
     live_days = {}

@@ -244,8 +244,11 @@ class MiniMaxScanTests(unittest.TestCase):
         self.assertEqual(USAGE.nice_model("minimax/minimax-m3"), "MiniMax M3")
         self.assertEqual(USAGE.nice_model("MiniMax-M2.7-highspeed"), "MiniMax M2.7 Highspeed")
         self.assertEqual(USAGE._pricing_id("MiniMax-M3"), "minimax/minimax-m3")
-        # 价格表里没有的变体不猜价，保留原名
-        self.assertIsNone(USAGE._pricing_id("MiniMax-M2.7-highspeed"))
+        # highspeed 用 MiniMax 官方按量价（OpenRouter 未收录）
+        self.assertEqual(USAGE._pricing_id("MiniMax-M2.7-highspeed"), "minimax/minimax-m2.7-highspeed")
+        self.assertEqual(USAGE._raw_price("MiniMax-M2.7-highspeed")["in"], 0.6)
+        # 还没公开定价的预览版沿用同一版本线上一个版本（M3）的价
+        self.assertEqual(USAGE._pricing_id("MiniMax-M3.1-Flash-Preview"), "minimax/minimax-m3")
 
 
 class MiniMaxQuotaTests(unittest.TestCase):

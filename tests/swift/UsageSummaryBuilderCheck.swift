@@ -61,6 +61,8 @@ struct UsageSummaryBuilderCheck {
                                                  visibility: allVisible)
         try expect(nativeText.contains("¥5.02"), "native CNY missing: \(nativeText)")
         try expect(nativeMoney(0.31, 5.02) == "$0.31 + ¥5.02", "currencies must stay separate")
+        try expect(nativeMoney(0.0017) == "<$0.01", "a sub-cent cost must not read as $0.00")
+        try expect(nativeMoney(0) == "$0.00", "zero stays zero")
         let nativeTotals = UsageSummaryBuilder.totals(for: UsageSummaryBuilder.toolLines(
             usage: mixed, range: .today, visibility: allVisible))
         try expect(nativeTotals.cost_cny == 5.02, "CNY total mismatch")

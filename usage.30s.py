@@ -277,6 +277,8 @@ _DEFAULT_PRICES = {
     # 阶跃星辰还没有官方价目表，OpenRouter 也未上架；先用 Vercel AI Gateway /
     # EmpirioLabs 的公开价（2026-09-30 核对）。OpenRouter 一上架就以它为准。
     "stepfun/step-5-preview":        {"in": 1.0,   "out": 2.7,  "cache_read": 0.05,   "cache_write": 0.0},
+    # MiniMax 官方按量价（platform.minimax.io，2026-09-30 核对）；OpenRouter 未收录 highspeed。
+    "minimax/minimax-m2.7-highspeed": {"in": 0.6,  "out": 2.4,  "cache_read": 0.06,   "cache_write": 0.375},
     "tencent/hy3-preview":           {"in": 0.063, "out": 0.21, "cache_read": 0.021,  "cache_write": 0.0},
 }
 
@@ -456,18 +458,30 @@ _FAMILY = [
 ]
 
 
-_CATALOG_SUFFIX_INDEX = None
+_CATALOG_INDEX = None
+# 版本线：前缀 + 主.次版本 + 档位后缀。minimax-m3.1-flash → ("minimax-m", (3, 1), "-flash")
+_MODEL_LINE_RE = re.compile(r"^(.*?)(\d+)(?:\.(\d+))?((?:-[a-z][a-z0-9.]*)*)$")
+_UNSTABLE_SUFFIX_RE = re.compile(r"(?:-(?:preview|latest|exp|\d{8}|\d{4}-\d{2}-\d{2}|\d{4}))+$")
 
 
-def _catalog_id_for_bare_name(name):
-    """不带厂商前缀的模型名（hy4-preview、step-5-preview）到价目表里找同名条目。
+def _model_line(name):
+    """(前缀, 版本, 档位, 是否正式版)。preview / 日期这类后缀不算档位。"""
+    base = _UNSTABLE_SUFFIX_RE.sub("", name)
+    match = _MODEL_LINE_RE.match(base)
+    if not match:
+        return None
+    version = (int(match.group(2)), int(match.group(3) or 0))
+    return match.group(1), version, match.group(4), base == name
 
-    只认唯一匹配：两个厂商都有同名模型时说不清是哪家，宁可不认。OpenRouter 自己的
-    路由占位（openrouter/auto，价格 -1）和 :batch 之类的变体不参与。
+
+def _catalog_index():
+    """价目表索引：按名字找条目、按版本线找上一个版本都用它。
+
+    OpenRouter 自己的路由占位（openrouter/auto，价格 -1）和 :batch 之类的变体不参与。
     """
-    global _CATALOG_SUFFIX_INDEX
-    if _CATALOG_SUFFIX_INDEX is None:
-        index = {}
+    global _CATALOG_INDEX
+    if _CATALOG_INDEX is None:
+        suffix, lines = {}, {}
         for catalog in (_DEFAULT_PRICES, _PRICING_DB, _OV_MODELS):
             for model_id, price in catalog.items():
                 if ("/" not in model_id or ":" in model_id
@@ -475,10 +489,47 @@ def _catalog_id_for_bare_name(name):
                     continue
                 if (price.get("in") or 0) < 0 or (price.get("out") or 0) < 0:
                     continue
-                index.setdefault(model_id.rsplit("/", 1)[1].lower(), set()).add(model_id)
-        _CATALOG_SUFFIX_INDEX = index
-    matches = _CATALOG_SUFFIX_INDEX.get(name)
+                provider, name = model_id.lower().rsplit("/", 1)
+                suffix.setdefault(name, set()).add(model_id)
+                line = _model_line(name)
+                if line:
+                    prefix, version, tier, stable = line
+                    lines.setdefault(prefix, set()).add((provider, version, tier, stable, model_id))
+        _CATALOG_INDEX = {"suffix": suffix, "lines": lines}
+    return _CATALOG_INDEX
+
+
+def _catalog_id_for_bare_name(name):
+    """不带厂商前缀的模型名（hy4-preview、step-5-preview）到价目表里找同名条目。
+    只认唯一匹配：两个厂商都有同名模型时说不清是哪家，宁可不认。"""
+    matches = _catalog_index()["suffix"].get(name)
     return next(iter(matches)) if matches and len(matches) == 1 else None
+
+
+def _predecessor_pricing_id(normalized):
+    """价目表里没有这个模型时，沿用同一版本线上一个版本的价（用户的规则）。
+
+    minimax-m3.1-flash-preview → minimax-m3；gpt-6.2-sol → gpt-6.1-sol；
+    deepseek-v4.2-flash → deepseek-v4.1-flash。先找同档位（-flash / -sol）里版本不高于
+    它的最近一个，没有再找同版本线的基础款；同版本时正式版优先于 preview。
+    不带厂商前缀的名字只在所有候选都来自同一家时才认。
+    """
+    if not normalized:
+        return None
+    provider, _, name = normalized.lower().rpartition("/")
+    line = _model_line(name)
+    if not line:
+        return None
+    prefix, version, tier, _stable = line
+    candidates = [c for c in _catalog_index()["lines"].get(prefix, ())
+                  if c[1] <= version and (not provider or c[0] == provider)]
+    if not provider and len({c[0] for c in candidates}) > 1:
+        return None
+    for wanted in dict.fromkeys((tier, "")):
+        same_tier = [c for c in candidates if c[2] == wanted]
+        if same_tier:
+            return max(same_tier, key=lambda c: (c[1], c[3]))[4]
+    return None
 
 
 def _normalize(model: str):
@@ -542,6 +593,9 @@ def _resolve_id(model: str):
     norm = _normalize(model)
     if norm and (norm in _OV_MODELS or norm in _PRICING_DB or norm in _DEFAULT_PRICES):
         return norm
+    predecessor = _predecessor_pricing_id(norm)       # 沿用同一版本线上一个版本
+    if predecessor:
+        return predecessor
     low = s.lower()
     if "gemini" in low:                               # gemini 版本繁多,按 pro/flash 粗分回退
         return "google/gemini-3.1-pro-preview" if "pro" in low else "google/gemini-3.5-flash"
@@ -602,9 +656,24 @@ def _has_known_price(model: str):
     return _pricing_id(model) is not None
 
 
+def _in_catalog(model_id):
+    return bool(model_id) and (model_id in _OV_MODELS or model_id in _PRICING_DB
+                               or model_id in _DEFAULT_PRICES)
+
+
 def _pricing_id(model: str):
+    alias = _override_alias((model or "").strip())
+    if _in_catalog(alias):
+        return alias
+    normalized = _normalize(model)
+    if _in_catalog(normalized):
+        return normalized
+    # 价目表里没有：先沿用同一版本线上一个版本的价，再退到按家族的粗略代表
+    predecessor = _predecessor_pricing_id(normalized)
+    if predecessor:
+        return predecessor
     canonical = _known_id_or_raw(model)
-    if canonical and (canonical in _OV_MODELS or canonical in _PRICING_DB or canonical in _DEFAULT_PRICES):
+    if _in_catalog(canonical):
         return canonical
     # ZCode currently reports GLM-5.2, whose public price is not listed yet.
     # Use the documented GLM-5.1 equivalent until the pricing feed adds 5.2.
@@ -1254,8 +1323,9 @@ def _ledger_day_total(day):
 # 这些工具的旧版本遇到没有公开价的模型会按 Opus 兜底价估美元，账本里存着这些
 # 猜出来的成本（本机见过一个工具被多算四百美元）。迁一次，之后新记录本身就对。
 # 2：不带厂商前缀的模型名改按名字到价目表里查价，v1 清零的行有了价就按价补回。
+# 3：价目表里没有的沿用同一版本线上一个版本的价。
 _UNPRICED_COST_TOOLS = ("workbuddy", "workbuddy_ai", "pi", "qwencode")
-_UNPRICED_COST_SCHEMA = 2
+_UNPRICED_COST_SCHEMA = 3
 
 
 def _reprice_unpriced_costs(day, tool):
@@ -1825,7 +1895,7 @@ def _format_token_models(models, include_prices=True, price_model=None):
         elif price_model is not None:
             price_id = price_model(model_id) if model_id else None
         else:
-            price_id = _exact_pricing_id(model_id)
+            price_id = _pricing_id(model_id) if model_id else None
         p = _raw_price(price_id) if price_id else {
             "in": 0.0, "out": 0.0, "cache_read": 0.0, "cache_write": 0.0}
         # 单价不是这个模型自己的（查不到公开价，按别的模型估算）时注明参照
@@ -9569,8 +9639,8 @@ def _pi_usage_cost(u, model):
 
 
 # 解析口径版本。1：没有公开价的模型不再按 Opus 兜底价估美元。
-# 2：不带厂商前缀的模型名按名字到价目表里查价。
-_PI_PARSER_VERSION = 2
+# 2：不带厂商前缀的模型名按名字到价目表里查价。3：没有的沿用上一个版本的价。
+_PI_PARSER_VERSION = 3
 
 
 def scan_pi(bounds, cache):
@@ -9847,7 +9917,8 @@ def scan_prime_agent(bounds, cache):
 # 不重复累计；reasoning_tokens 已包含在 output_tokens 中。
 # 3：没有公开价的模型不再按 Opus 兜底价估美元（与 CodeBuddy 一致）。
 # 4：不带厂商前缀的模型名（Hy4 preview）按名字到价目表里查价。
-_WORKBUDDY_PARSER_VERSION = 4
+# 5：价目表里没有的沿用同一版本线上一个版本的价。
+_WORKBUDDY_PARSER_VERSION = 5
 
 
 def _workbuddy_number(obj, *keys):
@@ -11783,11 +11854,12 @@ def scan_qwencode(bounds, cache):
             cache["_dirty"] = True
         return {"ranges": B}
 
-    # 3：没有公开价的模型不再按 Opus 兜底价估美元；4：不带厂商前缀的模型名按名字查价
-    if fc.get("sig") != sig or fc.get("accounting_version") != 4:
+    # 3：没有公开价的模型不再按 Opus 兜底价估美元；4：不带厂商前缀的模型名按名字查价；
+    # 5：没有的沿用上一个版本的价
+    if fc.get("sig") != sig or fc.get("accounting_version") != 5:
         entries = _qwen_entries(token_files, summary_file)
         fc.clear()
-        fc.update({"sig": sig, "entries": entries, "accounting_version": 4})
+        fc.update({"sig": sig, "entries": entries, "accounting_version": 5})
         cache["_dirty"] = True
 
     live_days = {}
@@ -13656,9 +13728,13 @@ def _recalc_costs(result):
             for m in r["models"]:
                 name = m.get("name", "")
                 model_id = m.get("model_id")
-                price_id = (_exact_pricing_id(model_id) if isinstance(model_id, str) else None)
+                price_id = (_pricing_id(model_id) if isinstance(model_id, str) else None)
                 if not price_id:
                     price_id = _pricing_id(name)
+                # 单价借自别的模型（沿用上一个版本 / 家族代表）时注明参照
+                identity = model_id if isinstance(model_id, str) else _model_identity_id(name)
+                m["pref"] = (nice_model(price_id)
+                             if price_id and _model_identity_id(price_id) != identity else None)
                 authoritative_cost = float(m.get("cost", 0) or 0)
                 if tool_key == "deepseek_harness":
                     total_cost += authoritative_cost

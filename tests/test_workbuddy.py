@@ -105,7 +105,7 @@ class WorkBuddyUsageRecordTests(unittest.TestCase):
             "vendor-a/solo:batch": {"in": 0.5, "out": 1.0},
         }
         with mock.patch.object(USAGE, "_PRICING_DB", catalog), \
-             mock.patch.object(USAGE, "_CATALOG_SUFFIX_INDEX", None):
+             mock.patch.object(USAGE, "_CATALOG_INDEX", None):
             self.assertEqual(USAGE._normalize("Hy4 preview"), "tencent/hy4-preview")
             self.assertEqual(USAGE._normalize("custom-local:hy4-preview"), "tencent/hy4-preview")
             self.assertEqual(USAGE._normalize("auto"), "auto", "路由占位不算价")

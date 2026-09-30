@@ -1163,8 +1163,12 @@ enum Fmt {
 
 /// Cost fields retain native currencies; no exchange-rate conversion or mixed sum.
 func nativeMoney(_ usd: Double, _ cny: Double? = nil) -> String {
+    // 不到 1 分的写「<$0.01」：$0.00 看着像没算钱，其实是算了、只是很少
+    func amount(_ symbol: String, _ value: Double) -> String {
+        value > 0 && value < 0.005 ? "<\(symbol)0.01" : String(format: "\(symbol)%.2f", value)
+    }
     var parts: [String] = []
-    if usd > 0 || (cny ?? 0) <= 0 { parts.append(String(format: "$%.2f", usd)) }
-    if let cny, cny > 0 { parts.append(String(format: "¥%.2f", cny)) }
+    if usd > 0 || (cny ?? 0) <= 0 { parts.append(amount("$", usd)) }
+    if let cny, cny > 0 { parts.append(amount("¥", cny)) }
     return parts.joined(separator: " + ")
 }

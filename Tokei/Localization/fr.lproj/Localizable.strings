@@ -76,6 +76,7 @@
 "z.ai 区域" = "Région z.ai";
 "· %@ 天活跃" = "· %@ jours actifs";
 "≈成本" = "≈Coût";
+"≈成本未计入没有公开价的模型：%@" = "Le coût ≈ exclut les modèles sans prix public : %@";
 "一个周额度用了多少" = "Quota hebdomadaire consommé";
 "上周" = "Sem. passée";
 "上次更新 %@" = "Dernière mise à jour %@";

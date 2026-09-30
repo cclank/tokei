@@ -514,13 +514,14 @@ struct PanelView: View {
             ToolCardItem(id: "prime_agent", name: "Prime Agent", visible: showPrimeAgent, active: par.sessions > 0,
                          tint: Theme.primeAgent, content: AnyView(tokenUsageBlock(title: "Prime Agent", par, tint: Theme.primeAgent, modelsOpen: $primeAgentModelsOpen, toolID: "prime_agent"))),
             ToolCardItem(id: "workbuddy", name: "WorkBuddy", visible: showWorkBuddy, active: wr.sessions > 0,
-                         tint: Theme.workbuddy, content: AnyView(tokenUsageBlock(title: "WorkBuddy", wr, tint: Theme.workbuddy, modelsOpen: $workBuddyModelsOpen, toolID: "workbuddy"))),
+                         tint: Theme.workbuddy, content: AnyView(tokenUsageBlock(title: "WorkBuddy", wr, tint: Theme.workbuddy, modelsOpen: $workBuddyModelsOpen, showsCredits: true, toolID: "workbuddy"))),
             ToolCardItem(id: "workbuddy-ai", name: "WorkBuddy Intl.",
                          visible: showWorkBuddyAI, active: wair.sessions > 0,
                          tint: Theme.workbuddyAI,
                          content: AnyView(tokenUsageBlock(
                             title: "WorkBuddy Intl.", wair, tint: Theme.workbuddyAI,
-                            modelsOpen: $workBuddyAIModelsOpen, toolID: "workbuddy-ai"))),
+                            modelsOpen: $workBuddyAIModelsOpen, showsCredits: true,
+                            toolID: "workbuddy-ai"))),
             ToolCardItem(id: "codebuddy", name: "CodeBuddy", visible: showCodeBuddy,
                          active: cbr.sessions > 0 || cbr.totalTokens > 0 || cbr.credits > 0,
                          tint: Theme.codebuddy,
@@ -1858,6 +1859,19 @@ struct PanelView: View {
                     : []
                 metricGrid(showsCost ? [.init("dollarsign.circle", L("≈成本"), nativeMoney(r.cost, r.cost_cny))] : [],
                     hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO), tint: tint)
+                // 没有公开价、也没有 Credits 的模型不估美元；写明哪些没算进去，
+                // 免得把「≈成本」当成全部花费
+                let unpriced = showsCost ? r.models.filter {
+                    $0.in + $0.out + $0.cr + $0.cw + $0.reason > 0 && $0.cost == 0
+                        && ($0.cost_cny ?? 0) == 0 && $0.credits == 0
+                } : []
+                if !unpriced.isEmpty {
+                    Text(L("≈成本未计入没有公开价的模型：%@",
+                           unpriced.map { L10n.data($0.name) }.joined(separator: " · ")))
+                        .font(.system(size: Theme.fontSize(9)))
+                        .foregroundStyle(Theme.tTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint,
                                          reasonIncludedInOutput: reasonIncludedInOutput,

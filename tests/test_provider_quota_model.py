@@ -30,6 +30,28 @@ class ProviderQuotaModelTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("provider quota model checks passed", result.stdout)
 
+    def test_fmt_local_time_and_countdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "fmt-time-check"
+            result = subprocess.run(
+                [
+                    "swiftc",
+                    "-parse-as-library",
+                    str(ROOT / "Tokei/Sources/Tokei/L10n.swift"),
+                    str(ROOT / "Tokei/Sources/Tokei/Model.swift"),
+                    str(ROOT / "tests/swift/FmtTimeCheck.swift"),
+                    "-o",
+                    str(binary),
+                ],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("fmt time checks passed", result.stdout)
+
     def test_gemini_card_requires_selected_range_usage(self):
         source = (ROOT / "Tokei/Sources/Tokei/PanelView.swift").read_text()
         start = source.index('ToolCardItem(id: "gemini"')
@@ -48,6 +70,18 @@ class ProviderQuotaModelTests(unittest.TestCase):
 
         self.assertIn("active: cursorUsage.totalTokens > 0 || cursorUsage.requests > 0", cursor_card)
         self.assertNotIn("u.cursor.available", cursor_card)
+
+    def test_codex_reset_cards_show_local_time_and_countdown(self):
+        source = (ROOT / "Tokei/Sources/Tokei/PanelView.swift").read_text()
+        start = source.index("func codexResetCardsRow")
+        end = source.index("    // MARK: - Codex Luna Reserve", start)
+        block = source[start:end]
+
+        self.assertIn("Fmt.localTime", block)
+        self.assertIn("Fmt.countdown", block)
+        self.assertIn("Fmt.localTimeZoneCaption", block)
+        self.assertNotIn("北京时间", block)
+        self.assertNotIn("beijingTime", block)
 
     def test_sync_manager_provider_config_typechecks(self):
         result = subprocess.run(

@@ -832,7 +832,7 @@ struct PanelView: View {
                     .foregroundStyle(Theme.tPrimary)
                 Spacer(minLength: 6)
                 if let nearest = expirations.first {
-                    Text(L("最近 %@ · 北京时间", Fmt.beijingTime(nearest)))
+                    Text(L("最近 %@ · %@后", Fmt.localTime(nearest), Fmt.countdown(nearest)))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -843,7 +843,7 @@ struct PanelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(L("查看重置卡到期时间"))
+        .help(expirations.first.map { L("最近一张 %@ 后到期", Fmt.countdown($0)) } ?? L("查看重置卡到期时间"))
 
         if codexResetCardsOpen {
             VStack(alignment: .leading, spacing: 7) {
@@ -852,7 +852,7 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(9.5), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                     Spacer()
-                    Text(L("北京时间 UTC+8"))
+                    Text(Fmt.localTimeZoneCaption())
                         .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -867,7 +867,7 @@ struct PanelView: View {
                             .font(.system(size: Theme.fontSize(10.5), weight: .medium))
                             .foregroundStyle(Theme.tSecondary)
                         Spacer()
-                        Text(Fmt.beijingTime(expiry, full: true))
+                        Text(L("%@ · %@后", Fmt.localTime(expiry, full: true), Fmt.countdown(expiry)))
                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tPrimary)
                     }

@@ -257,6 +257,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 
 ### Unreleased
 
+- fix(ui): Codex 重置卡到期时间改为本地时区，并显示倒计时
 - feat(provider): 新增 Cursor、Zed、Sub2API、z.ai / GLM 额度卡
 - feat(provider-usage): Cursor 与 z.ai 新增账号 Token、按模型统计及 Dashboard 独立账号模型区
 - fix(antigravity): 兼容新版会话库把生成时间迁移到 `steps.metadata` 后的 Token 解析

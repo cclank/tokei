@@ -16,6 +16,7 @@
 "%@ 剩余 %@%%" = "%@ remaining %@%%";
 "%@ 后回满" = "%@ until reset";
 "%@ 后重置" = "Resets in %@";
+"%@ · %@后" = "%@ · in %@";
 "%@ 周额度" = "%@ weekly quota";
 "%@ 响应" = "%@ responses";
 "%@ 天" = "%@ days";
@@ -169,7 +170,6 @@
 "加载中…" = "Loading…";
 "加载中…(%@)" = "Loading… (%@)";
 "加载失败" = "Load failed";
-"北京时间 UTC+8" = "Beijing time (UTC+8)";
 "区域" = "Region";
 "十万刀" = "$100K Club";
 "十亿先生" = "Billion Club";
@@ -360,7 +360,8 @@
 "更新时间未知" = "Update time unknown";
 "更早" = "Earlier";
 "最大区间下降" = "Largest range drop";
-"最近 %@ · 北京时间" = "Latest %@ · Beijing time";
+"最近 %@ · %@后" = "Latest %@ · in %@";
+"最近一张 %@ 后到期" = "Nearest card expires in %@";
 "最近一次 · %@" = "Latest · %@";
 "最近额度变化" = "Recent quota changes";
 "月" = "Month";
@@ -380,6 +381,7 @@
 "本周期额度" = "This period's quota";
 "本命模型" = "Top model";
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Local activity · official tokens, models and cost after authorization";
+"本地 · %@" = "Local · %@";
 "本地缓存" = "Local cache";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Local log · %@ messages · %@ responses";
 "本地验证版" = "Local dev build";

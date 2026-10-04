@@ -1112,13 +1112,21 @@ enum Fmt {
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(e)))
     }
 
-    static func beijingTime(_ epoch: Int, full: Bool = false) -> String {
+    /// 按系统时区格式化时刻；与 `reset` 一致，另支持完整日期。
+    static func localTime(_ epoch: Int, full: Bool = false) -> String {
         let d = Date(timeIntervalSince1970: TimeInterval(epoch))
         let f = DateFormatter()
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        f.locale = Locale(identifier: "zh_CN")
         f.dateFormat = full ? "yyyy-MM-dd HH:mm:ss" : "MM-dd HH:mm"
         return f.string(from: d)
+    }
+
+    /// 重置卡详情区用的时区说明，例如「本地 · 中国标准时间」。
+    static func localTimeZoneCaption() -> String {
+        let tz = TimeZone.current
+        let name = tz.localizedName(for: .shortStandard, locale: .current)
+            ?? tz.localizedName(for: .generic, locale: .current)
+            ?? tz.identifier
+        return L("本地 · %@", name)
     }
 
     static func countdown(_ epoch: Int?) -> String {

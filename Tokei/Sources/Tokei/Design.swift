@@ -1,6 +1,20 @@
 import SwiftUI
 
-struct VisualEffect: NSViewRepresentable {
+struct VisualEffect: View {
+    /// 离屏渲染（如 ImageRenderer）不支持 NSViewRepresentable，会退化成黄底红禁行标志。
+    /// 离屏模式下跳过毛玻璃层与 tooltip 宿主视图。
+    static var isOffscreen = false
+
+    var body: some View {
+        if Self.isOffscreen {
+            EmptyView()
+        } else {
+            VisualEffectRepresentable()
+        }
+    }
+}
+
+private struct VisualEffectRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
         v.material = .hudWindow
@@ -24,7 +38,14 @@ struct Tip: NSViewRepresentable {
 }
 
 extension View {
-    func tip(_ text: String) -> some View { overlay(Tip(text: text)) }
+    @ViewBuilder
+    func tip(_ text: String) -> some View {
+        if VisualEffect.isOffscreen {
+            self
+        } else {
+            overlay(Tip(text: text))
+        }
+    }
 }
 
 // 设计系统:颜色 / 间距 / 圆角集中定义,组件语义化复用。

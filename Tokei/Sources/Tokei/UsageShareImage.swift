@@ -92,6 +92,9 @@ enum UsageShareImage {
 
     @MainActor
     private static func renderView<V: View>(_ content: V) -> NSImage? {
+        let prev = VisualEffect.isOffscreen
+        VisualEffect.isOffscreen = true
+        defer { VisualEffect.isOffscreen = prev }
         let renderer = ImageRenderer(content: content.environment(\.colorScheme, .dark))
         renderer.scale = renderScale
         guard let cg = renderer.cgImage else { return nil }

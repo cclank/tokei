@@ -822,7 +822,7 @@ struct PanelView: View {
                 codexResetCardsOpen.toggle()
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: "arrow.clockwise.circle.fill")
                     .font(.system(size: Theme.fontSize(10)))
                     .foregroundStyle(Theme.codex)
@@ -832,11 +832,13 @@ struct PanelView: View {
                 Text(L("%@ 张", cards.count))
                     .font(.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
-                Spacer(minLength: 6)
+                Spacer(minLength: 4)
                 if let nearest = expirations.first {
-                    Text(L("最近 %@ · %@后", Fmt.localTime(nearest), Fmt.countdown(nearest)))
-                        .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
+                    Text(L("%@ · %@后", Fmt.localTime(nearest), Fmt.countdown(nearest)))
+                        .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Image(systemName: codexResetCardsOpen ? "chevron.down" : "chevron.right")
                     .font(.system(size: Theme.fontSize(8), weight: .bold))
@@ -857,6 +859,7 @@ struct PanelView: View {
                     Text(Fmt.localTimeZoneCaption())
                         .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
                 }
                 ForEach(Array(expirations.enumerated()), id: \.offset) { index, expiry in
                     HStack(spacing: 7) {
@@ -869,9 +872,11 @@ struct PanelView: View {
                             .font(.system(size: Theme.fontSize(10.5), weight: .medium))
                             .foregroundStyle(Theme.tSecondary)
                         Spacer()
-                        Text(L("%@ · %@后", Fmt.localTime(expiry, full: true), Fmt.countdown(expiry)))
+                        Text(L("%@ · %@后", Fmt.localTime(expiry), Fmt.countdown(expiry)))
                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
             }

@@ -360,7 +360,6 @@
 "更新时间未知" = "Update time unknown";
 "更早" = "Earlier";
 "最大区间下降" = "Largest range drop";
-"最近 %@ · %@后" = "Latest %@ · in %@";
 "最近一张 %@ 后到期" = "Nearest card expires in %@";
 "最近一次 · %@" = "Latest · %@";
 "最近额度变化" = "Recent quota changes";

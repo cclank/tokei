@@ -278,6 +278,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     static let visibleRefreshInterval: TimeInterval = 10
     var globalMouseMonitor: Any?
     weak var popoverAnchorButton: NSStatusBarButton?
+    private var usagePreviewMode: Bool {
+        CommandLine.arguments.contains("--preview-usage")
+    }
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -286,6 +289,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     static let kimicodeColor = NSColor(red: 0.20, green: 0.78, blue: 0.66, alpha: 1)
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        if usagePreviewMode {
+            guard let usage = Shot.usageArgument() else {
+                fputs("Tokei --preview-usage requires --usage <path>\n", stderr)
+                NSApp.terminate(nil)
+                return
+            }
+            store.usage = usage
+            store.localUsage = usage
+            store.allDevicesUsage = usage
+            store.lastUpdated = L("预览")
+        }
+
         // macOS 26 上用可变宽度初始化时，状态栏项偶发在按钮拿到标题、图标之前就被压没，
         // 进程在跑、菜单栏却看不到图标（issue #8，用户在 26.5 上复现并验证了这套处理）。
         // 先按正方形占位并显式设为可见；拿到内容后 fitStatusItemWidth 再按内容定宽。
@@ -327,6 +342,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // 在外接显示器的全屏 Space 中按错误屏幕重新计算锚点。
         popover.animates = false
         popover.delegate = self
+
+        if usagePreviewMode {
+            // PR 截图用固定 fixture 展示真正的 popover，不启动采集、同步、更新或活动上报。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.togglePopover()
+            }
+            return
+        }
 
         // 启动时先把 Qoder IDE / Grok / 千问办公额度开关落盘到 config.json,
         // 确保随后的 refresh() 触发的 Python 扫描能读到正确配置。
@@ -623,23 +646,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 // 加 --usage /path/usage.json 时直接渲染这份数据，不跑采集器——用来看过期、空态这类
 // 平时不好凑出来的状态。
 enum Shot {
+    static func usageArgument() -> Usage? {
+        guard let idx = CommandLine.arguments.firstIndex(of: "--usage"),
+              CommandLine.arguments.count > idx + 1 else { return nil }
+        let url = URL(fileURLWithPath: CommandLine.arguments[idx + 1])
+        do {
+            return try JSONDecoder().decode(Usage.self, from: Data(contentsOf: url))
+        } catch {
+            fputs("Tokei --usage: \(error)\n", stderr)
+            return nil
+        }
+    }
+
     static func run(path: String) {
         _ = NSApplication.shared
-        var usage: Usage?
-        if let idx = CommandLine.arguments.firstIndex(of: "--usage"),
-           CommandLine.arguments.count > idx + 1 {
-            let url = URL(fileURLWithPath: CommandLine.arguments[idx + 1])
-            do {
-                usage = try JSONDecoder().decode(Usage.self, from: Data(contentsOf: url))
-            } catch {
-                fputs("Tokei --usage: \(error)\n", stderr)
-            }
-        } else {
+        var usage = usageArgument()
+        if !CommandLine.arguments.contains("--usage") {
             let sem = DispatchSemaphore(value: 0)
             DispatchQueue.global().async { usage = DataLoader.loadSync(); sem.signal() }
             sem.wait()
         }
         MainActor.assumeIsolated {
+            VisualEffect.isOffscreen = true
             let store = Store()
             store.usage = usage
             store.lastUpdated = L("预览")

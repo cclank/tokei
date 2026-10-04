@@ -10,7 +10,7 @@ struct PanelView: View {
     @State private var claudeModelsOpen = false
     @State private var codexModelsOpen = false
     @State private var codexReserveModelsOpen = false
-    @State private var codexResetCardsOpen = false
+    @State private var codexResetCardsOpen = PanelView.expandCodexResetCardsForShot
     @State private var geminiModelsOpen = false
     @State private var cursorModelsOpen = false
     @State private var zaiModelsOpen = false
@@ -41,6 +41,8 @@ struct PanelView: View {
     static var initialMode: PanelMode = .cards
     /// 离屏截图（--expand-models）时把按模型列表全部展开，方便检查明细行。
     static var expandModelsForShot = false
+    /// 离屏截图（--expand-codex-reset-cards）时展开重置卡到期列表。
+    static var expandCodexResetCardsForShot = false
     @State private var mode: PanelMode = PanelView.initialMode
     @State private var trailProjects: [TrailProject]?
     enum PanelMode: String { case cards, quotaHistory, dashboard, projects, settings }

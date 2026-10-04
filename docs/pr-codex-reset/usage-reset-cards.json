@@ -1,0 +1,454 @@
+{
+  "claude": {
+    "ranges": {
+      "today": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "yesterday": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    },
+    "session_name": "demo",
+    "session_total": 0
+  },
+  "codex": {
+    "ranges": {
+      "today": {
+        "hit": 20,
+        "in": 100,
+        "cached": 50,
+        "out": 200,
+        "reason": 10,
+        "cost": 0.5,
+        "sessions": 1,
+        "models": []
+      },
+      "yesterday": {
+        "hit": 0,
+        "in": 0,
+        "cached": 0,
+        "out": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "hit": 0,
+        "in": 0,
+        "cached": 0,
+        "out": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "hit": 0,
+        "in": 0,
+        "cached": 0,
+        "out": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "hit": 0,
+        "in": 0,
+        "cached": 0,
+        "out": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "hit": 0,
+        "in": 0,
+        "cached": 0,
+        "out": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    },
+    "p5": 72.5,
+    "pw": 48.0,
+    "r5": 1791114641,
+    "rw": 1791442241,
+    "plan": "Plus",
+    "reset_cards": {
+      "count": 2,
+      "expires": [
+        1791375641,
+        1791881441
+      ],
+      "updated": 1791096641
+    }
+  },
+  "gemini": {
+    "ranges": {
+      "today": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "yesterday": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cached": 0,
+        "thoughts": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    }
+  },
+  "grok": {
+    "ranges": {
+      "today": {
+        "tokens": 0,
+        "sessions": 0
+      },
+      "yesterday": {
+        "tokens": 0
+      },
+      "week": {
+        "tokens": 0
+      },
+      "last_week": {
+        "tokens": 0
+      },
+      "month": {
+        "tokens": 0
+      },
+      "year": {
+        "tokens": 0
+      }
+    }
+  },
+  "hermes": {
+    "ranges": {
+      "today": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "yesterday": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    }
+  },
+  "openclaw": {
+    "ranges": {
+      "today": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "yesterday": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "tasks": 0,
+        "completed": 0,
+        "failed": 0,
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    }
+  },
+  "opencode": {
+    "ranges": {
+      "today": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "yesterday": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "last_week": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "month": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      },
+      "year": {
+        "hit": 0,
+        "in": 0,
+        "out": 0,
+        "cr": 0,
+        "cw": 0,
+        "reason": 0,
+        "cost": 0,
+        "sessions": 0,
+        "models": []
+      }
+    }
+  }
+}

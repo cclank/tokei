@@ -245,25 +245,31 @@ struct QuotaHistoryProjection {
                 previous[window] = (remaining, point.timestamp)
             }
         }
-        return days.flatMap { window, byDay in
+        var results: [QuotaDailyConsumption] = []
+        for (window, byDay) in days {
             let oldest = byDay.keys.min()
-            return byDay.map { start, day in
+            for (start, day) in byDay {
                 let missingHistory = start == oldest
                     && TimeInterval(day.first) - start.timeIntervalSince1970 > edgeTolerance
-                return QuotaDailyConsumption(
+                let isComplete = !day.uncertain && !missingHistory
+                results.append(QuotaDailyConsumption(
                     dayStart: start,
                     window: window,
                     consumed: day.consumed,
                     refills: day.refills,
-                    isComplete: !day.uncertain && !missingHistory
-                )
+                    isComplete: isComplete
+                ))
             }
-        }.sorted {
-            $0.dayStart == $1.dayStart
-                ? (tool.windowNames.firstIndex(of: $0.window) ?? 0)
-                    < (tool.windowNames.firstIndex(of: $1.window) ?? 0)
-                : $0.dayStart > $1.dayStart
         }
+        results.sort { lhs, rhs in
+            if lhs.dayStart == rhs.dayStart {
+                let left = tool.windowNames.firstIndex(of: lhs.window) ?? 0
+                let right = tool.windowNames.firstIndex(of: rhs.window) ?? 0
+                return left < right
+            }
+            return lhs.dayStart > rhs.dayStart
+        }
+        return results
     }
 
     func nearestHoverSample(to date: Date) -> QuotaHoverSample? {

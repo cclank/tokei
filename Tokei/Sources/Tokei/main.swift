@@ -738,6 +738,10 @@ if CommandLine.arguments.contains("--expand-models") {
     PanelView.expandModelsForShot = true
 }
 
+if CommandLine.arguments.contains("--expand-codex-reset-cards") {
+    PanelView.expandCodexResetCardsForShot = true
+}
+
 if let idx = CommandLine.arguments.firstIndex(of: "--shot") {
     let out = CommandLine.arguments.count > idx + 1
         ? CommandLine.arguments[idx + 1] : "/tmp/tokei_shot.png"

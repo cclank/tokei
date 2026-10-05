@@ -812,7 +812,10 @@ def nice_model(m: str) -> str:
         parts = [part for part in re.split(r"[-\s]+", rest) if part]
         return " ".join(["MiniMax"] + [part[:1].upper() + part[1:] for part in parts])
     # 日志里有「Hy4 preview」这种空格写法，和 hy4-preview 一样去掉后缀，同一个模型只有一个名字
-    name = re.sub(r"[-: ](free|preview|latest)$", "", m.split("/")[-1], flags=re.I).replace("-", " ")
+    # 先转小写再美化:同一个模型在不同会话里可能记成 zcode/GLM-5.3-Flash 或
+    # wegent/glm-5.3-flash，大小写不该把它们分成两行。
+    name = re.sub(r"[-: ](free|preview|latest)$", "", m.split("/")[-1], flags=re.I)
+    name = name.lower().replace("-", " ")
     return " ".join(w[:1].upper() + w[1:] if w[:1].isalpha() else w
                     for w in name.split())
 
@@ -1880,8 +1883,10 @@ def _format_token_models(models, include_prices=True, price_model=None):
     # sorting, preserving accumulated costs rather than repricing usage.
     # price_model：该工具算成本时实际用的查价规则。给了就按它展示单价，
     # 这样没有公开价、按别的模型估算的行也能看到是按什么价算的（pref）。
+    # 先按 slug 形态归并：同一个模型在不同会话/不同 agent 里可能记成
+    # wegent/glm-5.3-flash 或 zcode/GLM-5.3-Flash，那是同一行而不是两行。
     canonical_models = {}
-    for model, usage in models.items():
+    for model, usage in _merge_model_identities(models).items():
         model_id = _model_identity_id(model)
         merged = canonical_models.setdefault(model_id, {})
         for field in ("in", "out", "cr", "cw", "reason", "cost", "cost_cny", "credits"):
@@ -9611,6 +9616,99 @@ def _pi_model_id(msg):
     return model or provider or "unknown"
 
 
+def _pi_served_model(msg):
+    """真正作答的模型名。
+
+    经网关(如 magpie)时 message.model 是「请求的」(可能是 group/<id>,根本不是模型),
+    message.responseModel 才是回包里那个成员。缺失时返回 "",由调用方回退到请求名。
+    裸名补上 provider 前缀,好让它与带前缀的写法归并到一起。
+    """
+    served = (msg.get("responseModel") or "").strip()
+    if not served:
+        return ""
+    provider = (msg.get("provider") or "").strip()
+    if provider and "/" not in served and not served.startswith("group/"):
+        return f"{provider}/{served}"
+    return served
+
+
+def _has_model_provider(model):
+    """模型名是否带 provider 前缀(且不是 group/<id> 这种分组)。"""
+    s = (model or "").strip()
+    return "/" in s and not s.startswith("group/")
+
+
+# 厂商在回包里用这些值表示「我自己挑了一个」，它没有点出具体是哪个模型。
+# 拿它当模型名会把原来还认得出型号的行整个吞掉，所以遇到就无视。
+_MODEL_PLACEHOLDERS = {"auto", "default", "unknown", "none"}
+
+
+def _model_merge_key(model):
+    """同一模型的归并键:只吸收 slug 形态差异 —— provider 前缀有无、大小写、"." 与 "-"。
+
+    不吸收版本日期(claude-opus-4-7-20260101 与 claude-opus-4-7 是两条),
+    group/<id> 是分组而非模型,原样保留、不参与归并。
+    """
+    s = (model or "").strip().lower()
+    if not s or s == "unknown" or s.startswith("group/"):
+        return s
+    return s.rsplit("/", 1)[-1].replace(".", "-")
+
+
+def _names_model(model):
+    """这个名字是否点出了一个具体模型。
+
+    group/<id> 是分组、auto 之类是厂商「我自己挑了一个」的占位说法，
+    两者都说不出是哪个模型，不能拿来当归因身份。
+    """
+    s = (model or "").strip()
+    if not s or s.startswith("group/"):
+        return False
+    return s.rsplit("/", 1)[-1].lower() not in _MODEL_PLACEHOLDERS
+
+
+def _served_identity(served, requested):
+    """按「真实名优先、请求名兜底」定身份;两者都取不到时返回 unknown。"""
+    served = (served or "").strip()
+    if _names_model(served):
+        return served
+    return (requested or "").strip() or "unknown"
+
+
+def _merge_model_identities(models):
+    """把同一模型的「裸名」与「带 provider 名」合成一条(见 _model_merge_key)。
+
+    保留信息更全的 id 作展示与查价用(带 provider 的优先),用量累加。
+    """
+    merged = {}
+    order = []
+    for model, usage in models.items():
+        key = _model_merge_key(model)
+        current = merged.get(key)
+        if current is None:
+            merged[key] = [model, dict(usage)]
+            order.append(key)
+            continue
+        if _has_model_provider(model) and not _has_model_provider(current[0]):
+            current[0] = model
+        for field in usage:
+            current[1][field] = current[1].get(field, 0) + usage.get(field, 0)
+    return {merged[key][0]: merged[key][1] for key in order}
+
+
+def _merge_day_models(days):
+    """对每天已聚合的 models 做一次身份归并(见 _merge_model_identities)。
+
+    用途:让「网关修好之前记下的裸名」与「修好之后记下的 provider/model」
+    落到同一行,历史数据不会被切成两条。
+    """
+    for day in days.values():
+        models = day.get("models")
+        if isinstance(models, dict) and len(models) > 1:
+            day["models"] = _merge_model_identities(models)
+    return days
+
+
 def _pi_usage_int(usage, *fields):
     for field in fields:
         if field in usage and usage[field] is not None:
@@ -9640,7 +9738,7 @@ def _pi_usage_cost(u, model):
 
 # 解析口径版本。1：没有公开价的模型不再按 Opus 兜底价估美元。
 # 2：不带厂商前缀的模型名按名字到价目表里查价。3：没有的沿用上一个版本的价。
-_PI_PARSER_VERSION = 3
+_PI_PARSER_VERSION = 4
 
 
 def scan_pi(bounds, cache):
@@ -9703,7 +9801,9 @@ def scan_pi(bounds, cache):
                         cr = _pi_usage_int(u, "cacheRead", "cache_read")
                         cw = _pi_usage_int(u, "cacheWrite", "cache_write")
                         reason = _pi_usage_int(u, "reasoning", "reason", "reasoningTokens")
-                        model = _pi_model_id(msg)
+                        # 经网关时 message.model 只是「请求的」(可能是分组名),
+                        # responseModel 才是真正作答的成员 —— 归因、成本都该按它算。
+                        model = _served_identity(_pi_served_model(msg), _pi_model_id(msg))
                         cost = _pi_usage_cost(u, model)
                         if inp + out + cr + cw + reason == 0 and cost <= 0:
                             continue
@@ -9713,6 +9813,7 @@ def scan_pi(bounds, cache):
                         day["hours"][dt.astimezone().hour] += inp + out + cr + cw + reason
             except OSError:
                 continue
+            days = _merge_day_models(days)
             fc[f] = {"sig": sig, "parser": _PI_PARSER_VERSION,
                      "days": days, "proj": proj, "sid": sid}
             changed = True
@@ -10415,7 +10516,26 @@ def scan_grok_bot(bounds, cache):
 # ---------- DeepSeek Harness ----------
 # Harness 会为同一次调用写 usage chunk 和最终 message。按 session/turn/step
 # 只保留最终 message；异常中断时再用 usage chunk 兜底。
-_DEEPSEEK_HARNESS_COST_VERSION = 5
+_DEEPSEEK_HARNESS_COST_VERSION = 6
+
+
+def _deepseek_harness_served_model(source):
+    """真正作答的模型名:replayState.response.responseModel。
+
+    dsh 的 source.model 是「请求的」(经网关时可能是 group/<id>),真实成员记在
+    replayState 里 —— 这是 dsh 自己的 replay 元数据,与 pi 的 message.responseModel 同义。
+    取不到时返回 ""。
+    """
+    if not isinstance(source, dict):
+        return ""
+    replay = source.get("replayState") or source.get("replay_state")
+    if not isinstance(replay, dict):
+        return ""
+    response = replay.get("response")
+    if not isinstance(response, dict):
+        return ""
+    served = response.get("responseModel") or response.get("response_model")
+    return served.strip() if isinstance(served, str) else ""
 
 
 def _deepseek_harness_usage_record(item, fallback_model="", fallback_provider="deepseek-official"):
@@ -10437,6 +10557,11 @@ def _deepseek_harness_usage_record(item, fallback_model="", fallback_provider="d
         if isinstance(source, dict):
             model = source.get("model") or model
             provider = source.get("provider") or provider
+            # 经网关(如 magpie)时 source.model 是「请求的」(可能是 group/<id>),
+            # 真正作答的成员记在 replayState.response.responseModel —— 归因按它算。
+            served = _deepseek_harness_served_model(source)
+            if _names_model(served):
+                model = served
         priority = 2
     elif event_type == "assistant/chunk":
         chunk = data.get("chunk") or {}
@@ -10596,6 +10721,7 @@ def scan_deepseek_harness(bounds, cache):
             day_projects.setdefault(record["date"], set()).add(project_name)
     for day_key, names in day_projects.items():
         days[day_key]["projects"] = sorted(names)[:3]
+    _merge_day_models(days)
     for day in days.values():
         day["_cost_version"] = _DEEPSEEK_HARNESS_COST_VERSION
     for source in ledger_sources.values():

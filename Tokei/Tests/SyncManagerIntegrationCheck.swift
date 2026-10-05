@@ -54,6 +54,10 @@ private enum SyncManagerIntegrationCheck {
             }
         }
         try testQwenWorkAbsoluteQuotaDecoding()
+        try testPeerClaudeQuotaAdoptionAndPrecedence()
+        try testPeerClaudeQuotaFreshnessIsRecomputedAtMergeTime()
+        try testPeerClaudeQuotaIsReplacedAsOneGroup()
+        try testPeerClaudeQuotaTieBreakAndMultiplePeers()
         try testForeignRebaseStopsBeforeSnapshotOrCommit()
         try testDetachedHeadStopsBeforeSnapshot()
         try testSecondTransactionCannotEnterLockedRepository()
@@ -70,7 +74,7 @@ private enum SyncManagerIntegrationCheck {
         try testSaveConfigRejectsDeviceIdentityChangeInIsolatedHome()
         try testInheritedGitDirectoryCannotRedirectSync()
         try testPeerLoaderReportsBadFilesIndependently()
-        print("SyncManager integration checks passed: 17")
+        print("SyncManager integration checks passed: 21")
     }
 
     private static func testQwenWorkAbsoluteQuotaDecoding() throws {
@@ -102,6 +106,212 @@ private enum SyncManagerIntegrationCheck {
         try expect(quota.segments.count == 1 && quota.segments[0].total == 0
                        && quota.segments[0].percentage_used == nil,
                    "QwenWork total=0 absolute-balance contract changed")
+    }
+
+    // MARK: - Peer Claude quota
+    //
+    // 这几条检查先按"会怎么坏"来写：
+    //   本机没有额度却没采用 peer 的；peer 更旧却盖掉了本机更新的；peer 更新却没采用；
+    //   peer 无额度却把本机的额度清成空；沿用 peer 快照写入时算好的过期标记；
+    //   reset 时刻已过却没标过期；两个来源的字段混在一起；多个 peer 的结果依赖顺序；
+    //   采用额度的同时把 token 合并弄丢。
+
+    private static let quotaNow = Date(timeIntervalSince1970: 1_800_000_000)
+    private static var quotaNowSeconds: Int { Int(quotaNow.timeIntervalSince1970) }
+
+    private static func testPeerClaudeQuotaAdoptionAndPrecedence() throws {
+        let fresh = quotaNowSeconds - 60
+        let local = try usage(input: 100) { _ in }
+        let peerUsage = try usage(input: 50) {
+            $0.q5 = 40; $0.q5_reset = quotaNowSeconds + 3600
+            $0.q7 = 60; $0.q7_reset = quotaNowSeconds + 86400
+            $0.qf = 20; $0.qf_reset = quotaNowSeconds + 86400
+            $0.q_updated = fresh
+        }
+
+        // 本机没有额度：采用 peer 的；token 照常相加。
+        let adopted = SyncManager.merge(local: local, peers: [peer("cloud", peerUsage)], now: quotaNow)
+        try expect(adopted.claude.q5 == 40 && adopted.claude.q7 == 60 && adopted.claude.qf == 20,
+                   "local without quota did not adopt the peer quota")
+        try expect(adopted.claude.q_updated == fresh, "adopted quota lost its q_updated")
+        try expect(adopted.claude.q5_stale == false && adopted.claude.q7_stale == false
+                       && adopted.claude.qf_stale == false,
+                   "fresh peer quota was flagged stale")
+        try expect(adopted.claude.ranges.today.in == 150,
+                   "adopting the quota broke token merging: \(adopted.claude.ranges.today.in)")
+
+        // peer 没有任何额度：不采用，也不能把本机的清空。
+        let localWithQuota = try usage { $0.q5 = 10; $0.q7 = 20; $0.q_updated = fresh }
+        let noQuotaPeer = try usage { $0.q_updated = fresh + 100 } // 更新，但三个额度都没有值
+        let kept = SyncManager.merge(local: localWithQuota, peers: [peer("cloud", noQuotaPeer)], now: quotaNow)
+        try expect(kept.claude.q5 == 10 && kept.claude.q7 == 20 && kept.claude.q_updated == fresh,
+                   "peer without quota overwrote the local quota")
+
+        // peer 更新：采用。
+        let olderLocal = try usage { $0.q5 = 10; $0.q7 = 20; $0.q_updated = fresh - 600 }
+        let newerPeer = SyncManager.merge(local: olderLocal, peers: [peer("cloud", peerUsage)], now: quotaNow)
+        try expect(newerPeer.claude.q5 == 40 && newerPeer.claude.q_updated == fresh,
+                   "newer peer quota was not adopted")
+
+        // peer 更旧：不采用。
+        let newerLocal = try usage { $0.q5 = 10; $0.q7 = 20; $0.q_updated = fresh + 30 }
+        let olderPeer = SyncManager.merge(local: newerLocal, peers: [peer("cloud", peerUsage)], now: quotaNow)
+        try expect(olderPeer.claude.q5 == 10 && olderPeer.claude.q7 == 20
+                       && olderPeer.claude.q_updated == fresh + 30,
+                   "older peer quota replaced the newer local quota")
+    }
+
+    private static func testPeerClaudeQuotaFreshnessIsRecomputedAtMergeTime() throws {
+        let local = try usage { _ in }
+
+        // 快照写入时标的是"没过期"，但已经是 31 分钟前的数据：合并时按现在重算成过期。
+        let aged = try usage {
+            $0.q5 = 40; $0.q5_reset = quotaNowSeconds + 3600; $0.q5_stale = false
+            $0.q7 = 60; $0.q7_reset = quotaNowSeconds + 86400; $0.q7_stale = false
+            $0.qf = nil; $0.qf_stale = false
+            $0.q_updated = quotaNowSeconds - 31 * 60
+        }
+        let old = SyncManager.merge(local: local, peers: [peer("cloud", aged)], now: quotaNow)
+        try expect(old.claude.q5 == 40, "stale peer quota was not adopted when local had none")
+        try expect(old.claude.q5_stale == true && old.claude.q7_stale == true,
+                   "peer quota older than 30 minutes was not flagged stale")
+        try expect(old.claude.qf_stale == false, "a window without a value was flagged stale")
+
+        // 29 分钟前：还算新。
+        let almost = try usage {
+            $0.q5 = 40; $0.q5_reset = quotaNowSeconds + 3600
+            $0.q_updated = quotaNowSeconds - 29 * 60
+        }
+        let notYet = SyncManager.merge(local: local, peers: [peer("cloud", almost)], now: quotaNow)
+        try expect(notYet.claude.q5_stale == false, "29-minute-old peer quota was flagged stale")
+
+        // 快照里标了"过期"，现在看其实在 TTL 内：以现在为准，不沿用旧标记。
+        let mislabeled = try usage {
+            $0.q5 = 40; $0.q5_reset = quotaNowSeconds + 3600; $0.q5_stale = true
+            $0.q_updated = quotaNowSeconds - 60
+        }
+        let relabeled = SyncManager.merge(local: local, peers: [peer("cloud", mislabeled)], now: quotaNow)
+        try expect(relabeled.claude.q5_stale == false, "the peer's own stale flag was carried over")
+
+        // 数据是新的，但 5 小时窗口的 reset 时刻已过：只有这个窗口过期。
+        let resetPassed = try usage {
+            $0.q5 = 90; $0.q5_reset = quotaNowSeconds - 1
+            $0.q7 = 60; $0.q7_reset = quotaNowSeconds + 86400
+            $0.q_updated = quotaNowSeconds - 60
+        }
+        let reset = SyncManager.merge(local: local, peers: [peer("cloud", resetPassed)], now: quotaNow)
+        try expect(reset.claude.q5_stale == true, "q5 with a passed reset time was not flagged stale")
+        try expect(reset.claude.q7_stale == false, "q7 was flagged stale by q5's reset time")
+
+        // 没有 q_updated 的 peer 额度当作过期（和 Python 端一致）。
+        let undated = try usage { $0.q5 = 40; $0.q5_reset = quotaNowSeconds + 3600 }
+        let undatedMerged = SyncManager.merge(local: local, peers: [peer("cloud", undated)], now: quotaNow)
+        try expect(undatedMerged.claude.q5_stale == true, "peer quota without q_updated was not flagged stale")
+    }
+
+    private static func testPeerClaudeQuotaIsReplacedAsOneGroup() throws {
+        let fresh = quotaNowSeconds - 60
+        // 本机：q5/q7/qf 都有，更旧。peer：只有 q7，更新。
+        let local = try usage {
+            $0.q5 = 11; $0.q5_reset = quotaNowSeconds + 111; $0.q5_stale = false
+            $0.q7 = 22; $0.q7_reset = quotaNowSeconds + 222; $0.q7_stale = false
+            $0.qf = 33; $0.qf_reset = quotaNowSeconds + 333; $0.qf_stale = false
+            $0.q_updated = fresh - 300
+        }
+        let peerUsage = try usage {
+            $0.q7 = 77; $0.q7_reset = quotaNowSeconds + 7777
+            $0.q_updated = fresh
+        }
+        let merged = SyncManager.merge(local: local, peers: [peer("cloud", peerUsage)], now: quotaNow)
+        let c = merged.claude
+        try expect(c.q7 == 77 && c.q7_reset == quotaNowSeconds + 7777 && c.q_updated == fresh,
+                   "peer quota group was not adopted")
+        try expect(c.q5 == nil && c.q5_reset == nil && c.qf == nil && c.qf_reset == nil,
+                   "local-only q5/qf fields were mixed into the adopted peer group: "
+                       + "q5=\(String(describing: c.q5)) qf=\(String(describing: c.qf))")
+        try expect(c.q5_stale == false && c.qf_stale == false,
+                   "adopted group kept stale flags for windows it no longer has")
+    }
+
+    private static func testPeerClaudeQuotaTieBreakAndMultiplePeers() throws {
+        let t = quotaNowSeconds - 60
+
+        // q_updated 相同：本机已过期（reset 已过）、peer 没过期，才采用 peer。
+        let staleLocal = try usage {
+            $0.q5 = 10; $0.q5_reset = quotaNowSeconds - 10; $0.q5_stale = true; $0.q_updated = t
+        }
+        let freshPeer = try usage {
+            $0.q5 = 55; $0.q5_reset = quotaNowSeconds + 3600; $0.q_updated = t
+        }
+        let swapped = SyncManager.merge(local: staleLocal, peers: [peer("cloud", freshPeer)], now: quotaNow)
+        try expect(swapped.claude.q5 == 55, "tie with a stale local quota did not adopt the fresh peer")
+
+        // q_updated 相同：本机没过期，不换。
+        let freshLocal = try usage {
+            $0.q5 = 10; $0.q5_reset = quotaNowSeconds + 3600; $0.q5_stale = false; $0.q_updated = t
+        }
+        let kept = SyncManager.merge(local: freshLocal, peers: [peer("cloud", freshPeer)], now: quotaNow)
+        try expect(kept.claude.q5 == 10, "tie with a fresh local quota was replaced by the peer")
+
+        // q_updated 相同：peer 自己已过期（reset 已过），也不换。
+        let stalePeer = try usage {
+            $0.q5 = 99; $0.q5_reset = quotaNowSeconds - 10; $0.q_updated = t
+        }
+        let keptAgain = SyncManager.merge(local: staleLocal, peers: [peer("cloud", stalePeer)], now: quotaNow)
+        try expect(keptAgain.claude.q5 == 10, "tie with a stale peer replaced the local quota")
+
+        // 多个 peer：谁最新用谁，和顺序无关。
+        let oldest = try usage { $0.q5 = 1; $0.q_updated = t - 200 }
+        let newest = try usage { $0.q5 = 2; $0.q_updated = t }
+        let middle = try usage { $0.q5 = 3; $0.q_updated = t - 100 }
+        let none = try usage { _ in }
+        let forward = SyncManager.merge(local: none, peers: [peer("a", oldest), peer("b", newest), peer("c", middle)],
+                                        now: quotaNow)
+        let backward = SyncManager.merge(local: none, peers: [peer("c", middle), peer("b", newest), peer("a", oldest)],
+                                         now: quotaNow)
+        try expect(forward.claude.q5 == 2 && backward.claude.q5 == 2,
+                   "multiple peers did not resolve to the newest quota: "
+                       + "\(String(describing: forward.claude.q5)) / \(String(describing: backward.claude.q5))")
+    }
+
+    private static func peer(_ id: String, _ usage: Usage) -> PeerDevice {
+        let bounds = SyncManager.currentRangeBounds(now: quotaNow)
+            .reduce(into: [String: RangeBoundary]()) { out, item in out[item.key.rawValue] = item.value }
+        return PeerDevice(deviceId: id, lastSync: quotaNow, usage: usage, dashboard: nil, rangeBounds: bounds)
+    }
+
+    private static func usage(input: Int = 0, claude edit: (inout ClaudeStat) -> Void) throws -> Usage {
+        var value = try JSONDecoder().decode(Usage.self, from: Data(usageFixtureJSON(claudeInput: input).utf8))
+        edit(&value.claude)
+        return value
+    }
+
+    /// 只含 Usage 必填的 7 个工具，所有区间为零；Claude 的 today.in 可调，用来确认 token 仍在合并。
+    private static func usageFixtureJSON(claudeInput: Int) -> String {
+        func ranges(_ zero: String, today: String? = nil) -> String {
+            let keys = ["today", "yesterday", "week", "last_week", "month", "year", "all"]
+            let body = keys.map { "\"\($0)\": \($0 == "today" ? (today ?? zero) : zero)" }
+            return "{" + body.joined(separator: ", ") + "}"
+        }
+        let claudeZero = #"{"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0, "sessions": 0, "models": []}"#
+        let claudeToday = #"{"hit": 0, "in": \#(claudeInput), "out": 0, "cr": 0, "cw": 0, "cost": 0, "sessions": 0, "models": []}"#
+        let codexZero = #"{"hit": 0, "in": 0, "cached": 0, "out": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}"#
+        let geminiZero = #"{"hit": 0, "in": 0, "out": 0, "cached": 0, "thoughts": 0, "cost": 0, "sessions": 0, "models": []}"#
+        let grokZero = #"{"tokens": 0, "sessions": 0}"#
+        let hermesZero = #"{"hit": 0, "in": 0, "out": 0, "cr": 0, "cw": 0, "reason": 0, "cost": 0, "sessions": 0, "models": []}"#
+        let openclawZero = #"{"tasks": 0, "completed": 0, "failed": 0, "models": []}"#
+        let tokenZero = hermesZero
+        return """
+        {
+          "claude": {"ranges": \(ranges(claudeZero, today: claudeToday)), "session_name": "", "session_total": 0},
+          "codex": {"ranges": \(ranges(codexZero))},
+          "gemini": {"ranges": \(ranges(geminiZero))},
+          "grok": {"ranges": \(ranges(grokZero))},
+          "hermes": {"ranges": \(ranges(hermesZero))},
+          "openclaw": {"ranges": \(ranges(openclawZero))},
+          "opencode": {"ranges": \(ranges(tokenZero))}
+        }
+        """
     }
 
     private static func testForeignRebaseStopsBeforeSnapshotOrCommit() throws {

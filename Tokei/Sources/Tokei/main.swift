@@ -121,7 +121,6 @@ final class Store: ObservableObject {
             self.lastRefreshDuration = Date().timeIntervalSince(startedAt)
             self.retryCount = 0
             self.loadError = nil
-            self.recordQuotaHistory(local)
             self.localUsage = local
             var allDevices = local
             if self.syncEnabled {
@@ -142,6 +141,7 @@ final class Store: ObservableObject {
                 self.peerLoadIssues = []
             }
             self.allDevicesUsage = allDevices
+            self.recordQuotaHistory(local, claudeQuotaSource: allDevices)
             self.applyDisplayMode(updateStatusTitle: false)
             let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
             self.lastUpdated = L("更新 %@", f.string(from: Date()))
@@ -172,7 +172,9 @@ final class Store: ObservableObject {
         }
     }
 
-    private func recordQuotaHistory(_ usage: Usage) {
+    /// Codex 额度和模型 token 统计只用本机；Claude 额度本机读不到时，由其他设备合并进来，
+    /// 所以三个 Claude 额度取合并后的值（没开同步或没有 peer 时，两者相同）。
+    private func recordQuotaHistory(_ usage: Usage, claudeQuotaSource: Usage) {
         let claudeRange = usage.claude.ranges.get(.today)
         let codexRange = usage.codex.ranges.get(.today)
         let claudeModels = claudeRange.models.reduce(into: [String: Int]()) { totals, model in
@@ -184,12 +186,12 @@ final class Store: ObservableObject {
                 model.in + model.out + model.cr + model.cw
         }
         quotaHistory.record(QuotaCapture(
-            claudeFiveHourRemaining: usage.claude.q5_stale == true
-                ? nil : usage.claude.q5.map { 100 - $0 },
-            claudeWeekRemaining: usage.claude.q7_stale == true
-                ? nil : usage.claude.q7.map { 100 - $0 },
-            claudeFableWeekRemaining: usage.claude.qf_stale == true
-                ? nil : usage.claude.qf.map { 100 - $0 },
+            claudeFiveHourRemaining: claudeQuotaSource.claude.q5_stale == true
+                ? nil : claudeQuotaSource.claude.q5.map { 100 - $0 },
+            claudeWeekRemaining: claudeQuotaSource.claude.q7_stale == true
+                ? nil : claudeQuotaSource.claude.q7.map { 100 - $0 },
+            claudeFableWeekRemaining: claudeQuotaSource.claude.qf_stale == true
+                ? nil : claudeQuotaSource.claude.qf.map { 100 - $0 },
             codexWeekRemaining: usage.codex.pw_stale == true
                 ? nil : usage.codex.pw.map { 100 - $0 },
             claudeModelTotals: claudeModels,

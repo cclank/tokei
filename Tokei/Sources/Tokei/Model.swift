@@ -1089,8 +1089,42 @@ struct DevinStat: Codable {
 /// `quota` 来自用户自愿填写 Token Plan Key 后的联网查询，形状与 Devin 相同。
 typealias MiniMaxStat = DevinStat
 
-/// Usage 是几十 KB 的值类型，编译器展开的解码函数栈帧会超过 GCD 工作线程 512 KB 的栈，
-/// 在后台队列里直接解码会栈溢出崩溃。所有解码统一走这里，放到 16 MB 栈的专用线程上做。
+/// 写时复制的堆上存储。Usage 有三十多个工具字段，全部内联时超过 30 KB：每复制一次、每多一个
+/// 临时值都要在栈上放一整份，编译器展开后的函数栈帧动辄上百 KB，后台线程 512 KB 的栈会被撑爆。
+/// 字段放到堆上后 Usage 只剩一排指针，改哪个字段才复制哪个，值语义不变。
+@propertyWrapper
+struct Boxed<Value> {
+    private final class Storage {
+        var value: Value
+        init(_ value: Value) { self.value = value }
+    }
+    private var storage: Storage
+
+    init(wrappedValue: Value) { storage = Storage(wrappedValue) }
+
+    var wrappedValue: Value {
+        get { storage.value }
+        set {
+            if isKnownUniquelyReferenced(&storage) { storage.value = newValue }
+            else { storage = Storage(newValue) }
+        }
+        _modify {
+            if !isKnownUniquelyReferenced(&storage) { storage = Storage(storage.value) }
+            yield &storage.value
+        }
+    }
+}
+
+extension Boxed: Decodable where Value: Decodable {
+    init(from decoder: Decoder) throws { storage = Storage(try Value(from: decoder)) }
+}
+
+extension Boxed: Encodable where Value: Encodable {
+    func encode(to encoder: Encoder) throws { try storage.value.encode(to: encoder) }
+}
+
+/// 解码时编译器会把三十多个工具的解码全部展开在一个函数里，栈帧仍有上百 KB；
+/// 所有解码统一走这里，放到 16 MB 栈的专用线程上做，不占调用方线程的栈。
 extension Usage {
     static func decode(from data: Data) throws -> Usage {
         final class Box: @unchecked Sendable { var result: Result<Usage, Error>? }
@@ -1108,39 +1142,39 @@ extension Usage {
 }
 
 struct Usage: Codable {
-    var claude: ClaudeStat
-    var codex: CodexStat
-    var gemini: GeminiStat
-    var grok: GrokStat
-    var grokBot: GrokBotStat
-    var qoderwork: QoderStat
-    var qoder: QoderIdeStat
-    var qodercli: QoderStat
+    @Boxed var claude: ClaudeStat
+    @Boxed var codex: CodexStat
+    @Boxed var gemini: GeminiStat
+    @Boxed var grok: GrokStat
+    @Boxed var grokBot: GrokBotStat
+    @Boxed var qoderwork: QoderStat
+    @Boxed var qoder: QoderIdeStat
+    @Boxed var qodercli: QoderStat
     /// Qoder 国内版（~/.qoder-cn），与 Qoder CLI 同格式、单独统计。
-    var qodercliCN: QoderStat
-    var hermes: HermesStat
-    var zcode: TokenUsageStat
-    var mimocode: TokenUsageStat
-    var openclaw: OpenClawStat
-    var pi: TokenUsageStat
-    var prime_agent: TokenUsageStat
-    var workbuddy: TokenUsageStat
-    var workbuddyAI: TokenUsageStat
-    var codebuddy: TokenUsageStat
-    var deepseekHarness: TokenUsageStat
-    var opencode: TokenUsageStat
-    var qwencode: TokenUsageStat
-    var qwenwork: QwenWorkQuota
-    var kimicode: KimiCodeStat
-    var musecode: TokenUsageStat
-    var cmdcode: TokenUsageStat
-    var devin: DevinStat
-    var minimax: MiniMaxStat
-    var antigravity: ProviderQuotaStat
-    var cursor: ProviderQuotaStat
-    var zed: ProviderQuotaStat
-    var sub2api: ProviderQuotaStat
-    var zai: ProviderQuotaStat
+    @Boxed var qodercliCN: QoderStat
+    @Boxed var hermes: HermesStat
+    @Boxed var zcode: TokenUsageStat
+    @Boxed var mimocode: TokenUsageStat
+    @Boxed var openclaw: OpenClawStat
+    @Boxed var pi: TokenUsageStat
+    @Boxed var prime_agent: TokenUsageStat
+    @Boxed var workbuddy: TokenUsageStat
+    @Boxed var workbuddyAI: TokenUsageStat
+    @Boxed var codebuddy: TokenUsageStat
+    @Boxed var deepseekHarness: TokenUsageStat
+    @Boxed var opencode: TokenUsageStat
+    @Boxed var qwencode: TokenUsageStat
+    @Boxed var qwenwork: QwenWorkQuota
+    @Boxed var kimicode: KimiCodeStat
+    @Boxed var musecode: TokenUsageStat
+    @Boxed var cmdcode: TokenUsageStat
+    @Boxed var devin: DevinStat
+    @Boxed var minimax: MiniMaxStat
+    @Boxed var antigravity: ProviderQuotaStat
+    @Boxed var cursor: ProviderQuotaStat
+    @Boxed var zed: ProviderQuotaStat
+    @Boxed var sub2api: ProviderQuotaStat
+    @Boxed var zai: ProviderQuotaStat
 
     enum CodingKeys: String, CodingKey {
         case claude, codex, gemini, grok, grokBot = "grok_bot"

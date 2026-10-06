@@ -1408,6 +1408,36 @@ def _ledger_token_sum(day, tool=None):
     return tok
 
 
+def _ledger_perf_values(left, right, subtract=False):
+    """账本里的 perf：逐模型把 o/g/n 和 TTFT 直方图直接相加（或相减），
+    不走通用的逐键递归——每天每个来源都带一份直方图，递归是账本合并里最贵的一段。"""
+    left = left if isinstance(left, dict) else {}
+    right = right if isinstance(right, dict) else {}
+    sign = -1 if subtract else 1
+    result = {}
+    for model in left.keys() | right.keys():
+        a, b = left.get(model), right.get(model)
+        a = a if isinstance(a, dict) else {}
+        b = b if isinstance(b, dict) else {}
+        stats = {}
+        for field in ("o", "n"):
+            value = int(a.get(field, 0) or 0) + sign * int(b.get(field, 0) or 0)
+            stats[field] = max(value, 0)
+        stats["g"] = max(round(float(a.get("g", 0) or 0) + sign * float(b.get("g", 0) or 0), 3), 0.0)
+        for key in ("th", "t"):
+            hist_a, hist_b = a.get(key), b.get(key)
+            if not hist_a and not hist_b:
+                continue
+            hist = dict(hist_a) if isinstance(hist_a, dict) else {}
+            for bucket, count in (hist_b.items() if isinstance(hist_b, dict) else ()):
+                hist[bucket] = hist.get(bucket, 0) + sign * count
+            hist = {bucket: count for bucket, count in hist.items() if count > 0}
+            if hist:
+                stats[key] = hist
+        result[model] = stats
+    return result
+
+
 def _ledger_values(left, right, subtract=False):
     """Combine JSON day counters, including model/hour details; never sum metadata."""
     result = {}
@@ -1415,7 +1445,9 @@ def _ledger_values(left, right, subtract=False):
         if key == "_sources":
             continue
         a, b = left.get(key), right.get(key)
-        if isinstance(a, dict) or isinstance(b, dict):
+        if key == "perf":
+            result[key] = _ledger_perf_values(a, b, subtract)
+        elif isinstance(a, dict) or isinstance(b, dict):
             result[key] = _ledger_values(a if isinstance(a, dict) else {},
                                          b if isinstance(b, dict) else {}, subtract)
         elif key.startswith("_"):

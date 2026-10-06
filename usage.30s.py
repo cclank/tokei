@@ -1820,6 +1820,98 @@ def _iter_cached_token_days(tool_cache):
             yield day["date"], day
 
 
+# ---------- 输出速度 / 首字延迟 ----------
+# 每个请求一个样本：输出 token、生成秒数、首字延迟（拿得到才有）。按「天 × 模型」累加进
+# day["perf"]，跟着按会话合并和账本一起走——_ledger_values 对嵌套字典逐项相加，正好是对的。
+# 生成秒数：拿得到首字时间就从首字算到输出结束（纯生成），拿不到就从请求开始算（端到端）。
+# 首字延迟存成分桶直方图取中位数，偶尔排队几十秒的请求不会把典型值拉偏。
+_PERF_TTFT_EDGES = (0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0,
+                    6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 120.0)
+_PERF_MIN_OUTPUT = 20       # 输出太少的请求，时间基本都花在网络和排队上，速度没有意义
+_PERF_MAX_TPS = 3000.0      # 比这还快说明时间戳不可信
+_PERF_MAX_SECONDS = 1800.0  # 单个请求超过半小时，多半是中途挂起或时间戳错位
+_PERF_MIN_TTFT_SAMPLES = 5
+
+
+def _perf_add(perf, model, out_tokens, gen_seconds, ttft_seconds=None):
+    try:
+        out = int(out_tokens or 0)
+        gen = float(gen_seconds or 0)
+    except (TypeError, ValueError):
+        return False
+    if out < _PERF_MIN_OUTPUT or not 0.2 < gen <= _PERF_MAX_SECONDS or out / gen > _PERF_MAX_TPS:
+        return False
+    stats = perf.setdefault(model or "unknown", {"o": 0, "g": 0.0, "n": 0})
+    stats["o"] += out
+    stats["g"] = round(stats["g"] + gen, 3)
+    stats["n"] += 1
+    try:
+        ttft = float(ttft_seconds) if ttft_seconds is not None else None
+    except (TypeError, ValueError):
+        ttft = None
+    if ttft is not None and 0 <= ttft <= _PERF_TTFT_EDGES[-1]:
+        import bisect
+        bucket = str(bisect.bisect_right(_PERF_TTFT_EDGES, ttft))
+        hist = stats.setdefault("t", {})
+        hist[bucket] = hist.get(bucket, 0) + 1
+    return True
+
+
+def _perf_merge(dst, src):
+    for model, stats in (src or {}).items():
+        if not isinstance(stats, dict):
+            continue
+        target = dst.setdefault(model, {"o": 0, "g": 0.0, "n": 0})
+        target["o"] += int(stats.get("o", 0) or 0)
+        target["g"] = round(target["g"] + float(stats.get("g", 0) or 0), 3)
+        target["n"] += int(stats.get("n", 0) or 0)
+        for bucket, count in (stats.get("t") or {}).items():
+            hist = target.setdefault("t", {})
+            hist[bucket] = hist.get(bucket, 0) + count
+    return dst
+
+
+def _perf_ttft_median(hist):
+    total = sum(int(count or 0) for count in (hist or {}).values())
+    if not total:
+        return None
+    half, seen = total / 2, 0
+    for bucket in sorted(hist, key=int):
+        count = int(hist[bucket] or 0)
+        index = int(bucket)
+        low = _PERF_TTFT_EDGES[index - 1] if index > 0 else 0.0
+        high = _PERF_TTFT_EDGES[min(index, len(_PERF_TTFT_EDGES) - 1)]
+        if count and seen + count >= half:
+            return round(low + (high - low) * ((half - seen) / count), 2)
+        seen += count
+    return None
+
+
+def _perf_summary(perf, name=None):
+    """{"tps", "ttft", "n", "models": {显示名: {...}}}；没有样本时为 None。"""
+    name = name or nice_model
+    total, by_name = {}, {}
+    for model, stats in (perf or {}).items():
+        _perf_merge(total, {"*": stats})
+        _perf_merge(by_name, {name(model): stats})
+
+    def one(stats):
+        if not stats or not stats.get("g"):
+            return None
+        hist = stats.get("t") or {}
+        # 首字样本太少时中位数不稳，宁可不显示
+        ttft = (_perf_ttft_median(hist) if sum(hist.values()) >= _PERF_MIN_TTFT_SAMPLES
+                else None)
+        return {"tps": round(stats["o"] / stats["g"], 1), "ttft": ttft, "n": stats["n"]}
+
+    overall = one(total.get("*"))
+    if not overall:
+        return None
+    overall["models"] = {model: value for model, value in
+                         ((model, one(stats)) for model, stats in by_name.items()) if value}
+    return overall
+
+
 def _add_model_usage(models, model, inp=0, out=0, cr=0, cw=0, reason=0,
                      cost=0.0, credits=0.0, cost_cny=0.0):
     if not model:
@@ -2010,6 +2102,64 @@ def _dedupe_claude_events(file_events):
     return selected
 
 
+# 1：每个请求附上计时（生成秒数、首字延迟），升级后整份重扫一次补上历史。
+_CLAUDE_PERF_VERSION = 1
+# 顶层的 uuid 和 timestamp 紧挨着，正文里的引号都是转义过的，所以这个模式只会命中顶层字段。
+# 用它取用户消息、工具结果这些行的写入时间，不必整行解析大段的工具输出。
+_CLAUDE_LINE_TIME = re.compile(r'"uuid"\s*:\s*"([0-9a-f-]{36})"\s*,\s*"timestamp"\s*:\s*"([^"]+)"')
+
+
+def _claude_note_time(when, line):
+    match = _CLAUDE_LINE_TIME.search(line)
+    if match:
+        dt = parse_ts(match.group(2))
+        if dt:
+            when[match.group(1)] = dt.timestamp()
+
+
+def _claude_attach_perf(events, when):
+    """给同一个请求的每条事件附上计时 [生成秒数, 首字延迟]。
+
+    请求从触发它的那条消息（第一段输出的 parentUuid：用户提问或上一个工具结果）写入时开始，
+    到最后一段输出写入时结束。新版 Claude Code 的思考段带 thinkingDurationMs：思考段写入时刻
+    减去它就是第一个 token 到达的时刻——有它就算纯生成速度和首字延迟，没有就只能算端到端。
+    """
+    by_request = {}
+    for event in events:
+        key = event.get("request_id") or event.get("mid")
+        if key:
+            by_request.setdefault(key, []).append(event)
+    for group in by_request.values():
+        times = []
+        for event in group:
+            dt = parse_ts(event.get("timestamp", ""))
+            times.append(dt.timestamp() if dt else None)
+        known = [t for t in times if t is not None]
+        if not known:
+            continue
+        end = max(known)
+        first = None
+        for event, at in zip(group, times):
+            if event.get("think_ms") and at is not None:
+                first = at - float(event["think_ms"]) / 1000
+                break
+        start = when.get(group[0].get("parent"))
+        gen = ttft = None
+        if first is not None and end > first:
+            gen = end - first
+            if start is not None and first >= start:
+                ttft = first - start
+        elif start is not None and end > start:
+            gen = end - start
+        if gen:
+            timing = [round(gen, 3), round(ttft, 3) if ttft is not None else None]
+            for event in group:
+                event["perf"] = timing
+    for event in events:
+        event.pop("parent", None)
+        event.pop("think_ms", None)
+
+
 def scan_claude(bounds, cache):
     fc = cache.setdefault("claude", {})
     changed = False
@@ -2047,17 +2197,23 @@ def scan_claude(bounds, cache):
             cur_file = f
         sig = f"{mtime}:{size}"
         entry = fc.get(f)
-        if not entry or entry.get("sig") != sig:
+        if (not entry or entry.get("sig") != sig
+                or entry.get("perf_v") != _CLAUDE_PERF_VERSION):
             events = []
             proj = None
+            when = {}   # 消息 uuid → 写入时刻，找请求的触发时间用
             try:
                 with open(f, "r", encoding="utf-8", errors="ignore") as fh:
                     for line_number, line in enumerate(fh, 1):
                         if '"usage"' not in line:
+                            _claude_note_time(when, line)
                             continue
                         u = _claude_usage(line, want_dt=True)
                         if not u:
+                            _claude_note_time(when, line)
                             continue
+                        if u.get("event_id"):
+                            when[u["event_id"]] = u["dt"].timestamp()
                         events.append({
                             "in": u["in"], "out": u["out"], "cr": u["cr"], "cw": u["cw"],
                             "cw5": u.get("cw5"), "cw1": u.get("cw1"),
@@ -2066,13 +2222,15 @@ def scan_claude(bounds, cache):
                             "request_id": u.get("request_id"), "event_id": u.get("event_id"),
                             "sidechain": bool(u.get("sidechain")), "timestamp": u["dt"].isoformat(),
                             "line": line_number,
+                            "parent": u.get("parent"), "think_ms": u.get("think_ms"),
                         })
                         if proj is None and u.get("cwd"):
                             proj = u["cwd"]
             except OSError:
                 continue
+            _claude_attach_perf(events, when)
             events = [event for _, event in _dedupe_claude_events((f, item) for item in events)]
-            fc[f] = {"sig": sig, "events": events, "proj": proj}
+            fc[f] = {"sig": sig, "events": events, "proj": proj, "perf_v": _CLAUDE_PERF_VERSION}
             changed = True
 
     for p in stale:
@@ -2110,6 +2268,10 @@ def scan_claude(bounds, cache):
         model_usage["in"] += event["in"]; model_usage["out"] += event["out"]
         model_usage["cr"] += event["cr"]; model_usage["cw"] += event["cw"]
         model_usage["cost"] += event["cost"]
+        timing = event.get("perf")
+        if timing:
+            _perf_add(day.setdefault("perf", {}), model, event["out"], timing[0],
+                      timing[1] if len(timing) > 1 else None)
         amount = _claude_event_total(event)
         aggregate["hours"][dt.hour] += amount
         aggregate["day_hours"].setdefault(day_key, [0] * 24)[dt.hour] += amount
@@ -2156,6 +2318,8 @@ def scan_claude(bounds, cache):
                 mm = agg["models"].setdefault(mn, {"in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
                 mm["in"] += mv["in"]; mm["out"] += mv["out"]
                 mm["cr"] += mv["cr"]; mm["cw"] += mv["cw"]; mm["cost"] += mv["cost"]
+            if day.get("perf"):
+                _perf_merge(agg.setdefault("perf", {}), day["perf"])
             # 会话数只能来自现存日志(被清日志无从归属)
             try:
                 d = date.fromisoformat(dk)
@@ -2184,6 +2348,8 @@ def scan_claude(bounds, cache):
                 mm["in"] += mv.get("in", 0); mm["out"] += mv.get("out", 0)
                 mm["cr"] += mv.get("cr", 0); mm["cw"] += mv.get("cw", 0)
                 mm["cost"] += mv.get("cost", 0.0)
+            if day.get("perf"):
+                _perf_merge(b.setdefault("perf", {}), day["perf"])
 
     # Current session: sum all days of the most recently modified file
     cur_in = cur_out = cur_cr = cur_cw = 0
@@ -2229,7 +2395,8 @@ def _claude_usage(line, want_dt=False):
     res = {"in": inp, "out": out, "cr": cr, "cw": cw, "cw5": w5, "cw1": w1,
            "model": msg.get("model"), "cwd": o.get("cwd"), "mid": msg.get("id"),
            "request_id": o.get("requestId") or o.get("request_id"),
-           "event_id": o.get("uuid"), "sidechain": o.get("isSidechain") is True}
+           "event_id": o.get("uuid"), "sidechain": o.get("isSidechain") is True,
+           "parent": o.get("parentUuid"), "think_ms": o.get("thinkingDurationMs")}
     res["cost"] = _claude_event_cost(res)
     if want_dt:
         res["dt"] = dt
@@ -3097,6 +3264,9 @@ def _codex_add_event(days, event):
     day["reason"] += lr
     day["cost"] += cost
     _add_model_usage(day["models"], model, max(li - lc, 0), lo, lc, 0, lr, cost)
+    if len(event) > 13 and event[13]:
+        _perf_add(day.setdefault("perf", {}), model, lo, event[13],
+                  event[14] if len(event) > 14 else None)
     try:
         hour = datetime.fromisoformat(event[0]).astimezone().hour
         amount = li + lo
@@ -3124,6 +3294,9 @@ def _codex_split_day(day):
         return main, reserve
 
     model_hours = day.get("model_hours") or {}
+    for model, stats in (day.get("perf") or {}).items():
+        target = reserve if _codex_is_reserve_model(model) else main
+        _perf_merge(target.setdefault("perf", {}), {model: stats})
     for model, usage in models.items():
         target = reserve if _codex_is_reserve_model(model) else main
         li = usage.get("in", 0)
@@ -3548,9 +3721,26 @@ def _codex_probe_record_header(data):
     return timestamp, root_type, payload_type, model
 
 
+# 计时用的两类记录只认行首，不走逐字符的字段探测：每个会话里它们占了大半行数。
+# {"timestamp":"…"(,"ordinal":N),"type":"response_item","payload":{"type":"function_call_output"…
+_CODEX_FAST_HEADER = re.compile(
+    rb'^\{"timestamp":"([^"]+)"(?:,"ordinal":\d+)?,"type":"(\w+)","payload":\{"type":"(\w+)"')
+_CODEX_TRIGGER_TYPES = {
+    (b"response_item", b"function_call_output"), (b"response_item", b"custom_tool_call_output"),
+    (b"event_msg", b"user_message"),
+}
+# 模型开始往外吐字的项。工具执行（CommandExecution、FileChange…）的起止是工具耗时，不算。
+_CODEX_OUTPUT_ITEM = re.compile(rb'"item":\{"type":"(Reasoning|AgentMessage)"')
+_CODEX_ITEM_STARTED = re.compile(rb'"started_at_ms":(\d+)')
+
+
 def _iter_codex_usage_records(path, chunk_size=64 * 1024, header_limit=1024,
                               model_limit=64 * 1024, start_offset=0, end_offset=None):
-    """Yield model changes and token records without buffering unrelated large JSONL lines."""
+    """Yield model changes and token records without buffering unrelated large JSONL lines.
+
+    另外为计时产出两类记录：("trigger", 时间戳)——工具结果或用户消息写入，下一个请求从这里
+    开始；("item", started_at_ms)——模型开始输出思考或回复的时刻。"""
+    item_tail = None
     # Recent permission profiles put payload.model beyond the old 4 KB prefix.
     # Keep model probing bounded so large instructions never require full buffering.
     prefix = bytearray()
@@ -3579,6 +3769,8 @@ def _iter_codex_usage_records(path, chunk_size=64 * 1024, header_limit=1024,
 
                 if kind == "token":
                     candidate.extend(piece)
+                elif kind == "item":
+                    item_tail = (item_tail + bytes(piece))[-200:]
                 elif kind == "model":
                     take = min(len(piece), model_limit - len(prefix))
                     prefix.extend(piece[:take])
@@ -3593,6 +3785,34 @@ def _iter_codex_usage_records(path, chunk_size=64 * 1024, header_limit=1024,
                 elif kind is None and len(prefix) < header_limit:
                     take = min(len(piece), header_limit - len(prefix))
                     prefix.extend(piece[:take])
+                    fast = _CODEX_FAST_HEADER.match(prefix)
+                    if fast and (fast.group(2), fast.group(3)) in _CODEX_TRIGGER_TYPES:
+                        yield "trigger", fast.group(1).decode("ascii", "ignore")
+                        prefix = bytearray()
+                        kind = "ignore"
+                        if newline < 0:
+                            break
+                        prefix = bytearray()
+                        candidate = None
+                        kind = None
+                        start = newline + 1
+                        continue
+                    if (fast and fast.group(3) == b"item_completed"
+                            and _CODEX_OUTPUT_ITEM.search(prefix)):
+                        # started_at_ms 在行尾，只留最后一小段，不缓冲整行思考内容
+                        item_tail = (bytes(prefix) + bytes(piece[take:]))[-200:]
+                        prefix = bytearray()
+                        kind = "item"
+                        if newline < 0:
+                            break
+                        started = _CODEX_ITEM_STARTED.search(item_tail)
+                        if started:
+                            yield "item", int(started.group(1))
+                        item_tail = None
+                        candidate = None
+                        kind = None
+                        start = newline + 1
+                        continue
                     if any(marker in prefix for marker in _CODEX_USAGE_RECORD_MARKERS):
                         timestamp, root_type, payload_type, model = (
                             _codex_probe_record_header(prefix)
@@ -3632,6 +3852,11 @@ def _iter_codex_usage_records(path, chunk_size=64 * 1024, header_limit=1024,
 
                 if candidate is not None:
                     yield "token", bytes(candidate)
+                if kind == "item" and item_tail:
+                    started = _CODEX_ITEM_STARTED.search(item_tail)
+                    if started:
+                        yield "item", int(started.group(1))
+                    item_tail = None
                 prefix = bytearray()
                 candidate = None
                 kind = None
@@ -3835,6 +4060,35 @@ def _codex_canonical_file_cache(file_cache):
     return canonical
 
 
+# 计时是后来加的：旧缓存里的事件没有它。不为此整体重扫 33GB 历史，而是每轮挑最近几天
+# 改动过、还没带计时的会话，从新到旧重解析一小批，几十轮刷新后最近一周就补齐了。
+_CODEX_PERF_VERSION = 1
+_CODEX_PERF_BACKFILL_DAYS = 7
+_CODEX_PERF_BACKFILL_BYTES = 120 * 1024 * 1024
+
+
+def _codex_perf_backfill_targets(file_cache, paths, now=None):
+    now = _time.time() if now is None else now
+    candidates = []
+    for path in paths:
+        entry = file_cache.get(path)
+        if not isinstance(entry, dict) or entry.get("perf_v") == _CODEX_PERF_VERSION:
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if now - st.st_mtime <= _CODEX_PERF_BACKFILL_DAYS * 86400:
+            candidates.append((st.st_mtime, st.st_size, path))
+    targets, budget = set(), _CODEX_PERF_BACKFILL_BYTES
+    for _mtime, size, path in sorted(candidates, reverse=True):
+        if targets and size > budget:
+            break
+        targets.add(path)   # 第一个文件再大也补，否则超大会话永远轮不到
+        budget -= size
+    return targets
+
+
 def scan_codex(bounds, cache):
     ledger_touch("codex")
     fc = cache.setdefault("codex", {})
@@ -3862,6 +4116,7 @@ def scan_codex(bounds, cache):
     dedupe_paths = set()
     active_root = os.path.realpath(CODEX_DIR) if os.path.isdir(CODEX_DIR) else None
     next_checkpoint = _time.monotonic() + _CODEX_SCAN_CHECKPOINT_INTERVAL
+    perf_backfill = _codex_perf_backfill_targets(fc, rollout_files)
 
     for f in rollout_files:
         stale.discard(f)
@@ -3889,11 +4144,11 @@ def scan_codex(bounds, cache):
         if (not entry or entry.get("sig") != sig
                 or entry.get("parser_version") != _CODEX_PARSER_VERSION
                 or entry.get("accounting_version") != _CODEX_ACCOUNTING_VERSION
-                or not event_cache_ready):
+                or not event_cache_ready or f in perf_backfill):
             complete_offset = _codex_complete_offset(f, size)
             file_id = f"{st.st_dev}:{st.st_ino}"
             append_from = None
-            if (isinstance(entry, dict)
+            if (isinstance(entry, dict) and f not in perf_backfill
                     and entry.get("parser_version") == _CODEX_PARSER_VERSION
                     and entry.get("accounting_version") == _CODEX_ACCOUNTING_VERSION):
                 old_offset = int(entry.get("parsed_size", 0) or 0)
@@ -3914,6 +4169,7 @@ def scan_codex(bounds, cache):
                 response_ids = set()
                 pending_responses = []
                 last_legacy_snapshot = None
+                perf_trigger = perf_first = None
                 parse_start = 0
             else:
                 events = []
@@ -3933,6 +4189,7 @@ def scan_codex(bounds, cache):
                 response_ids = set(entry.get("response_ids") or [])
                 pending_responses = list(entry.get("pending_responses") or [])
                 last_legacy_snapshot = entry.get("last_legacy_snapshot")
+                perf_trigger, perf_first = (list(entry.get("perf_state") or []) + [None, None])[:2]
                 parse_start = append_from
 
             try:
@@ -3940,6 +4197,19 @@ def scan_codex(bounds, cache):
                         f, start_offset=parse_start, end_offset=complete_offset):
                     if record_kind == "model":
                         file_model = record
+                        continue
+                    if record_kind == "trigger":
+                        # 工具结果 / 用户消息写入：下一个请求从这一刻开始
+                        trigger_ts = parse_ts(record)
+                        if trigger_ts:
+                            perf_trigger = int(trigger_ts.timestamp() * 1000)
+                            perf_first = None
+                        continue
+                    if record_kind == "item":
+                        # 模型开始输出思考或回复；一个请求取最早的那一刻作为首字时间
+                        if (perf_trigger is None or record >= perf_trigger) and (
+                                perf_first is None or record < perf_first):
+                            perf_first = record
                         continue
                     try:
                         o = json.loads(record.decode("utf-8", errors="ignore"))
@@ -3952,6 +4222,8 @@ def scan_codex(bounds, cache):
                     if payload.get("type") == "task_started":
                         pending_responses = []
                         last_legacy_snapshot = None
+                        perf_trigger = int(ts.timestamp() * 1000)
+                        perf_first = None
                         continue
                     is_response = o.get("type") == "token_usage_record"
                     response_id = None
@@ -4047,9 +4319,21 @@ def scan_codex(bounds, cache):
                             model = _CODEX_RESERVE_MODEL
                         cost = _codex_estimated_cost(model, li, lc, lo)
                         totals = total_key if total_key is not None else (None, None, None, None)
-                        # timestamp, local day, cumulative usage, incremental usage, cost
+                        # 这个请求的计时：有首字时间就算纯生成（并给出首字延迟），否则算端到端
+                        end_ms = ts.timestamp() * 1000
+                        gen = ttft = None
+                        if perf_first is not None and end_ms > perf_first:
+                            gen = round((end_ms - perf_first) / 1000, 3)
+                            if perf_trigger is not None and perf_first >= perf_trigger:
+                                ttft = round((perf_first - perf_trigger) / 1000, 3)
+                        elif perf_trigger is not None and end_ms > perf_trigger:
+                            gen = round((end_ms - perf_trigger) / 1000, 3)
+                        # timestamp, local day, cumulative usage, incremental usage, cost,
+                        # model, response id, generation seconds, time to first token
                         if li or lc or lo or lr:
-                            events.append([ts.isoformat(), dk, *totals, li, lc, lo, lr, cost, model, response_id])
+                            events.append([ts.isoformat(), dk, *totals, li, lc, lo, lr, cost, model,
+                                           response_id, gen, ttft])
+                            perf_trigger = perf_first = None
             except OSError:
                 continue
 
@@ -4101,6 +4385,10 @@ def scan_codex(bounds, cache):
                 "accounting_version": _CODEX_ACCOUNTING_VERSION,
                 "response_ids": sorted(response_ids), "pending_responses": pending_responses,
                 "last_legacy_snapshot": last_legacy_snapshot,
+                "perf_state": [perf_trigger, perf_first],
+                # 整份解析过的才带全了计时；只续读过新增部分的，旧事件还没有
+                "perf_v": (_CODEX_PERF_VERSION if append_from is None
+                           else (entry.get("perf_v") if isinstance(entry, dict) else None)),
                 "file_id": file_id, "parsed_size": complete_offset,
                 "parsed_guard": _codex_offset_guard(f, complete_offset),
                 "event_cache_size": event_cache_size,
@@ -4242,6 +4530,8 @@ def scan_codex(bounds, cache):
                         usage.get("out", 0), usage.get("cr", 0),
                         usage.get("cw", 0), usage.get("reason", 0),
                         usage.get("cost", 0))
+                if day.get("perf"):
+                    _perf_merge(bucket.setdefault("perf", {}), day["perf"])
 
     _assemble_codex_ranges(B, merged_days, main_sessions)
 
@@ -13395,7 +13685,7 @@ def compute():
                            "pin": p["in"], "pout": p["out"], "pcr": p["cache_read"]})
         return {"hit": hit, "in": b["in"], "out": b["out"],
                 "cr": b["cr"], "cw": b["cw"], "cost": b["cost"], "models": models,
-                "sessions": len(b["sessions"])}
+                "sessions": len(b["sessions"]), "perf": _perf_summary(b.get("perf"))}
 
     def codex_range(b):
         b = b or {}
@@ -13403,7 +13693,8 @@ def compute():
         return {"hit": hit, "in": b.get("in", 0) - b.get("cached", 0), "cached": b.get("cached", 0),
                 "out": b.get("out", 0), "reason": b.get("reason", 0), "cost": b.get("cost", 0.0),
                 "sessions": len(b.get("sessions", set())),
-                "models": _format_token_models(b.get("models", {}), price_model=_codex_price_model)}
+                "models": _format_token_models(b.get("models", {}), price_model=_codex_price_model),
+                "perf": _perf_summary(b.get("perf"))}
 
     def gemini_range(b):
         # tokens.input 含 cached,展示口径与 Codex 一致:输入=非缓存部分

@@ -9,6 +9,7 @@
 "%@ 上下文快照" = "%@ context snapshot";
 "%@ 上次读到剩余 %@%%" = "%@ last read %@%% left";
 "%@ 个" = "%@";
+"%@ 个请求的平均输出速度与首字延迟中位数" = "Average output speed and median time to first token over %@ requests";
 "%@ 个项目" = "%@ projects";
 "%@ 亿 token" = "%@ × 100M tokens";
 "%@ 会话" = "%@ sessions";
@@ -524,6 +525,7 @@
 "近30天" = "Last 30 days";
 "这个周期已经用了" = "Used this cycle";
 "这些 token ≈ 码了 %@ 字 ✍️" = "These tokens ≈ %@ characters written ✍️";
+"输出速度" = "Output speed";
 "这些花费 ≈ %@ 杯咖啡 ☕" = "This spend ≈ %@ coffees ☕";
 "这些花费 ≈ %@ 顿火锅 🍲" = "This spend ≈ %@ hotpots 🍢";
 "远程 Linux" = "Remote Linux";
@@ -540,6 +542,7 @@
 "重置卡" = "Reset cards";
 "重试" = "Retry";
 "铁人" = "Iron Streak";
+"速度" = "Speed";
 "错误" = "Error";
 "长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。" = "Long ranges show daily actual token usage, merged across all devices' ledgers (pruning old CLI logs will not shrink it); quota-percentage snapshots are kept 7 days only, too short to draw this long.";
 "间隔" = "Interval";

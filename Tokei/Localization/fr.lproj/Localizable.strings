@@ -6,6 +6,7 @@
 "%@ Credits" = "Crédits %@";
 "%@ 上下文快照" = "Instantané de contexte %@";
 "%@ 上次读到剩余 %@%%" = "%@ : dernière lecture %@%% restant";
+"%@ 个请求的平均输出速度与首字延迟中位数" = "Vitesse de sortie moyenne et délai médian du premier token sur %@ requêtes";
 "%@ 会话" = "%@ sessions";
 "%@ 分钟" = "%@ min";
 "%@ 剩余 %@%%" = "%@ restant %@%%";
@@ -446,6 +447,7 @@
 "这个周期已经用了" = "Déjà utilisé ce cycle";
 "这些 token ≈ 码了 %@ 字 ✍️" = "Ces tokens ≈ %@ caractères écrits ✍️";
 "这些花费 ≈ %@ 杯咖啡 ☕" = "Ces dépenses ≈ %@ cafés ☕";
+"输出速度" = "Vitesse de sortie";
 "这些花费 ≈ %@ 顿火锅 🍲" = "Ces dépenses ≈ %@ repas fondue 🍲";
 "远程 Linux" = "Linux distant";
 "远程采集" = "Collecte à distance";
@@ -459,6 +461,7 @@
 "重置卡" = "Cartes de réinit.";
 "重试" = "Réessayer";
 "错误" = "Erreur";
+"速度" = "Vitesse";
 "长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。" = "Les plages longues tracent la consommation réelle quotidienne de tokens, fusionnée sur tous les appareils ; les instantanés de pourcentage ne sont gardés que 7 jours.";
 "间隔" = "Intervalle";
 "防休眠" = "Caféine";

@@ -620,13 +620,14 @@ struct PanelView: View {
                     .init("arrow.up", L("输出"), Fmt.human(r.out)),
                     .init("bolt.fill", L("缓存读"), Fmt.human(r.cr)),
                     .init("square.stack.3d.up.fill", L("缓存写"), Fmt.human(r.cw)),
-                ], tint: Theme.claude)
+                ] + perfMetrics(r.perf), tint: Theme.claude)
                 let claudeRows = r.models.filter { $0.name != "合成" }.map { m in // l10n-ignore
                     let denom = m.cr + m.cw + m.in
                     let hit = denom > 0 ? Double(m.cr) / Double(denom) * 100 : 0
                     return ModelRow(name: m.name, pin: m.pin, pout: m.pout, pcr: m.pcr ?? 0,
                                    cost: m.cost, total: m.total, hit: hit,
-                                   tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw)
+                                   tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw,
+                                   perf: r.perf?.models?[m.name])
                 }
                 if !claudeRows.isEmpty {
                     modelDisclosure(claudeRows, open: $claudeModelsOpen, tint: Theme.claude)
@@ -685,11 +686,11 @@ struct PanelView: View {
                         .init("arrow.up", L("输出"), Fmt.human(r.out)),
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.codex)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: $codexModelsOpen, tint: Theme.codex,
-                                         reasonIncludedInOutput: true)
+                                         reasonIncludedInOutput: true, perf: r.perf)
                 }
             } else if hasQuotaData {
                 usageEmptyHint(recent: recentUsageHint { key in
@@ -965,10 +966,10 @@ struct PanelView: View {
                 CostHeadline(value: Fmt.human(r.totalTokens),
                              caption: L("%@ 总量", sel.label), tint: tint)
                 metricGrid([.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))],
-                           hit: r.hit, extra: tokenUsageMetrics(r), tint: tint)
+                           hit: r.hit, extra: tokenUsageMetrics(r) + perfMetrics(r.perf), tint: tint)
                 unpricedModelsNote(r.models)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint, perf: r.perf)
                 }
             }
             if quota.available {
@@ -1858,12 +1859,13 @@ struct PanelView: View {
                     ? [.init("circle.hexagongrid.fill", "Credits", Fmt.credits(r.credits))]
                     : []
                 metricGrid(showsCost ? [.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))] : [],
-                    hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO), tint: tint)
+                    hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO)
+                        + perfMetrics(r.perf), tint: tint)
                 if showsCost { unpricedModelsNote(r.models) }
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint,
                                          reasonIncludedInOutput: reasonIncludedInOutput,
-                                         inclusiveIO: inclusiveIO)
+                                         inclusiveIO: inclusiveIO, perf: r.perf)
                 }
             } else {
                 emptyHint
@@ -1900,6 +1902,17 @@ struct PanelView: View {
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// 输出速度、首字延迟两格，只在有样本时出现。速度按 token 总数除以生成总时长，
+    /// 首字取中位数；拿不到首字时间的工具速度含等待（端到端）。
+    func perfMetrics(_ perf: PerfStat?, includeTTFT: Bool = true) -> [Metric] {
+        guard let perf, perf.n > 0 else { return [] }
+        var items: [Metric] = [.init("speedometer", L("输出速度"), Fmt.tps(perf.tps))]
+        if includeTTFT, let ttft = perf.ttft {
+            items.append(.init("timer", L("首字"), Fmt.seconds(ttft)))
+        }
+        return items
     }
 
     func tokenUsageMetrics(_ r: TokenUsageRange, inclusiveIO: Bool = false) -> [Metric] {
@@ -2037,6 +2050,7 @@ struct PanelView: View {
         var tokOut: Int = 0
         var tokCR: Int = 0
         var tokCW: Int = 0
+        var perf: PerfModelStat? = nil
         var id: String { name }
     }
 
@@ -2146,7 +2160,8 @@ struct PanelView: View {
     func tokenModelDisclosure(_ models: [TokenModelStat], open: Binding<Bool>, tint: Color,
                               reasonIncludedInOutput: Bool = false,
                               inclusiveIO: Bool = false,
-                              periodLabel: String? = nil) -> some View {
+                              periodLabel: String? = nil,
+                              perf: PerfStat? = nil) -> some View {
         Button {
             open.wrappedValue.toggle()
         } label: {
@@ -2234,7 +2249,8 @@ struct PanelView: View {
                                            tokCR: m.cr, tokCW: m.cw,
                                            tokReason: m.reason,
                                            pin: m.pin, pout: m.pout, pcr: m.pcr, hit: hit, tint: tint,
-                                           componentsAreSubtotals: inclusiveIO, priceRef: m.pref)
+                                           componentsAreSubtotals: inclusiveIO, priceRef: m.pref,
+                                           perf: perf?.models?[m.name])
                         }
                     }
                 }
@@ -2319,7 +2335,8 @@ struct PanelView: View {
                         .buttonStyle(.plain)
                         if isExpanded {
                             modelDetailRow(tokIn: m.tokIn, tokOut: m.tokOut, tokCR: m.tokCR, tokCW: m.tokCW,
-                                           pin: m.pin, pout: m.pout, pcr: m.pcr, hit: m.hit, tint: tint)
+                                           pin: m.pin, pout: m.pout, pcr: m.pcr, hit: m.hit, tint: tint,
+                                           perf: m.perf)
                         }
                     }
                 }
@@ -2333,7 +2350,8 @@ struct PanelView: View {
     @ViewBuilder
     func modelDetailRow(tokIn: Int, tokOut: Int, tokCR: Int, tokCW: Int, tokReason: Int = 0,
                          pin: Double, pout: Double, pcr: Double = 0, hit: Double = 0, tint: Color,
-                         componentsAreSubtotals: Bool = false, priceRef: String? = nil) -> some View {
+                         componentsAreSubtotals: Bool = false, priceRef: String? = nil,
+                         perf: PerfModelStat? = nil) -> some View {
         let tagFont = Font.system(size: 9, weight: .medium, design: .monospaced)
         let labelFont = Font.system(size: 8.5)
         let bg = tint.opacity(0.08)
@@ -2354,6 +2372,21 @@ struct PanelView: View {
                 if tokReason > 0 {
                     detailTag("◉ \(Fmt.human(tokReason))", label: componentsAreSubtotals ? L("其中推理") : L("推理"),
                               tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
+                }
+                if let perf {
+                    HStack(spacing: 2) {
+                        Text(L("速度")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(Fmt.tps(perf.tps)).font(tagFont).foregroundStyle(tint)
+                        if let ttft = perf.ttft {
+                            Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
+                            Text(L("首字")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text(Fmt.seconds(ttft)).font(tagFont).foregroundStyle(tint)
+                        }
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 2.5)
+                    .background(Capsule().fill(bg))
+                    .overlay(Capsule().strokeBorder(border, lineWidth: 0.5))
+                    .help(L("%@ 个请求的平均输出速度与首字延迟中位数", perf.n))
                 }
                 if hit > 0 {
                     HStack(spacing: 2) {

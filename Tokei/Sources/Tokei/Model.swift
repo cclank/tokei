@@ -31,6 +31,20 @@ struct ClaudeModelStat: Codable, Identifiable {
     var total: Int { `in` + out + cr + cw }
 }
 
+/// 输出速度（token/秒）与首字延迟（秒）。采集器按请求计时后汇总；没有样本时整个字段缺省。
+struct PerfStat: Codable, Equatable {
+    var tps: Double
+    var ttft: Double?
+    var n: Int
+    var models: [String: PerfModelStat]? = nil
+}
+
+struct PerfModelStat: Codable, Equatable {
+    var tps: Double
+    var ttft: Double?
+    var n: Int
+}
+
 struct ClaudeRange: Codable {
     var hit: Double
     var `in`: Int
@@ -40,6 +54,7 @@ struct ClaudeRange: Codable {
     var cost: Double
     var models: [ClaudeModelStat] = []
     var sessions: Int = 0
+    var perf: PerfStat? = nil
 
     var tokens: Int { `in` + out + cr + cw }
 }
@@ -95,6 +110,7 @@ struct CodexRange: Codable {
     var cost: Double
     var sessions: Int = 0
     var models: [TokenModelStat] = []
+    var perf: PerfStat? = nil
 
     var tokens: Int { `in` + cached + out }
 
@@ -120,6 +136,7 @@ struct CodexRange: Codable {
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 
@@ -215,6 +232,7 @@ struct GeminiRange: Codable {
     var cost: Double
     var models: [GeminiModelStat] = []
     var sessions: Int = 0
+    var perf: PerfStat? = nil
 
     var totalTokens: Int { self.in + out + cached + thoughts }
     var hasUsage: Bool { sessions > 0 || totalTokens > 0 }
@@ -274,6 +292,7 @@ struct GrokRange: Codable {
     var cancellations: Int?
     var ttft: Int?
     var response: Int?
+    var perf: PerfStat? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -285,6 +304,7 @@ struct GrokRange: Codable {
         reason = try c.decodeIfPresent(Int.self, forKey: .reason) ?? 0
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
         usage_available = try c.decodeIfPresent(Bool.self, forKey: .usage_available) ?? false
         usage_calls = try c.decodeIfPresent(Int.self, forKey: .usage_calls) ?? 0
         usage_sessions = try c.decodeIfPresent(Int.self, forKey: .usage_sessions) ?? 0
@@ -388,12 +408,13 @@ struct QoderRange: Codable {
     var ctx: Double = 0
     var tools: Int = 0
     var est: Int = 0
+    var perf: PerfStat? = nil
 
     var totalTokens: Int { self.in + out + cr + cw }
 
     enum CodingKeys: String, CodingKey {
         case `in`, out, cr, cw, credits, usage_calls, usage_available, hit, models
-        case sessions, calls, sub_agents, turns, duration, ctx, tools, est
+        case sessions, calls, sub_agents, turns, duration, ctx, tools, est, perf
     }
 
     init(`in` input: Int = 0, out: Int = 0, cr: Int = 0, cw: Int = 0,
@@ -440,6 +461,7 @@ struct QoderRange: Codable {
         self.ctx = try c.decodeIfPresent(Double.self, forKey: .ctx) ?? 0
         self.tools = try c.decodeIfPresent(Int.self, forKey: .tools) ?? 0
         self.est = try c.decodeIfPresent(Int.self, forKey: .est) ?? 0
+        self.perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 
@@ -700,6 +722,7 @@ struct TokenUsageRange: Codable {
     var sessions: Int = 0
     var models: [TokenModelStat] = []
     var coverage: String?
+    var perf: PerfStat? = nil
 
     var totalTokens: Int {
         tokens > 0 ? tokens : `in` + out + cr + cw + reason
@@ -744,6 +767,7 @@ struct TokenUsageRange: Codable {
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
         coverage = try c.decodeIfPresent(String.self, forKey: .coverage)
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 struct TokenUsageRanges: Codable {
@@ -1127,6 +1151,16 @@ enum Fmt {
         if s <= 0 { return L("即将重置") }
         let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
         return h > 0 ? "\(h)h\(m)m" : "\(m)m"
+    }
+
+    /// 输出速度：两位数以上取整（98 tok/s），以下留一位小数（6.2 tok/s）。
+    static func tps(_ value: Double) -> String {
+        value >= 10 ? String(format: "%.0f tok/s", value) : String(format: "%.1f tok/s", value)
+    }
+
+    /// 首字延迟这类秒级时长：1.4s、12s。
+    static func seconds(_ value: Double) -> String {
+        value >= 10 ? String(format: "%.0fs", value) : String(format: "%.1fs", value)
     }
 
     static func duration(_ ms: Int) -> String {

@@ -483,7 +483,8 @@
 "额度比例未知" = "Part de quota inconnue";
 "额度窗口" = "Fenêtre de quota";
 "额度轨迹" = "Historique des quotas";
-"首字" = "Première lettre";
+"首字延迟：从发出请求到收到第一个 token 的时间" = "Délai du premier token : de l'envoi de la requête à la réception du premier token";
+"首字延迟：从发出请求到收到第一个 token 的时间，取各请求的中位数" = "Délai du premier token : de l'envoi de la requête à la réception du premier token, médiane des requêtes";
 "默认关闭。开启后仅在 Claude Desktop 缓存不可用时，使用 Claude Code CLI 已有登录态向 Anthropic 查询 5h、周及模型额度，并缓存 5 分钟。登录 Token 只在内存中使用，不写入 Tokei 文件。" = "Désactivé par défaut. Si activé, seulement si le cache Claude Desktop est indisponible, Tokei utilise la session Claude Code CLI pour interroger Anthropic pour 5h, hebdo et modèles (en cache 5 min). Les identifiants restent en mémoire.";
 "默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。" = "Désactivé par défaut. Si activé, Tokei se connecte uniquement au point d'accès local 127.0.0.1 de l'app QwenWork. Tokei ne stocke aucun identifiant.";
 "默认只读 ~/.grok 本地日志，不访问网络" = "Par défaut, lit uniquement les journaux locaux ~/.grok, aucun accès réseau";

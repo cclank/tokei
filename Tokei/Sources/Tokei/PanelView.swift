@@ -1271,12 +1271,13 @@ struct PanelView: View {
                         items.append(.init("chart.bar.fill", L("窗口"), String(format: "%.0f%%", ctx)))
                     }
                     if let ttft = r.ttft, ttft > 0 {
-                        items.append(.init("timer", L("首字"), String(format: "%.1fs", Double(ttft) / 1000)))
+                        items.append(.init("timer", "TTFT", String(format: "%.1fs", Double(ttft) / 1000),
+                                           help: L("首字延迟：从发出请求到收到第一个 token 的时间")))
                     }
                     if let response = r.response, response > 0 {
                         items.append(.init("speedometer", L("响应"), String(format: "%.1fs", Double(response) / 1000)))
                     }
-                    // 首字已经有 Grok 自己的统计，这里只补输出速度
+                    // TTFT 已经有 Grok 自己的统计，这里只补输出速度
                     items += perfMetrics(r.perf, includeTTFT: false)
                     if (r.errors ?? 0) > 0 {
                         items.append(.init("exclamationmark.triangle", L("错误"), "\(r.errors ?? 0)"))
@@ -1906,13 +1907,14 @@ struct PanelView: View {
         }
     }
 
-    /// 输出速度、首字延迟两格，只在有样本时出现。速度按 token 总数除以生成总时长，
-    /// 首字取中位数；拿不到首字时间的工具速度含等待（端到端）。
+    /// 输出速度、TTFT 两格，只在有样本时出现。速度按 token 总数除以生成总时长，
+    /// TTFT 取中位数；拿不到首字时间的工具速度含等待（端到端）。
     func perfMetrics(_ perf: PerfStat?, includeTTFT: Bool = true) -> [Metric] {
         guard let perf, perf.n > 0 else { return [] }
         var items: [Metric] = [.init("gauge.medium", L("输出速度"), Fmt.tps(perf.tps))]
         if includeTTFT, let ttft = perf.ttft {
-            items.append(.init("timer", L("首字"), Fmt.seconds(ttft)))
+            items.append(.init("timer", "TTFT", Fmt.seconds(ttft),
+                               help: L("首字延迟：从发出请求到收到第一个 token 的时间，取各请求的中位数")))
         }
         return items
     }
@@ -2036,8 +2038,10 @@ struct PanelView: View {
     }
 
     // MARK: - 复用片段
-    struct Metric { var icon, label, value: String
-        init(_ i: String, _ l: String, _ v: String) { icon = i; label = l; value = v } }
+    struct Metric { var icon, label, value: String; var help: String?
+        init(_ i: String, _ l: String, _ v: String, help: String? = nil) {
+            icon = i; label = l; value = v; self.help = help
+        } }
 
     // 模型明细行(Claude / Gemini 共用)。
     struct ModelRow: Identifiable {
@@ -2122,7 +2126,7 @@ struct PanelView: View {
                   alignment: .leading, spacing: 9) {
             ForEach(top.indices, id: \.self) { i in
                 MetricCell(icon: top[i].icon, label: top[i].label,
-                           value: top[i].value, tint: tint)
+                           value: top[i].value, tint: tint, help: top[i].help)
             }
             if hit > 0 {
                 RingMetricCell(value: hit, label: "Cache Hit", tint: tint)
@@ -2130,7 +2134,7 @@ struct PanelView: View {
             let offset = top.count + (hit > 0 ? 1 : 0)
             ForEach(extra.indices, id: \.self) { i in
                 MetricCell(icon: extra[i].icon, label: extra[i].label,
-                           value: extra[i].value, tint: tint)
+                           value: extra[i].value, tint: tint, help: extra[i].help)
                     .id(offset + i)
             }
         }
@@ -2381,7 +2385,7 @@ struct PanelView: View {
                         Text(Fmt.tps(perf.tps)).font(tagFont).foregroundStyle(tint)
                         if let ttft = perf.ttft {
                             Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
-                            Text(L("首字")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text("TTFT").font(labelFont).foregroundStyle(Theme.tTertiary)
                             Text(Fmt.seconds(ttft)).font(tagFont).foregroundStyle(tint)
                         }
                     }

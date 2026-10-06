@@ -6,7 +6,9 @@ struct PanelView: View {
     @ObservedObject var store: Store
     @ObservedObject var layout: PanelLayoutContext = PanelLayoutContext()
     var scrollable = true
-    @State private var sel: RangeKey = .today
+    /// 一次性量尺寸的 probe 从哪个页签画起；平时的面板总是从「今日」开始。
+    static var initialRange: RangeKey = .today
+    @State private var sel: RangeKey = PanelView.initialRange
     @State private var claudeModelsOpen = false
     @State private var codexModelsOpen = false
     @State private var codexReserveModelsOpen = false

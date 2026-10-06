@@ -583,8 +583,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func updatePanelLayout(for button: NSStatusBarButton) {
+        let ceiling = PanelPlacement.maximumHeight(
+            anchorVisibleFrame: button.window?.screen?.visibleFrame,
+            fallbackVisibleFrame: NSScreen.screens.first?.visibleFrame)
         panelLayout.update(
-            fitting: measuredPanelSize(),
+            fitting: measuredPanelSize(ceiling: ceiling),
             anchorVisibleFrame: button.window?.screen?.visibleFrame,
             fallbackVisibleFrame: NSScreen.screens.first?.visibleFrame
         )
@@ -597,17 +600,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// 直接问正在显示的 host 是问不出来的：它被固定画布钉死，只会回答画布的尺寸。
     ///
     /// 只在打开之前调用，开着的时候绝不重量——见 `PanelPlacement.contentSize`。
-    private func measuredPanelSize() -> CGSize {
+    private func measuredPanelSize(ceiling: CGFloat) -> CGSize {
         // 按面板当前停留的页面量：关掉时停在设置页，重开时也得按设置页的宽度来（issue #105）。
         let previous = PanelView.initialMode
+        let previousRange = PanelView.initialRange
         PanelView.initialMode = PanelView.PanelMode(rawValue: panelLayout.page) ?? .cards
-        defer { PanelView.initialMode = previous }
-        let probe = NSHostingController(
-            rootView: PanelView(store: store, layout: panelLayout, scrollable: false))
-        probe.view.layoutSubtreeIfNeeded()
-        let size = probe.sizeThatFits(in: CGSize(width: CGFloat.greatestFiniteMagnitude,
-                                                 height: CGFloat.greatestFiniteMagnitude))
-        return size.width > 0 && size.height > 0 ? size : .zero
+        defer {
+            PanelView.initialMode = previous
+            PanelView.initialRange = previousRange
+        }
+        // 首页高度随页签变：「今日」卡片少、「本年」卡片多，而面板开着时切页签不改尺寸
+        // （issue #97）。只按「今日」量，切到长的页签就只能在矮面板里滚。所以挨个页签量、
+        // 取最高的；顶到屏幕比例上限就不再量（通常「本年」一次就够）。
+        let ranges: [RangeKey] = PanelView.initialMode == .cards
+            ? [.year, .month, .week, .lastWeek, .yesterday, .today] : [.today]
+        var best = CGSize.zero
+        for range in ranges {
+            PanelView.initialRange = range
+            let probe = NSHostingController(
+                rootView: PanelView(store: store, layout: panelLayout, scrollable: false))
+            probe.view.layoutSubtreeIfNeeded()
+            let size = probe.sizeThatFits(in: CGSize(width: CGFloat.greatestFiniteMagnitude,
+                                                     height: CGFloat.greatestFiniteMagnitude))
+            guard size.width > 0 && size.height > 0 else { continue }
+            best = CGSize(width: max(best.width, size.width), height: max(best.height, size.height))
+            if best.height >= ceiling { break }
+        }
+        return best
     }
 
     func popoverDidShow(_ notification: Notification) {

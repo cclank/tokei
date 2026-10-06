@@ -1752,10 +1752,10 @@ struct PanelView: View {
                     if r.sub_agents > 0 {
                         items.append(.init("point.3.connected.trianglepath.dotted", L("子agent"), "\(r.sub_agents)"))
                     }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: tint)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint, perf: r.perf)
                 } else if let model = q.model, !model.isEmpty {
                     modelBadge(model, tint: tint)
                 }
@@ -1780,10 +1780,10 @@ struct PanelView: View {
                         .init("bolt.fill", L("缓存读"), Fmt.human(r.cr)),
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.hermes)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.hermes)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.hermes, perf: r.perf)
                 }
             } else {
                 emptyHint
@@ -1807,11 +1807,11 @@ struct PanelView: View {
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
                     if r.tasks > 0 { items.append(.init("checklist", L("任务"), "\(r.tasks)")) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.openclaw)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.openclaw,
-                                         reasonIncludedInOutput: true)
+                                         reasonIncludedInOutput: true, perf: r.perf)
                 }
             } else if r.tasks > 0 {
                 HStack(spacing: 16) {

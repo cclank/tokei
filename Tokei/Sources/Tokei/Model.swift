@@ -588,6 +588,7 @@ struct HermesRange: Codable {
     var cost: Double
     var sessions: Int = 0
     var models: [TokenModelStat] = []
+    var perf: PerfStat? = nil
 }
 struct TokenModelStat: Codable, Identifiable {
     var modelId: String?
@@ -668,6 +669,7 @@ struct OpenClawRange: Codable {
     var cost: Double
     var sessions: Int
     var models: [TokenModelStat]
+    var perf: PerfStat? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -683,6 +685,7 @@ struct OpenClawRange: Codable {
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 struct OpenClawRanges: Codable {

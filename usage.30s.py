@@ -8806,6 +8806,54 @@ def scan_qoder_ide(bounds, cache):
 
 # ---------- Hermes ----------
 # SQLite: ~/.hermes/state.db (旧布局) + ~/.hermes/profiles/*/state.db (profile 布局)
+# agent.log 每次 API 调用一行：
+#   2026-06-04 18:03:59,497 INFO [...] agent.conversation_loop: API call #1: model=grok-4.3
+#   provider=xai-oauth in=17277 out=326 total=17603 latency=5.9s ...
+# latency 是发出请求到收完的时间（含重试退避），只能算端到端；out 已含推理。
+_HERMES_API_CALL = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) [\d:,]+ .*?API call #\d+: model=(\S+) .*?\bout=(\d+) .*?\blatency=([\d.]+)s")
+
+
+def _hermes_log_perf(cache):
+    """{日期: {模型: 速度样本}}，按日志文件签名缓存。"""
+    store = cache.setdefault("hermes_logs", {})
+    paths = [os.path.join(HOME, ".hermes", "logs", "agent.log")]
+    profiles = os.path.join(HOME, ".hermes", "profiles")
+    if os.path.isdir(profiles):
+        paths += [os.path.join(profiles, name, "logs", "agent.log") for name in os.listdir(profiles)]
+    paths = [path for path in paths if os.path.isfile(path)]
+    for path in set(store) - set(paths):
+        store.pop(path, None)
+        cache["_dirty"] = True
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        sig = f"{st.st_mtime_ns}:{st.st_size}"
+        if isinstance(store.get(path), dict) and store[path].get("sig") == sig:
+            continue
+        days = {}
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    if "API call #" not in line:
+                        continue
+                    match = _HERMES_API_CALL.search(line)
+                    if match:
+                        _perf_add(days.setdefault(match.group(1), {}), match.group(2),
+                                  int(match.group(3)), float(match.group(4)))
+        except OSError:
+            continue
+        store[path] = {"sig": sig, "days": days}
+        cache["_dirty"] = True
+    merged = {}
+    for entry in store.values():
+        for day_key, perf in (entry.get("days") or {}).items():
+            _perf_merge(merged.setdefault(day_key, {}), perf)
+    return merged
+
+
 def _hermes_db_paths():
     paths = []
     if os.path.isfile(HERMES_DB):
@@ -9015,7 +9063,8 @@ _QODERCLI_DIRS = {
     "qodercli_cn": (os.path.join(HOME, ".qoder-cn", "projects"), "TOKEI_QODERCLI_CN_DIR",
                     "Qoder CN"),
 }
-_QODERCLI_PARSER_VERSION = 2
+# 3：回复附上起止时刻，用来算端到端速度。
+_QODERCLI_PARSER_VERSION = 3
 _QODERCLI_LEDGER_VERSION = 1
 
 
@@ -9102,6 +9151,13 @@ def _merge_qodercli_event(existing, candidate):
         existing.get("usage_available") or candidate.get("usage_available"))
     if not merged.get("model"):
         merged["model"] = other.get("model")
+    # 同一回复分几行写：开始取最早的触发时刻，结束取最后一行
+    starts = [value for value in (existing.get("start"), candidate.get("start")) if value]
+    ends = [value for value in (existing.get("end"), candidate.get("end")) if value]
+    if starts:
+        merged["start"] = min(starts)
+    if ends:
+        merged["end"] = max(ends)
     return merged
 
 
@@ -9112,6 +9168,7 @@ def _parse_qodercli_file(path):
     message_requests = {}
     model = None
     prev_ts = None
+    trigger = None   # 最近一条用户消息 / 工具结果的时刻：下一次回复从这里开始
     with open(path, "r", errors="replace") as f:
         for line_number, line in enumerate(f, 1):
             line = line.strip()
@@ -9185,12 +9242,14 @@ def _parse_qodercli_file(path):
                     model = event_model
                 event = {"id": str(response_id), "day": dk, "hour": dt.hour,
                          "model": event_model, "est": assistant_est,
-                         "tools": sorted(tool_ids), **usage}
+                         "tools": sorted(tool_ids), "start": trigger, "end": ts, **usage}
                 existing = responses.get(str(response_id))
                 if prior is not None:
                     existing = _merge_qodercli_event(existing, prior)
                 responses[str(response_id)] = _merge_qodercli_event(existing, event)
-            elif not row.get("isMeta") and not row.get("isSidechain"):
+            else:
+                trigger = ts
+            if typ == "user" and not row.get("isMeta") and not row.get("isSidechain"):
                 texts = []
                 if isinstance(content, str):
                     texts = [content]
@@ -9248,6 +9307,11 @@ def _qodercli_usage_days(entries, use_cached=True):
         hour = event.get("hour")
         if isinstance(hour, int) and 0 <= hour < 24:
             day["hours"][hour] += token_total
+        start, end = event.get("start"), event.get("end")
+        if start and end and end > start:
+            # 端到端：从触发它的用户消息或工具结果算到最后一行
+            _perf_add(day.setdefault("perf", {}), event.get("model"),
+                      int(event.get("out", 0) or 0), end - start)
         model_name = event.get("model")
         if model_name and (token_total > 0 or event.get("credits", 0)):
             model_usage = day["models"].setdefault(model_name,
@@ -9361,6 +9425,8 @@ def scan_qodercli(bounds, cache, tool="qodercli"):
                 target[field] += int(day.get(field, 0) or 0)
             target["credits"] += float(day.get("credits", 0.0) or 0.0)
             target["usage_available"] = target["usage_calls"] > 0
+            if day.get("perf"):
+                _perf_merge(target.setdefault("perf", {}), day["perf"])
             for model_name, usage in (day.get("models") or {}).items():
                 model_target = target["models"].setdefault(model_name,
                     {"in": 0, "out": 0, "cr": 0, "cw": 0, "credits": 0.0})
@@ -9446,6 +9512,13 @@ def scan_hermes(bounds, cache):
                 for key in TOKEN_FIELDS:
                     mm[key] += mv.get(key, 0)
                 mm["cost"] += mv.get("cost", 0)
+    for day_key, perf in _hermes_log_perf(cache).items():
+        try:
+            d = date.fromisoformat(day_key)
+        except ValueError:
+            continue
+        for k in classify_date(d, bounds):
+            _perf_merge(B[k].setdefault("perf", {}), perf)
     if changed:
         cache["_dirty"] = True
     return {"ranges": B}
@@ -9455,7 +9528,8 @@ def scan_hermes(bounds, cache):
 # 全局 SQLite: $OPENCLAW_STATE_DIR/state/openclaw.sqlite（任务 + agent DB 注册表）
 # Agent SQLite: agent_databases.path -> transcript_events.event_json（新版 token 用量）
 # Session JSONL: $OPENCLAW_STATE_DIR/agents/*/sessions/*.jsonl（旧版 token 用量）
-_OPENCLAW_PARSER_VERSION = 2
+# 3：附上每条回复的端到端耗时。
+_OPENCLAW_PARSER_VERSION = 3
 _OPENCLAW_LEDGER_VERSION = 2
 
 
@@ -9635,15 +9709,22 @@ def _openclaw_usage_record(event, created_at=None, session_model=None):
         cost = (inp / 1e6 * price["in"] + out / 1e6 * price["out"]
                 + cr / 1e6 * price["cache_read"] + cw / 1e6 * price["cache_write"])
 
-    return {"date": occurred_at.date().isoformat(), "hour": occurred_at.hour,
-            "in": inp, "out": out, "cr": cr, "cw": cw, "reason": reason,
-            "cost": cost, "model": model}
+    record = {"date": occurred_at.date().isoformat(), "hour": occurred_at.hour,
+              "in": inp, "out": out, "cr": cr, "cw": cw, "reason": reason,
+              "cost": cost, "model": model}
+    seconds = _pi_stream_seconds(event.get("timestamp"), message.get("timestamp"))
+    if seconds:
+        record["gen"] = round(seconds, 3)
+    return record
 
 
 def _openclaw_add_record(days, record):
     day = days.setdefault(record["date"], _empty_token_day())
     _add_token_usage(day, record["in"], record["out"], record["cr"], record["cw"],
                      record["reason"], record["cost"], record["model"])
+    if record.get("gen"):
+        # reasoningTokens 已含在 output 里
+        _perf_add(day.setdefault("perf", {}), record["model"], record["out"], record["gen"])
     day["hours"][record["hour"]] += _openclaw_token_total(record)
 
 
@@ -9924,6 +10005,8 @@ def scan_openclaw(bounds, cache):
             b["cr"] += day.get("cr", 0); b["cw"] += day.get("cw", 0)
             b["reason"] += day.get("reason", 0)
             b["cost"] += day.get("cost", 0)
+            if day.get("perf"):
+                _perf_merge(b.setdefault("perf", {}), day["perf"])
             for mn, mv in (day.get("models") or {}).items():
                 mm = b["models"].setdefault(
                     mn, {"in": 0, "out": 0, "cr": 0, "cw": 0,
@@ -9970,6 +10053,21 @@ def _pi_usage_int(usage, *fields):
     return 0
 
 
+def _pi_stream_seconds(persisted, started):
+    """pi-ai 系（Pi、Prime Agent、OpenClaw）：message.timestamp 是开始流式请求的时刻
+    （毫秒），外层记录的 timestamp 是这条回复写入的时刻。两者之差是端到端耗时。"""
+    end = parse_ts(persisted) if isinstance(persisted, str) else None
+    if isinstance(started, (int, float)) and not isinstance(started, bool):
+        start = started / 1000 if started > 1e11 else float(started)
+    else:
+        parsed = parse_ts(started) if isinstance(started, str) else None
+        start = parsed.timestamp() if parsed else None
+    if end is None or start is None:
+        return None
+    seconds = end.timestamp() - start
+    return seconds if 0.2 < seconds <= _PERF_MAX_SECONDS else None
+
+
 def _pi_usage_cost(u, model):
     cost_obj = u.get("cost") or {}
     total = float(cost_obj.get("total", 0) or 0)
@@ -9992,7 +10090,8 @@ def _pi_usage_cost(u, model):
 
 # 解析口径版本。1：没有公开价的模型不再按 Opus 兜底价估美元。
 # 2：不带厂商前缀的模型名按名字到价目表里查价。3：没有的沿用上一个版本的价。
-_PI_PARSER_VERSION = 3
+# 4：附上每条回复的端到端耗时。
+_PI_PARSER_VERSION = 4
 
 
 def scan_pi(bounds, cache):
@@ -10062,6 +10161,9 @@ def scan_pi(bounds, cache):
                         dk = dt.astimezone().date().isoformat()
                         day = days.setdefault(dk, _empty_token_day())
                         _add_token_usage(day, inp, out, cr, cw, reason, cost, model)
+                        seconds = _pi_stream_seconds(o.get("timestamp"), msg.get("timestamp"))
+                        if seconds:
+                            _perf_add(day.setdefault("perf", {}), model, out, seconds)
                         day["hours"][dt.astimezone().hour] += inp + out + cr + cw + reason
             except OSError:
                 continue
@@ -10164,16 +10266,20 @@ def _parse_prime_session_file(path):
                 events.append({"key": key, "date": dt.astimezone().date().isoformat(),
                                "hour": dt.astimezone().hour, "in": inp, "out": out,
                                "cr": cr, "cw": cw, "reason": reason, "cost": cost,
-                               "model": current_model})
+                               "model": current_model,
+                               "gen": _pi_stream_seconds(obj.get("timestamp"),
+                                                         msg.get("timestamp"))})
     except OSError:
         return {"session": session_id, "proj": project, "events": [], "days": {}}
     for event in events:
         day = days.setdefault(event["date"], _empty_token_day())
         _add_token_usage(day, event["in"], event["out"], event["cr"], event["cw"],
                          event["reason"], event["cost"], event["model"])
+        if event.get("gen"):
+            _perf_add(day.setdefault("perf", {}), event["model"], event["out"], event["gen"])
         day["hours"][event["hour"]] += token_total(event)
     return {"session": session_id, "sid": session_id, "proj": project,
-            "events": events, "days": days}
+            "events": events, "days": days, "perf_v": 1}
 
 
 def scan_prime_agent(bounds, cache):
@@ -10194,7 +10300,8 @@ def scan_prime_agent(bounds, cache):
             continue
         sig = f"{st.st_mtime_ns}:{st.st_size}"
         entry = fc.get(path)
-        if not isinstance(entry, dict) or entry.get("sig") != sig:
+        # perf_v：旧缓存没有回复计时，升级后重读一次
+        if not isinstance(entry, dict) or entry.get("sig") != sig or entry.get("perf_v") != 1:
             parsed = _parse_prime_session_file(path)
             parsed["sig"] = sig
             fc[path] = parsed
@@ -10849,7 +10956,7 @@ def scan_grok_bot(bounds, cache):
 # ---------- DeepSeek Harness ----------
 # Harness 会为同一次调用写 usage chunk 和最终 message。按 session/turn/step
 # 只保留最终 message；异常中断时再用 usage chunk 兜底。
-_DEEPSEEK_HARNESS_COST_VERSION = 5
+_DEEPSEEK_HARNESS_COST_VERSION = 6
 
 
 def _deepseek_harness_usage_record(item, fallback_model="", fallback_provider="deepseek-official"):
@@ -10967,18 +11074,39 @@ def scan_deepseek_harness(bounds, cache):
         current_model = "deepseek-v4-pro"
         current_provider = "deepseek-official"
         candidates = {}
+        # 每个 step 的请求开始、第一个内容块、流结束时间（毫秒），重试时从重试那一刻重新算
+        timing = {}
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as handle:
                 for line in handle:
                     if '"type"' not in line or not any(value in line for value in (
-                            '"session"', '"request/header"',
-                            '"assistant/chunk"', '"assistant/message"')):
+                            '"session"', '"request/header"', '"step/start"',
+                            '"llm/retry-started"', '"assistant/chunk"', '"assistant/message"')):
                         continue
                     try:
                         item = json.loads(line)
                     except (TypeError, ValueError):
                         continue
                     event_type = item.get("type")
+                    if event_type in ("step/start", "llm/retry-started", "assistant/chunk"):
+                        data = item.get("data") or {}
+                        chunk = (data.get("chunk") or {}) if isinstance(data, dict) else {}
+                        kind = chunk.get("type") if isinstance(chunk, dict) else None
+                        moment = item.get("time")
+                        if (isinstance(data, dict) and isinstance(moment, (int, float))
+                                and (event_type != "assistant/chunk"
+                                     or kind in ("block-start", "finish"))):
+                            step_timing = timing.setdefault(
+                                (data.get("turn"), data.get("step")), {})
+                            if event_type != "assistant/chunk":
+                                step_timing.clear()
+                                step_timing["start"] = moment
+                            elif kind == "block-start":
+                                step_timing.setdefault("first", moment)
+                            else:
+                                step_timing["end"] = moment
+                        if event_type != "assistant/chunk" or kind != "usage":
+                            continue
                     if event_type == "session":
                         session_id = str(item.get("id") or session_id)
                         project = item.get("cwd") or project
@@ -11001,6 +11129,15 @@ def scan_deepseek_harness(bounds, cache):
                         candidates[key] = record
         except OSError:
             continue
+        for (turn, step), record in candidates.items():
+            step_timing = timing.get((turn, step)) or {}
+            start, first = step_timing.get("start"), step_timing.get("first")
+            end = step_timing.get("end") or record["ts"]
+            if start is not None and first is not None and start <= first <= end:
+                record["gen"] = (end - first) / 1000
+                record["ttft"] = (first - start) / 1000
+            elif start is not None and start < end:
+                record["gen"] = (end - start) / 1000
         records = sorted(candidates.values(), key=lambda record: record["ts"])
         fc[path] = {"sig": sig, "records": records, "proj": project, "sid": session_id,
                     "cost_version": _DEEPSEEK_HARNESS_COST_VERSION}
@@ -11022,6 +11159,10 @@ def scan_deepseek_harness(bounds, cache):
                          record["reason"], record["cost"], record["model"],
                          cost_cny=record.get("cost_cny", 0))
         day["hours"][record["hour"]] += token_total(record)
+        if record.get("gen"):
+            for target in (day, ledger_sources[str(entry.get("sid") or path)][record["date"]]):
+                _perf_add(target.setdefault("perf", {}), record["model"],
+                          record["out"] + record["reason"], record["gen"], record.get("ttft"))
         session = str(entry.get("sid") or "unknown")
         sessions.setdefault(record["date"], set()).add(session)
         project = entry.get("proj") or ""
@@ -11060,7 +11201,8 @@ def scan_deepseek_harness(bounds, cache):
 # 每条 assistant 消息有 tokens{input,output,reasoning,cache{read,write}} + cost + modelID。
 # V2（session_message 表）的助手消息角色在行的 type 列，模型是 {id, providerID}
 # 引用，tokens / cost 与 V1 同形。迁移过来的历史两张表都有，同一条消息 ID 相同。
-_OPENCODE_COST_CACHE_VERSION = 3
+# 4：数据库里的每一步附上计时（首字延迟、生成时间）。
+_OPENCODE_COST_CACHE_VERSION = 4
 
 
 def _opencode_db_paths():
@@ -11171,6 +11313,52 @@ def _opencode_database_messages(connection, tables):
                 yield message_id, session_id, created_ms, message
 
 
+def _opencode_step_timing(connection, tables):
+    """message_id → [(生成秒, 首字秒, 输出 token)]，一步一个样本。
+
+    part 表里每一步依次是 step-start、reasoning / text（带 time.start / time.end）、
+    step-finish（带这一步的 token）。请求起点：第一步取消息创建时刻，后续步取上一步
+    结束时刻（中间是工具执行）。只用 json_extract 取这几个字段，不把正文读进内存。
+    """
+    import sqlite3
+    if "part" not in tables or "message" not in tables:
+        return {}
+    try:
+        created = {message_id: value for message_id, value in connection.execute(
+            "SELECT id, json_extract(data, '$.time.created') FROM message "
+            "WHERE json_extract(data, '$.role') = 'assistant'")}
+        rows = connection.execute("""
+            SELECT message_id, time_created, json_extract(data, '$.type'),
+                   json_extract(data, '$.time.start'),
+                   json_extract(data, '$.tokens.output'), json_extract(data, '$.tokens.reasoning')
+            FROM part
+            WHERE json_extract(data, '$.type') IN ('step-start', 'step-finish', 'reasoning', 'text')
+            ORDER BY message_id, time_created""").fetchall()
+    except sqlite3.Error:
+        return {}
+    timing = {}
+    current = request_start = first = None
+    for message_id, written, kind, started, output, reasoning in rows:
+        if message_id != current:
+            current, first = message_id, None
+            request_start = created.get(message_id)
+        if kind == "step-start":
+            first = None
+        elif kind in ("reasoning", "text"):
+            if isinstance(started, (int, float)) and (first is None or started < first):
+                first = started
+        elif kind == "step-finish" and isinstance(written, (int, float)):
+            tokens = int(output or 0) + int(reasoning or 0)
+            if first is not None and written > first:
+                ttft = ((first - request_start) / 1000
+                        if isinstance(request_start, (int, float)) and first >= request_start
+                        else None)
+                timing.setdefault(message_id, []).append(
+                    ((written - first) / 1000, ttft, tokens))
+            request_start, first = written, None
+    return timing
+
+
 def _scan_opencode_database(path, estimate_missing_cost=False):
     import sqlite3
 
@@ -11199,6 +11387,7 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
                         session_projects.setdefault(session_id, directory)
             except sqlite3.Error:
                 pass
+        step_timing = _opencode_step_timing(connection, tables)
         for message_id, session_id, created_ms, message in _opencode_database_messages(
                 connection, tables):
             if message_id and str(message_id) in message_ids:
@@ -11211,6 +11400,10 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
                 message_ids.add(str(message_id))
             day_key = day.pop("date")
             target = days.setdefault(day_key, _empty_token_day())
+            for gen, ttft, tokens in step_timing.get(message_id, ()):
+                _perf_add(target.setdefault("perf", {}),
+                          message.get("modelID") or (message.get("model") or {}).get("id"),
+                          tokens, gen, ttft)
             _add_token_usage(target, day["in"], day["out"], day["cr"], day["cw"],
                              day["reason"], day["cost"], cost_cny=day.get("cost_cny", 0))
             for model, usage in day["models"].items():
@@ -12041,7 +12234,8 @@ def _mimocode_db_paths():
 
 
 # 解析口径版本。加 1 可让旧缓存失效重扫（例如新增了按项目的用量拆分）。
-_MIMOCODE_SCAN_VERSION = 2
+# 3：数据库里的每一步附上计时（首字延迟、生成时间）。
+_MIMOCODE_SCAN_VERSION = 3
 
 
 def scan_mimocode(bounds, cache):
@@ -13995,6 +14189,7 @@ def compute():
             "models": _format_token_models(b.get("models", {}), include_prices=False),
             "tools": b.get("tools", 0),
             "est": int(b.get("est", 0)),
+            "perf": _perf_summary(b.get("perf")),
         })
         return r
 
@@ -14006,7 +14201,7 @@ def compute():
         hit = (b["cr"] / denom * 100) if denom else 0.0
         return {"hit": hit, "in": b["in"], "out": b["out"], "cr": b["cr"], "cw": b["cw"],
                 "reason": b["reason"], "cost": b["cost"], "sessions": b["sessions"],
-                "models": _format_token_models(b["models"])}
+                "models": _format_token_models(b["models"]), "perf": _perf_summary(b.get("perf"))}
 
     def openclaw_range(b):
         denom = b["cr"] + b["cw"] + b["in"]
@@ -14014,7 +14209,7 @@ def compute():
         return {"tasks": b["tasks"], "completed": b["completed"], "failed": b["failed"],
                 "hit": hit, "in": b["in"], "out": b["out"], "cr": b["cr"], "cw": b["cw"],
                 "reason": b["reason"], "cost": b["cost"], "sessions": len(b["sessions"]),
-                "models": _format_token_models(b["models"])}
+                "models": _format_token_models(b["models"]), "perf": _perf_summary(b.get("perf"))}
 
     hranges = {k: hermes_range(hm["ranges"][k]) for k in RANGE_KEYS}
     oranges = {k: openclaw_range(oc["ranges"][k]) for k in RANGE_KEYS}

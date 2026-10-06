@@ -210,3 +210,113 @@ class DurationFieldPerfTests(unittest.TestCase):
         perf = USAGE._perf_summary(result["ranges"]["all"].get("perf"))
         # 两次调用各 1 秒：(500+50) + (200+10) 个 token
         self.assertEqual((perf["n"], perf["tps"]), (2, 380.0))
+
+
+class QoderCliPerfTests(unittest.TestCase):
+    def test_a_reply_runs_from_the_user_row_to_its_last_line(self):
+        from test_qoder_usage import QoderUsageTests
+        case = QoderUsageTests()
+        start = datetime.now().astimezone().replace(microsecond=0) - timedelta(minutes=5)
+        rows = [{"type": "user", "timestamp": start.isoformat(),
+                 "message": {"role": "user", "content": "看看这个"}}]
+        first = case.assistant((start + timedelta(seconds=2)).isoformat(), "m1", "r1",
+                               input_tokens=100, output_tokens=400)
+        last = case.assistant((start + timedelta(seconds=4)).isoformat(), "m1", "r1",
+                              input_tokens=100, output_tokens=400)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "projects"
+            case.write_jsonl(root / "project" / "session.jsonl", rows + [first, last])
+            result, _ = case.scan_cli(root)
+        perf = USAGE._perf_summary(result["ranges"]["all"].get("perf"))
+        self.assertEqual((perf["n"], perf["tps"]), (1, 100.0), "400 token / 用户消息到最后一行的 4 秒")
+
+
+class DeepSeekHarnessPerfTests(unittest.TestCase):
+    def scan(self, events):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project" / "session.jsonl"
+            path.parent.mkdir(parents=True)
+            path.write_text("\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8")
+            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            with mock.patch.object(USAGE, "DEEPSEEK_HARNESS_DIR", tmp), \
+                 mock.patch.object(USAGE, "ledger_reconcile",
+                                   side_effect=lambda _tool, days, sources=None: days):
+                result = USAGE.scan_deepseek_harness(USAGE.range_bounds(), cache)
+        return USAGE._perf_summary(result["ranges"]["all"].get("perf"))
+
+    def step(self, start, retry_at=None):
+        def event(kind, at, **data):
+            return {"type": kind, "time": start + at, "data": {"turn": 1, "step": 1, **data}}
+        usage = {"inputTokens": 100, "outputTokens": 500, "reasoningTokens": 300}
+        events = [event("step/start", 0),
+                  event("assistant/chunk", 800, chunk={"type": "block-start", "index": 0}),
+                  event("assistant/chunk", 900, chunk={"type": "block-start", "index": 1})]
+        if retry_at is not None:
+            events.append(event("llm/retry-started", retry_at))
+            events.append(event("assistant/chunk", retry_at + 1_000,
+                                chunk={"type": "block-start", "index": 0}))
+        end = (retry_at or 0) + 6_000
+        return events + [
+            event("assistant/chunk", end, chunk={"type": "usage", "usage": usage}),
+            event("assistant/chunk", end, chunk={"type": "finish"}),
+            event("assistant/message", end + 20, usage=usage,
+                  message={"source": {"provider": "deepseek-official", "model": "deepseek-v4-pro"}}),
+        ]
+
+    def test_first_block_and_finish_give_ttft_and_generation_time(self):
+        start = int(datetime.now().timestamp() * 1000) - 60_000
+        perf = self.scan(self.step(start))
+        self.assertEqual((perf["n"], perf["tps"]), (1, 96.2), "含推理的 500 token / 首块到 finish 的 5.2 秒")
+        self.assertEqual(perf["models"]["Deepseek V4 Pro"]["n"], 1)
+
+    def test_a_retry_restarts_the_clock(self):
+        start = int(datetime.now().timestamp() * 1000) - 60_000
+        perf = self.scan(self.step(start, retry_at=10_000))
+        self.assertEqual(perf["tps"], 100.0, "重试后首块到 finish 是 5 秒")
+
+
+class LogAndDatabasePerfTests(unittest.TestCase):
+    def test_hermes_reads_api_call_latency_from_agent_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / ".hermes" / "logs"
+            logs.mkdir(parents=True)
+            (logs / "agent.log").write_text(
+                "2026-06-04 18:03:59,497 INFO [s] agent.conversation_loop: API call #1: "
+                "model=grok-4.3 provider=xai-oauth in=17277 out=326 total=17603 latency=5.0s\n"
+                "2026-06-04 18:04:10,000 INFO [s] agent.conversation_loop: API call #2: "
+                "model=grok-4.3 provider=xai-oauth in=17300 out=5 total=17305 latency=1.0s\n",
+                encoding="utf-8")
+            cache = {}
+            with mock.patch.object(USAGE, "HOME", tmp):
+                days = USAGE._hermes_log_perf(cache)
+                with mock.patch.object(USAGE, "_perf_add", side_effect=AssertionError("reparsed")):
+                    USAGE._hermes_log_perf(cache)
+        perf = USAGE._perf_summary(days["2026-06-04"])
+        self.assertEqual((perf["n"], perf["tps"]), (1, 65.2), "太短的回复不算样本")
+
+    def test_pi_stream_seconds_runs_from_request_to_persist(self):
+        self.assertEqual(USAGE._pi_stream_seconds("2026-06-04T10:00:05.500Z",
+                                                  1780567200000), 5.5)
+        self.assertIsNone(USAGE._pi_stream_seconds("2026-06-04T10:00:00.100Z", 1780567200000))
+        self.assertIsNone(USAGE._pi_stream_seconds(None, 1780567200000))
+
+    def test_opencode_steps_restart_after_the_previous_step(self):
+        import sqlite3
+        connection = sqlite3.connect(":memory:")
+        connection.execute("CREATE TABLE message (id TEXT, data TEXT)")
+        connection.execute("CREATE TABLE part (message_id TEXT, time_created INTEGER, data TEXT)")
+        connection.execute("INSERT INTO message VALUES ('m1', ?)",
+                           (json.dumps({"role": "assistant", "time": {"created": 1000}}),))
+        parts = [
+            (1000, {"type": "step-start"}),
+            (3000, {"type": "reasoning", "time": {"start": 3000}}),
+            (3500, {"type": "text", "time": {"start": 3500}}),
+            (7000, {"type": "step-finish", "tokens": {"output": 300, "reasoning": 100}}),
+            (9000, {"type": "step-start"}),
+            (9500, {"type": "text", "time": {"start": 9500}}),
+            (11500, {"type": "step-finish", "tokens": {"output": 200, "reasoning": 0}}),
+        ]
+        connection.executemany("INSERT INTO part VALUES ('m1', ?, ?)",
+                               [(at, json.dumps(data)) for at, data in parts])
+        timing = USAGE._opencode_step_timing(connection, {"message", "part"})
+        self.assertEqual(timing["m1"], [(4.0, 2.0, 400), (2.0, 2.5, 200)])

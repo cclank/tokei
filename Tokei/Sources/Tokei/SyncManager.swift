@@ -372,7 +372,7 @@ final class SyncManager {
             let usage: Usage
             do {
                 let cleanData = try JSONSerialization.data(withJSONObject: cleaned)
-                usage = try JSONDecoder().decode(Usage.self, from: cleanData)
+                usage = try Usage.decode(from: cleanData)
             } catch {
                 issues.append(PeerLoadIssue(file: file, stage: .usage, detail: error.localizedDescription))
                 continue

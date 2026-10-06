@@ -33,15 +33,26 @@ struct ClaudeModelStat: Codable, Identifiable {
 
 /// 平均输出速度（token/秒）与 TTFT 中位数（秒）。采集器按请求计时后汇总；没有样本时整个字段缺省。
 /// o/g/th 是算出它们的累加值（输出 token、生成秒数、TTFT 细分桶直方图），合并多台设备时据此重算。
-struct PerfStat: Codable, Equatable {
-    var tps: Double
-    var ttft: Double?
-    var n: Int
-    var o: Int? = nil
-    var g: Double? = nil
-    var tn: Int? = nil
-    var th: [String: Int]? = nil
-    var models: [String: PerfModelStat]? = nil
+/// 用不可变的引用类型：Usage 里有一百多处 perf，做成值类型会把本来就很大的 Usage 再撑大。
+final class PerfStat: Codable, Equatable {
+    let tps: Double
+    let ttft: Double?
+    let n: Int
+    let o: Int?
+    let g: Double?
+    let tn: Int?
+    let th: [String: Int]?
+    let models: [String: PerfModelStat]?
+
+    init(tps: Double, ttft: Double?, n: Int, o: Int? = nil, g: Double? = nil, tn: Int? = nil,
+         th: [String: Int]? = nil, models: [String: PerfModelStat]? = nil) {
+        self.tps = tps; self.ttft = ttft; self.n = n
+        self.o = o; self.g = g; self.tn = tn; self.th = th; self.models = models
+    }
+
+    static func == (lhs: PerfStat, rhs: PerfStat) -> Bool {
+        lhs.overall == rhs.overall && lhs.models == rhs.models
+    }
 
     var overall: PerfModelStat { .init(tps: tps, ttft: ttft, n: n, o: o, g: g, tn: tn, th: th) }
 
@@ -1077,6 +1088,24 @@ struct DevinStat: Codable {
 /// MiniMax Code 同样是两个互不相干的来源：`ranges` 来自桌面端的本地运行时库，
 /// `quota` 来自用户自愿填写 Token Plan Key 后的联网查询，形状与 Devin 相同。
 typealias MiniMaxStat = DevinStat
+
+/// Usage 是几十 KB 的值类型，编译器展开的解码函数栈帧会超过 GCD 工作线程 512 KB 的栈，
+/// 在后台队列里直接解码会栈溢出崩溃。所有解码统一走这里，放到 16 MB 栈的专用线程上做。
+extension Usage {
+    static func decode(from data: Data) throws -> Usage {
+        final class Box: @unchecked Sendable { var result: Result<Usage, Error>? }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            box.result = Result { try JSONDecoder().decode(Usage.self, from: data) }
+            done.signal()
+        }
+        thread.stackSize = 16 << 20
+        thread.start()
+        done.wait()
+        return try box.result!.get()
+    }
+}
 
 struct Usage: Codable {
     var claude: ClaudeStat

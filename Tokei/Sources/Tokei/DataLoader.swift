@@ -513,7 +513,7 @@ final class DataLoader {
                 raw["claude"] = claude
             }
             guard let cleaned = try? JSONSerialization.data(withJSONObject: raw),
-                  let usage = try? JSONDecoder().decode(Usage.self, from: cleaned)
+                  let usage = try? Usage.decode(from: cleaned)
             else { continue }
             return usage
         }
@@ -565,7 +565,7 @@ final class DataLoader {
                 raw["claude"] = claude
             }
             let cleaned = try JSONSerialization.data(withJSONObject: raw)
-            let usage = try JSONDecoder().decode(Usage.self, from: cleaned)
+            let usage = try Usage.decode(from: cleaned)
             persistCachedUsage(cleaned)
             return usage
         } catch {

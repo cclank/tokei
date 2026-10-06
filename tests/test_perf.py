@@ -400,3 +400,13 @@ class PerfStatMergeSwiftTests(unittest.TestCase):
                              sync, re.S)
             self.assertIsNotNone(body, name)
             self.assertIn("PerfStat.merged(d.perf, s.perf)", body.group(0), name)
+
+
+class UsageDecodeStackTests(unittest.TestCase):
+    def test_app_decodes_usage_only_on_the_big_stack_thread(self):
+        # Usage 的解码栈帧会超过 GCD 工作线程 512 KB 的栈：在后台队列里直接解码会崩溃
+        root = Path(__file__).resolve().parents[1] / "Tokei/Sources/Tokei"
+        offenders = [path.name for path in root.glob("*.swift")
+                     if path.name != "Model.swift"
+                     and "decode(Usage.self" in path.read_text(encoding="utf-8")]
+        self.assertEqual(offenders, [], "请改用 Usage.decode(from:)")

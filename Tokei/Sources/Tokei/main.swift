@@ -630,7 +630,7 @@ enum Shot {
            CommandLine.arguments.count > idx + 1 {
             let url = URL(fileURLWithPath: CommandLine.arguments[idx + 1])
             do {
-                usage = try JSONDecoder().decode(Usage.self, from: Data(contentsOf: url))
+                usage = try Usage.decode(from: Data(contentsOf: url))
             } catch {
                 fputs("Tokei --usage: \(error)\n", stderr)
             }

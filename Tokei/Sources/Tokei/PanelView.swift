@@ -188,7 +188,12 @@ struct PanelView: View {
                         .id(appLanguage)
                 } else {
                     // 换语言时整棵内容树重建：各页面是独立视图，输入不变时不会自己重算文案。
-                    ScrollView(.vertical, showsIndicators: false) { panelContent.id(appLanguage) }
+                    // 至少撑满画布：面板按最长的页签定高，内容短的页签里页脚贴到底边。
+                    ScrollView(.vertical, showsIndicators: false) {
+                        panelContent
+                            .frame(minHeight: maxPanelHeight, alignment: .top)
+                            .id(appLanguage)
+                    }
                         .frame(width: w)
                         .frame(maxHeight: maxPanelHeight)
                         .background(Theme.bg)
@@ -262,7 +267,12 @@ struct PanelView: View {
                 }
                 .frame(height: 90)
             }
-            footer
+            // 内容比面板短时由上面撑满画布，空出来的高度都给这个 Spacer，页脚贴到底边；
+            // 内容长时它高度为 0，页脚照旧跟在内容末尾。量尺寸时不撑，不影响自然高度。
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                footer
+            }
         }
         .padding(Theme.outerPad)
     }

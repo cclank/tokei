@@ -913,7 +913,7 @@ struct PanelView: View {
                         .init("bolt.fill", L("缓存"), Fmt.human(r.cached)),
                     ]
                     if r.thoughts > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.thoughts))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.gemini)
                 if !r.models.isEmpty {
                     let geminiRows = r.models.map { m in
@@ -1276,6 +1276,8 @@ struct PanelView: View {
                     if let response = r.response, response > 0 {
                         items.append(.init("speedometer", L("响应"), String(format: "%.1fs", Double(response) / 1000)))
                     }
+                    // 首字已经有 Grok 自己的统计，这里只补输出速度
+                    items += perfMetrics(r.perf, includeTTFT: false)
                     if (r.errors ?? 0) > 0 {
                         items.append(.init("exclamationmark.triangle", L("错误"), "\(r.errors ?? 0)"))
                     }
@@ -1287,7 +1289,7 @@ struct PanelView: View {
                 metricGrid([], hit: r.usage_available ? r.hit : 0,
                            extra: grokMetrics, tint: Theme.grok)
                 if r.usage_available && !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: $grokModelsOpen, tint: Theme.grok)
+                    tokenModelDisclosure(r.models, open: $grokModelsOpen, tint: Theme.grok, perf: r.perf)
                 } else if let model = g.model, !model.isEmpty {
                     modelBadge(model, tint: Theme.grok)
                 }
@@ -1908,7 +1910,7 @@ struct PanelView: View {
     /// 首字取中位数；拿不到首字时间的工具速度含等待（端到端）。
     func perfMetrics(_ perf: PerfStat?, includeTTFT: Bool = true) -> [Metric] {
         guard let perf, perf.n > 0 else { return [] }
-        var items: [Metric] = [.init("speedometer", L("输出速度"), Fmt.tps(perf.tps))]
+        var items: [Metric] = [.init("gauge.medium", L("输出速度"), Fmt.tps(perf.tps))]
         if includeTTFT, let ttft = perf.ttft {
             items.append(.init("timer", L("首字"), Fmt.seconds(ttft)))
         }

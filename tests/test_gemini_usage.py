@@ -137,15 +137,24 @@ class GeminiUsageTests(unittest.TestCase):
                 return encode_varint(key) + encode_varint(len(val)) + val
             raise NotImplementedError
 
-        def make_gen_step(model, inp, out, cached, thoughts, ts_sec):
+        def duration(seconds, nanos):
+            return encode_proto_field(1, 0, seconds) + encode_proto_field(2, 0, nanos)
+
+        def make_gen_step(model, inp, out, cached, thoughts, ts_sec, with_response=False):
+            # 实测字段 3 是含思考的总输出（= 9 思考 + 10 回复）；新版还带 10
             tok_sub = (encode_proto_field(2, 0, inp) +
-                       encode_proto_field(3, 0, out) +
+                       encode_proto_field(3, 0, out + thoughts) +
                        encode_proto_field(5, 0, cached) +
                        encode_proto_field(9, 0, thoughts))
+            if with_response:
+                tok_sub += encode_proto_field(10, 0, out)
             time_sub = encode_proto_field(4, 2, encode_proto_field(1, 0, ts_sec))
             sub1 = (encode_proto_field(19, 2, model) +
                     encode_proto_field(4, 2, tok_sub) +
-                    encode_proto_field(9, 2, time_sub))
+                    encode_proto_field(9, 2, time_sub) +
+                    # 首字 2.5 秒、流式 0.5 秒
+                    encode_proto_field(11, 2, duration(2, 500_000_000)) +
+                    encode_proto_field(12, 2, duration(0, 500_000_000)))
             return encode_proto_field(1, 2, sub1)
 
         import sqlite3
@@ -156,7 +165,8 @@ class GeminiUsageTests(unittest.TestCase):
 
             now_sec = int(datetime.now().astimezone().timestamp())
             step0 = make_gen_step("gemini-3.7-flash", inp=200, out=50, cached=800, thoughts=20, ts_sec=now_sec)
-            step1 = make_gen_step("gemini-3.7-flash", inp=500, out=100, cached=1200, thoughts=40, ts_sec=now_sec + 10)
+            step1 = make_gen_step("gemini-3.7-flash", inp=500, out=100, cached=1200, thoughts=40,
+                                  ts_sec=now_sec + 10, with_response=True)
 
             conn = sqlite3.connect(str(db_path))
             conn.execute("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER)")
@@ -172,8 +182,10 @@ class GeminiUsageTests(unittest.TestCase):
             self.assertEqual(len(parsed["events"]), 2)
             self.assertEqual(parsed["events"][0]["tokens"]["input"], 1000)  # 200 + 800 cached
             self.assertEqual(parsed["events"][0]["tokens"]["cached"], 800)
-            self.assertEqual(parsed["events"][0]["tokens"]["output"], 50)
+            self.assertEqual(parsed["events"][0]["tokens"]["output"], 50, "输出不含思考，思考单独计")
             self.assertEqual(parsed["events"][0]["tokens"]["thoughts"], 20)
+            self.assertEqual(parsed["events"][1]["tokens"]["output"], 100)
+            self.assertEqual(parsed["events"][0]["timing"], [2.5, 0.5])
             self.assertEqual(parsed["events"][1]["tokens"]["input"], 1700)  # 500 + 1200 cached
 
             # Test full scan_gemini integration and cache
@@ -192,6 +204,8 @@ class GeminiUsageTests(unittest.TestCase):
             self.assertEqual(usage["cached"], 2000)  # 800 + 1200
             self.assertEqual(usage["out"], 150)  # 50 + 100
             self.assertEqual(usage["thoughts"], 60)  # 20 + 40
+            perf = USAGE._perf_summary(usage.get("perf"))
+            self.assertEqual(perf["tps"], 150.0, "回复 token / 流式时长：150 / 1 秒")
             self.assertEqual(usage["sessions"], {"session-12345"})
             self.assertEqual(cached_res["ranges"]["all"]["in"], 2700)
             self.assertTrue(cache["_dirty"])

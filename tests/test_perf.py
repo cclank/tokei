@@ -170,3 +170,43 @@ class ClaudePerfTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DurationFieldPerfTests(unittest.TestCase):
+    """日志自带耗时字段的工具：只能算端到端（含首字等待）。"""
+
+    def test_zcode_uses_the_call_start_and_end(self):
+        import sqlite3
+        now_ms = int(datetime.now().timestamp() * 1000)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "db.sqlite"
+            connection = sqlite3.connect(db)
+            connection.execute("""CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT,
+                input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
+                cache_creation_input_tokens INTEGER, cache_read_input_tokens INTEGER,
+                started_at INTEGER, completed_at INTEGER)""")
+            connection.execute("INSERT INTO model_usage VALUES (?,?,?,?,?,?,?,?,?,?)",
+                               ("r1", "s", "GLM-5.2", 100, 400, 100, 0, 0, now_ms - 4000, now_ms))
+            connection.commit()
+            connection.close()
+            days = USAGE._scan_zcode_database(str(db))
+        perf = USAGE._perf_summary(next(iter(days.values()))["perf"])
+        self.assertEqual(perf["tps"], 100.0, "输出 400（已含推理）/ 4 秒")
+
+    def test_qwen_request_carries_its_api_duration(self):
+        from test_qwencode import request_record
+        record = request_record("r1", "s1", 1000, output=300, thoughts=100)
+        record["apiDurationMs"] = 2000
+        entry = USAGE._qwen_request_entry(record)
+        self.assertEqual(entry["gen"], 2.0)
+
+    def test_muse_uses_the_model_call_duration(self):
+        import test_musecode as muse
+        case = muse.MuseCodeScanTests()
+        with tempfile.TemporaryDirectory() as tmp:
+            case.create_session(tmp)
+            result, _ = case.scan(tmp)
+        perf = USAGE._perf_summary(result["ranges"]["all"].get("perf"))
+        # 两次调用各 1 秒：(500+50) + (200+10) 个 token
+        self.assertEqual((perf["n"], perf["tps"]), (2, 380.0))

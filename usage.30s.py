@@ -1943,6 +1943,8 @@ def _merge_token_day(bucket, day, session=None):
     _add_token_usage(bucket, day.get("in", 0), day.get("out", 0), day.get("cr", 0),
                      day.get("cw", 0), day.get("reason", 0), day.get("cost", 0),
                      credits=day.get("credits", 0), cost_cny=day.get("cost_cny", 0))
+    if day.get("perf"):
+        _perf_merge(bucket.setdefault("perf", {}), day["perf"])
     for model, mv in day.get("models", {}).items():
         _add_model_usage(bucket["models"], model, mv.get("in", 0), mv.get("out", 0),
                          mv.get("cr", 0), mv.get("cw", 0), mv.get("reason", 0),
@@ -1955,6 +1957,8 @@ def _merge_live_token_day(agg, day):
     _add_token_usage(agg, day.get("in", 0), day.get("out", 0), day.get("cr", 0),
                      day.get("cw", 0), day.get("reason", 0), day.get("cost", 0),
                      credits=day.get("credits", 0), cost_cny=day.get("cost_cny", 0))
+    if day.get("perf"):
+        _perf_merge(agg.setdefault("perf", {}), day["perf"])
     for model, mv in (day.get("models") or {}).items():
         _add_model_usage(agg["models"], model, mv.get("in", 0), mv.get("out", 0),
                          mv.get("cr", 0), mv.get("cw", 0), mv.get("reason", 0),
@@ -4767,19 +4771,43 @@ def _parse_proto_fields(data):
 
 
 # gen_metadata.data 的字段号是逆向出来的,没有官方 schema:
-# 1 = 单次生成记录,其中 19=模型名, 4={2:输入(不含缓存), 3:输出, 5:缓存读, 9:思考},
+# 1 = 单次生成记录,其中 19=模型名,
+#     4={2:输入(不含缓存), 3:输出(含思考), 5:缓存读, 9:思考, 10:回复},本机 38/38 条满足 3 = 9 + 10,
+#     11=首字延迟、12=首字到结束的流式时长(google.protobuf.Duration{1:秒, 2:纳秒}),
 # 9→4→1 = 生成开始时间(秒)。Google 一改编号这里就会静默解出错数,所以下面做了上界校验。
+# 思考是在首字之前、不外露地生成的,所以速度 = 回复 token / 流式时长。
 _ANTIGRAVITY_MAX_TOKENS = 100_000_000  # 单次生成的 token 上界,超了就是解析错位
 _ANTIGRAVITY_MIN_TS = 1_577_836_800    # 2020-01-01,更早的时间戳必然是错位
 
 
+def _proto_duration_seconds(data):
+    seconds = nanos = 0
+    for fn, wt, value in _parse_proto_fields(data):
+        if wt == 0 and fn == 1:
+            seconds = value
+        elif wt == 0 and fn == 2:
+            nanos = value
+    return seconds + nanos / 1e9
+
+
 def _antigravity_gen_step(record, fallback_ts=None):
-    """解一条生成记录 → (model, input, output, cached, thoughts, ts_sec);解不出返回 None。"""
+    """解一条生成记录 → (model, input, output, cached, thoughts, ts_sec, timing);解不出返回 None。
+
+    output 只算回复部分（字段 4.3 已含思考，再加 thoughts 会算两遍）；
+    timing = (首字延迟秒, 流式秒)，记录里没有就是 None。"""
     model = "unknown"
     inp = out = cached = thoughts = 0
+    response = None
     ts_sec = None
+    ttft = stream = None
     for sfn, swt, sval in _parse_proto_fields(record):
-        if sfn == 19 and swt == 2:
+        if sfn in (11, 12) and swt == 2:
+            value = _proto_duration_seconds(sval)
+            if sfn == 11:
+                ttft = value
+            else:
+                stream = value
+        elif sfn == 19 and swt == 2:
             try:
                 model = sval.decode("utf-8")
             except UnicodeDecodeError:
@@ -4796,6 +4824,8 @@ def _antigravity_gen_step(record, fallback_ts=None):
                     cached = tval
                 elif tfn == 9:
                     thoughts = tval
+                elif tfn == 10:
+                    response = tval
         elif sfn == 9 and swt == 2:
             for tfn, twt, tval in _parse_proto_fields(sval):
                 if tfn == 4 and twt == 2:
@@ -4811,7 +4841,9 @@ def _antigravity_gen_step(record, fallback_ts=None):
         return None
     if not model or len(model) > 120 or not model.isprintable():
         model = "unknown"
-    return model, inp, out, cached, thoughts, ts_sec
+    out = response if response is not None else max(out - thoughts, 0)
+    timing = (ttft, stream) if ttft is not None and stream is not None else None
+    return model, inp, out, cached, thoughts, ts_sec, timing
 
 
 def _decode_packed_varints(data):
@@ -4883,11 +4915,12 @@ def _load_antigravity_db(path):
                 step = None
             if step is None:
                 continue
-            model, inp, out, cached, thoughts, ts_sec = step
+            model, inp, out, cached, thoughts, ts_sec, timing = step
             iso_ts = datetime.fromtimestamp(ts_sec, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             if iso_ts > max_ts:
                 max_ts = iso_ts
             events.append({
+                "timing": list(timing) if timing else None,
                 "id": f"{os.path.basename(path)}:{idx}:{record_index}",
                 "timestamp": iso_ts,
                 "model": model,
@@ -5006,6 +5039,11 @@ def _load_gemini_usage_file(path):
     }
 
 
+# 1：Antigravity 的输出不再重复计入思考 token，并带上首字延迟与流式时长。
+# 账本按「取大」合并，修正后更小的数要靠版本号才能替换掉旧记录。
+_GEMINI_PARSE_VERSION = 1
+
+
 def scan_gemini(bounds, cache):
     ledger_touch("gemini")
     fc = cache.setdefault("gemini", {})
@@ -5027,11 +5065,12 @@ def scan_gemini(bounds, cache):
         signature = (_sqlite_signature(path) if path.endswith(".db")
                      else f"{stat.st_mtime_ns}:{stat.st_size}")
         entry = fc.get(path)
-        if entry and entry.get("sig") == signature:
+        if entry and entry.get("sig") == signature and entry.get("v") == _GEMINI_PARSE_VERSION:
             continue
         parsed = _load_gemini_usage_file(path)
         if parsed is None:
             continue
+        parsed["v"] = _GEMINI_PARSE_VERSION
         parsed["sig"] = signature
         parsed["mtime"] = stat.st_mtime_ns
         fc[path] = parsed
@@ -5069,7 +5108,11 @@ def scan_gemini(bounds, cache):
             day_key = dt.date().isoformat()
             day = days.setdefault(
                 day_key, {"in": 0, "out": 0, "cached": 0, "thoughts": 0,
-                          "cost": 0.0, "models": {}, "sessions": set(), "hours": [0] * 24})
+                          "cost": 0.0, "models": {}, "sessions": set(), "hours": [0] * 24,
+                          "_ledger_version": _GEMINI_PARSE_VERSION})
+            timing = event.get("timing")
+            if timing:
+                _perf_add(day.setdefault("perf", {}), model, out, timing[1], timing[0])
             day["in"] += inp; day["out"] += out; day["cached"] += cached
             day["thoughts"] += thoughts; day["cost"] += cost; day["sessions"].add(sid)
             day["hours"][dt.hour] += inp + out + thoughts
@@ -5101,6 +5144,8 @@ def scan_gemini(bounds, cache):
             bucket["in"] += day.get("in", 0); bucket["out"] += day.get("out", 0)
             bucket["cached"] += day.get("cached", 0)
             bucket["thoughts"] += day.get("thoughts", 0); bucket["cost"] += day.get("cost", 0)
+            if day.get("perf"):
+                _perf_merge(bucket.setdefault("perf", {}), day["perf"])
             for model, usage in (day.get("models") or {}).items():
                 model_usage = bucket["models"].setdefault(
                     model, {"in": 0, "out": 0, "cached": 0,
@@ -5252,9 +5297,15 @@ def _grok_usage_record(obj):
     cached = min(cached, prompt)
     reasoning = min(reasoning, completion)
     record_id = f"{sid}:{ts}:{loop_index}:{attempts}:{prompt}:{cached}:{completion}:{reasoning}"
-    return {"id": record_id, "ts": ts, "sid": sid,
-            "in": prompt - cached, "cr": cached,
-            "out": completion - reasoning, "reason": reasoning}
+    record = {"id": record_id, "ts": ts, "sid": sid,
+              "in": prompt - cached, "cr": cached,
+              "out": completion - reasoning, "reason": reasoning}
+    # 这次推理的总耗时（发出请求到结束）。Grok 自带的 ttft_ms 和客户端实际收到第一段的
+    # 时刻对不上、含义不明，所以不拿它拆首字，只算端到端速度。
+    elapsed = ctx.get("model_elapsed_ms")
+    if isinstance(elapsed, (int, float)) and elapsed > 0:
+        record["gen"] = round(elapsed / 1000, 3)
+    return record
 
 
 def _grok_usage_cost(record, model):
@@ -5275,9 +5326,13 @@ def _grok_usage_cost(record, model):
     return cost
 
 
+# 1：记录附上推理耗时，升级后整份重读一次（文件只有几 MB）。
+_GROK_USAGE_VERSION = 1
+
+
 def _load_grok_usage_records(cache):
     old = cache.get("grok_usage", {})
-    if not isinstance(old, dict):
+    if not isinstance(old, dict) or old.get("version") != _GROK_USAGE_VERSION:
         old = {}
     try:
         stat = os.stat(GROK_LOG)
@@ -5326,6 +5381,7 @@ def _load_grok_usage_records(cache):
         return records
 
     updated = {
+        "version": _GROK_USAGE_VERSION,
         "sig": signature,
         "file_id": file_id,
         "parsed_size": complete_offset,
@@ -5358,6 +5414,10 @@ def _grok_usage_days(records, sessions, latest_model):
         cost = _grok_usage_cost(record, model)
         _add_token_usage(day, record.get("in", 0), record.get("out", 0),
                          record.get("cr", 0), 0, record.get("reason", 0), cost, model)
+        if record.get("gen"):
+            _perf_add(day.setdefault("perf", {}), model,
+                      int(record.get("out", 0) or 0) + int(record.get("reason", 0) or 0),
+                      record["gen"])
         day["tokens"] += amount
         day["calls"] += 1
         if sid:
@@ -8424,6 +8484,8 @@ def scan_grok(bounds, cache=None):
                 _add_model_usage(bucket["models"], model, usage.get("in", 0),
                                  usage.get("out", 0), usage.get("cr", 0), 0,
                                  usage.get("reason", 0), usage.get("cost", 0))
+            if day.get("perf"):
+                _perf_merge(bucket.setdefault("perf", {}), day["perf"])
             bucket["usage_calls"] += int(day.get("calls", 0) or 0)
     return {"ranges": B, "model": latest_model, "days": usage_days}
 
@@ -10208,7 +10270,8 @@ def scan_prime_agent(bounds, cache):
 # 3：没有公开价的模型不再按 Opus 兜底价估美元（与 CodeBuddy 一致）。
 # 4：不带厂商前缀的模型名（Hy4 preview）按名字到价目表里查价。
 # 5：价目表里没有的沿用同一版本线上一个版本的价。
-_WORKBUDDY_PARSER_VERSION = 5
+# 6：带用量的记录附上端到端耗时（从上一个用户消息或工具结果算起）。
+_WORKBUDDY_PARSER_VERSION = 6
 
 
 def _workbuddy_number(obj, *keys):
@@ -10394,6 +10457,68 @@ def _iter_workbuddy_records(file_cache):
         yield path, entry, record
 
 
+# 运行日志里每个请求都有：
+#   First meaningful token received: agent=…, requestId=<id>, ttft=<N>ms
+#   Stream completed: agent=…, requestId=<id>, chunks=…, bytes=…, elapsed=<N>ms
+# requestId 就是会话记录里的 providerData.messageId。两个时长都从发出请求算起。
+_WORKBUDDY_LOG_TTFT = re.compile(r"First meaningful token received: [^\n]*?requestId=([0-9a-f]+), ttft=(\d+)ms")
+_WORKBUDDY_LOG_DONE = re.compile(r"Stream completed: [^\n]*?requestId=([0-9a-f]+),[^\n]*?elapsed=(\d+)ms")
+_WORKBUDDY_TRIGGER = re.compile(
+    r'"type"\s*:\s*"function_call_result"|"role"\s*:\s*"user"')
+_WORKBUDDY_LINE_TIME = re.compile(r'"timestamp"\s*:\s*"?([0-9][0-9T:.+\-Z]*)"?')
+
+
+def _workbuddy_epoch(value):
+    """会话记录的 timestamp：毫秒字符串或 ISO。返回秒。"""
+    text = str(value or "").strip()
+    if text.isdigit():
+        number = int(text)
+        return number / 1000 if number > 10 ** 11 else float(number)
+    dt = parse_ts(text)
+    return dt.timestamp() if dt else None
+
+
+def _workbuddy_log_timing(cache, tool_key, root):
+    """requestId → (首字 ms, 流式总耗时 ms)。日志按文件签名缓存，没变的不重读。"""
+    log_root = os.path.join(os.path.dirname(root), "logs")
+    store = cache.setdefault(tool_key + "_logs", {})
+    files = (set(glob.glob(os.path.join(log_root, "**", "*.log"), recursive=True))
+             if os.path.isdir(log_root) else set())
+    for path in set(store) - files:
+        store.pop(path, None)
+        cache["_dirty"] = True
+    for path in files:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        sig = f"{st.st_mtime_ns}:{st.st_size}"
+        if isinstance(store.get(path), dict) and store[path].get("sig") == sig:
+            continue
+        ttft, done = {}, {}
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    if "requestId=" not in line:
+                        continue
+                    match = _WORKBUDDY_LOG_TTFT.search(line)
+                    if match:
+                        ttft[match.group(1)] = int(match.group(2))
+                        continue
+                    match = _WORKBUDDY_LOG_DONE.search(line)
+                    if match:
+                        done[match.group(1)] = int(match.group(2))
+        except OSError:
+            continue
+        store[path] = {"sig": sig, "timing": {rid: [ttft[rid], done[rid]]
+                                              for rid in ttft if rid in done}}
+        cache["_dirty"] = True
+    timing = {}
+    for entry in store.values():
+        timing.update(entry.get("timing") or {})
+    return timing
+
+
 def _scan_workbuddy_root(bounds, cache, root, tool_key):
     if tool_key in _UNPRICED_COST_TOOLS:
         _prepare_unpriced_cost_ledger(tool_key)
@@ -10418,10 +10543,15 @@ def _scan_workbuddy_root(bounds, cache, root, tool_key):
         records = []
         project = None
         session_id = os.path.splitext(os.path.basename(path))[0]
+        trigger = None   # 最近一个用户消息 / 工具结果写入的时刻：下一次生成从这里开始
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as fh:
                 for line_no, line in enumerate(fh, 1):
                     if '"usage"' not in line and '"cwd"' not in line:
+                        head = line[:600]
+                        if _WORKBUDDY_TRIGGER.search(head):
+                            stamp = _WORKBUDDY_LINE_TIME.search(head)
+                            trigger = _workbuddy_epoch(stamp.group(1)) if stamp else trigger
                         continue
                     try:
                         item = json.loads(line)
@@ -10429,10 +10559,16 @@ def _scan_workbuddy_root(bounds, cache, root, tool_key):
                         continue
                     project = item.get("cwd") or project
                     session_id = item.get("sessionId") or session_id
+                    if item.get("type") == "function_call_result" or (
+                            item.get("type") == "message" and item.get("role") == "user"):
+                        trigger = _workbuddy_epoch(item.get("timestamp")) or trigger
                     record = _workbuddy_usage_record(
                         item, model_id_first=tool_key == "codebuddy")
                     if record is None:
                         continue
+                    if trigger is not None and record.get("ts", 0) > trigger:
+                        record["e2e"] = round(record["ts"] - trigger, 3)
+                        trigger = None
                     record_session = str(item.get("sessionId") or session_id)
                     dedup_id = record.get("message_id") or record["item_id"]
                     if tool_key == "codebuddy" and record.get("message_id"):
@@ -10461,12 +10597,20 @@ def _scan_workbuddy_root(bounds, cache, root, tool_key):
     ledger_sources = {}
     sessions = {}
     day_projects = {}
+    log_timing = _workbuddy_log_timing(cache, tool_key, root)
     for path, entry, record in _iter_workbuddy_records(fc):
-        _ledger_add_record_source(ledger_sources, record.get("session") or entry.get("sid") or path,
-                                  record["date"], record, record.get("hour"))
+        identity = record.get("session") or entry.get("sid") or path
+        _ledger_add_record_source(ledger_sources, identity, record["date"], record, record.get("hour"))
         day = days.setdefault(record["date"], _empty_token_day())
         _add_token_usage(day, record["in"], record["out"], record["cr"], record["cw"],
                          0, record["cost"], record["model"], credits=record.get("credits", 0))
+        # 运行日志里有精确的首字和总耗时就用它，日志被清掉了才退回会话记录的端到端
+        timing = log_timing.get(record.get("message_id") or "")
+        sample = ((timing[1] - timing[0]) / 1000, timing[0] / 1000) if timing \
+            else ((record["e2e"], None) if record.get("e2e") else None)
+        if sample:
+            for target in (day, ledger_sources[str(identity)][record["date"]]):
+                _perf_add(target.setdefault("perf", {}), record["model"], record["out"], *sample)
         sessions.setdefault(record["date"], set()).add(record.get("session") or "unknown")
         proj_name = os.path.basename((entry.get("proj") or "").rstrip("/"))
         if proj_name:
@@ -11272,6 +11416,10 @@ def _scan_zcode_database(path):
             day = days.setdefault(day_key, _empty_token_day())
             _add_token_usage(day, fresh_input, visible_output, cache_read, cache_write,
                              reasoning, cost, display_model)
+            # 每次调用的起止时刻（毫秒）：端到端速度，含首字等待
+            if number(completed_at) > number(started_at) > 0:
+                _perf_add(day.setdefault("perf", {}), display_model, output_total,
+                          (number(completed_at) - number(started_at)) / 1000)
             day["hours"][created.hour] += fresh_input + output_total + cache_read + cache_write
             sessions.setdefault(day_key, set()).add(str(session_id or row_id or "unknown"))
     finally:
@@ -11294,8 +11442,9 @@ def scan_zcode(bounds, cache):
     cache_key = "db:" + os.path.realpath(ZCODE_DB)
     signature = _sqlite_signature(ZCODE_DB)
     entry = fc.get(cache_key)
-    if not entry or entry.get("sig") != signature or entry.get("version") != 1:
-        entry = {"sig": signature, "days": _scan_zcode_database(ZCODE_DB), "version": 1}
+    # 2：附上每次调用的计时
+    if not entry or entry.get("sig") != signature or entry.get("version") != 2:
+        entry = {"sig": signature, "days": _scan_zcode_database(ZCODE_DB), "version": 2}
         fc.clear()
         fc[cache_key] = entry
         cache["_dirty"] = True
@@ -11326,7 +11475,8 @@ def scan_zcode(bounds, cache):
 # 计量口径版本。改动解析口径时 +1：账本按 _cost_version 取新不取大，
 # 否则被高水位规则记下的旧数（例如兄弟节点翻倍那版）会一直压住修正后的值。
 # 同一个常量也用作扫描缓存的版本，两边一起失效。
-_DEVIN_COST_VERSION = 3
+# 4：附上每次回复的计时（首字延迟、生成时间）。
+_DEVIN_COST_VERSION = 4
 
 
 def _devin_cli_db_path():
@@ -11453,6 +11603,12 @@ def _scan_devin_cli_database(path):
             day["_cost_version"] = _DEVIN_COST_VERSION
             _add_token_usage(day, input_total, output_total, cache_read, cache_write,
                              0, cost, display_model)
+            # Devin 自己记了首字延迟和总耗时（tokens_per_sec 正是按这两个算的）
+            ttft_ms = metrics.get("ttft_ms")
+            total_ms = metrics.get("total_time_ms")
+            if isinstance(ttft_ms, (int, float)) and isinstance(total_ms, (int, float)):
+                _perf_add(day.setdefault("perf", {}), display_model, output_total,
+                          (total_ms - ttft_ms) / 1000, ttft_ms / 1000)
             proj_path = session_projects.get(session_id)
             if proj_path:
                 by_project = day.setdefault("projects", {})
@@ -11519,7 +11675,8 @@ def scan_devin(bounds, cache):
 #
 # 日志会被轮转删掉，所以对上号的结果按行号区间压缩存进扫描缓存（runs），
 # 日志没了模型也不丢；还没等到库里那一行的 turn 暂存在 pending 里。
-_MINIMAX_SCAN_VERSION = 1
+# 2：附上每轮回复的计时（首字延迟、生成时间）。
+_MINIMAX_SCAN_VERSION = 2
 _MINIMAX_LOG_MARKER = b"llm_response_identifiers"
 _MINIMAX_PENDING_TTL = 2 * 24 * 3600
 
@@ -11611,6 +11768,37 @@ def _minimax_run_lookup(runs, through):
     return lookup
 
 
+def _minimax_turn_timing(connection, tables):
+    """turn_id → (回复写入时刻 ms, 生成耗时 ms, 请求总耗时 ms)。
+
+    只认一轮里只有一条助手回复的：一轮里调了好几次模型（中间夹着工具），
+    用量是整轮合计，拿写入时刻减请求时刻会把工具时间也算进去。
+    """
+    import sqlite3
+    if "local_runtime_message_rows" not in tables:
+        return {}
+    columns = {row[1] for row in connection.execute(
+        "PRAGMA table_info(local_runtime_message_rows)")}
+    if not {"role", "turn_id", "created_at_ms", "data_json"} <= columns:
+        return {}
+    timing, counts = {}, {}
+    try:
+        for turn_id, created_ms, decode_ms, request_ms in connection.execute("""
+                SELECT turn_id, created_at_ms,
+                       json_extract(data_json, '$.usage.decode_duration_ms'),
+                       json_extract(data_json, '$.usage.request_duration_ms')
+                FROM local_runtime_message_rows WHERE role = 'assistant'"""):
+            if not turn_id:
+                continue
+            counts[turn_id] = counts.get(turn_id, 0) + 1
+            timing[turn_id] = (created_ms if isinstance(created_ms, (int, float)) else None,
+                               decode_ms if isinstance(decode_ms, (int, float)) else None,
+                               request_ms if isinstance(request_ms, (int, float)) else None)
+    except sqlite3.Error:
+        return {}
+    return {turn: value for turn, value in timing.items() if counts[turn] == 1}
+
+
 def _scan_minimax_database(path, pending, runs, through):
     """返回 (days, 新的 runs, 新的 through, 本轮对上的 turn_id)。"""
     import sqlite3
@@ -11663,6 +11851,7 @@ def _scan_minimax_database(path, pending, runs, through):
             FROM local_runtime_token_usage
             ORDER BY id ASC
         """).fetchall()
+        turn_timing = _minimax_turn_timing(connection, tables)
     finally:
         connection.close()
 
@@ -11729,6 +11918,17 @@ def _scan_minimax_database(path, pending, runs, through):
         day = days.setdefault(day_key, _empty_token_day())
         day["_cost_version"] = _MINIMAX_SCAN_VERSION
         _add_token_usage(day, inp, out, cache_read, cache_write, reason, cost, display_model)
+        timing = turn_timing.get(row[2])
+        if timing:
+            end_ms, decode_ms, request_ms = timing
+            if decode_ms and request_ms and request_ms >= decode_ms:
+                # 新版客户端直接记了生成耗时和请求总耗时
+                _perf_add(day.setdefault("perf", {}), display_model, out + reason,
+                          decode_ms / 1000, (request_ms - decode_ms) / 1000)
+            elif end_ms and isinstance(ts, (int, float)) and end_ms > ts:
+                # 旧版只有回复写入时间：从用量行的请求时刻算起，端到端
+                _perf_add(day.setdefault("perf", {}), display_model, out + reason,
+                          (end_ms - ts) / 1000)
         project = session_projects.get(session_id)
         if project:
             bucket = day.setdefault("projects", {}).setdefault(
@@ -11969,7 +12169,7 @@ def _qwen_request_entry(record):
     inp, out, cached, reason, cost = _qwen_usage_parts(model, record)
     models = {}
     _add_model_usage(models, model, inp, out, cached, 0, reason, cost)
-    return {
+    entry = {
         "date": day_str,
         "hour": dt.hour if dt else None,
         "in": inp,
@@ -11981,6 +12181,12 @@ def _qwen_request_entry(record):
         "session": session,
         "models": models,
     }
+    # 这次 API 调用的总耗时：端到端速度，含首字等待
+    duration = _qwen_number(record.get("apiDurationMs"))
+    if duration > 0:
+        entry["gen"] = round(duration / 1000, 3)
+        entry["model"] = model
+    return entry
 
 
 def _qwen_summary_entry(record):
@@ -12145,11 +12351,11 @@ def scan_qwencode(bounds, cache):
         return {"ranges": B}
 
     # 3：没有公开价的模型不再按 Opus 兜底价估美元；4：不带厂商前缀的模型名按名字查价；
-    # 5：没有的沿用上一个版本的价
-    if fc.get("sig") != sig or fc.get("accounting_version") != 5:
+    # 5：没有的沿用上一个版本的价；6：附上每次调用的计时
+    if fc.get("sig") != sig or fc.get("accounting_version") != 6:
         entries = _qwen_entries(token_files, summary_file)
         fc.clear()
-        fc.update({"sig": sig, "entries": entries, "accounting_version": 5})
+        fc.update({"sig": sig, "entries": entries, "accounting_version": 6})
         cache["_dirty"] = True
 
     live_days = {}
@@ -12159,10 +12365,16 @@ def scan_qwencode(bounds, cache):
             day = date.fromisoformat(entry["date"])
         except (TypeError, ValueError, KeyError):
             continue
-        _ledger_add_record_source(ledger_sources, entry.get("session") or "unknown", entry["date"], entry, entry.get("hour"))
+        identity = entry.get("session") or "unknown"
+        _ledger_add_record_source(ledger_sources, identity, entry["date"], entry, entry.get("hour"))
         agg = live_days.setdefault(entry["date"], _empty_token_day())
         _add_token_usage(agg, entry.get("in", 0), entry.get("out", 0), entry.get("cr", 0),
                          entry.get("cw", 0), entry.get("reason", 0), entry.get("cost", 0))
+        if entry.get("gen"):
+            for target in (agg, ledger_sources[str(identity)][entry["date"]]):
+                _perf_add(target.setdefault("perf", {}), entry.get("model"),
+                          int(entry.get("out", 0) or 0) + int(entry.get("reason", 0) or 0),
+                          entry["gen"])
         for model, mv in (entry.get("models") or {}).items():
             _add_model_usage(agg["models"], model, mv.get("in", 0), mv.get("out", 0),
                              mv.get("cr", 0), mv.get("cw", 0), mv.get("reason", 0),
@@ -12837,7 +13049,8 @@ def scan_kimicode(bounds, cache):
 #   payload.kind=run 且 event.kind=model_completed → event.usage + event.model(用量事件)
 # input_tokens 含 cached(与 Codex 同口径):输入=input-cached,缓存读=cached,推理视为输出子集。
 # 日志不持久化成本,按价格表估算(muse-* → meta/muse-*,见 _normalize)。
-_MUSE_PARSER_VERSION = 1
+# 2：附上每次模型调用的计时。
+_MUSE_PARSER_VERSION = 2
 _MUSE_SESSION_PATTERNS = (
     os.path.join("sessions", "*", "*", "*", "*", "session.jsonl"),
     os.path.join("sessions", "*", "session.jsonl"),
@@ -12993,6 +13206,11 @@ def _scan_muse_session(path):
                     continue
                 day = days.setdefault(dt.date().isoformat(), _empty_token_day())
                 _add_token_usage(day, inp, out, cached, cw, reason, cost, display_model)
+                # 这次模型调用的耗时：端到端速度，含首字等待
+                duration = _muse_number(event.get("duration_ms"))
+                if duration > 0:
+                    _perf_add(day.setdefault("perf", {}), display_model, out + reason,
+                              duration / 1000)
                 day["hours"][dt.hour] += inp + out + cached + cw
     except OSError:
         return {}, sid, proj
@@ -13708,7 +13926,8 @@ def compute():
                            "pcr": p["cache_read"]})
         return {"hit": hit, "in": max(b["in"] - b["cached"], 0), "out": b["out"],
                 "cached": b["cached"], "thoughts": b["thoughts"], "cost": b["cost"],
-                "models": models, "sessions": len(b["sessions"])}
+                "models": models, "sessions": len(b["sessions"]),
+                "perf": _perf_summary(b.get("perf"))}
 
     def grok_range(b):
         latency_count = b.get("latency_count", 0)
@@ -13723,6 +13942,7 @@ def compute():
                 "cr": b.get("cr", 0), "reason": b.get("reason", 0),
                 "cost": b.get("cost", 0.0),
                 "models": _format_token_models(b.get("models", {}), include_prices=True),
+                "perf": _perf_summary(b.get("perf")),
                 "usage_available": usage_available,
                 "usage_calls": b.get("usage_calls", 0),
                 "usage_sessions": len(b.get("usage_sessions", [])),
@@ -13805,7 +14025,7 @@ def compute():
         return {"hit": hit, "in": b["in"], "out": b["out"], "cr": b["cr"], "cw": b["cw"],
                 "reason": b["reason"], "cost": b["cost"], "cost_cny": b.get("cost_cny", 0),
                 "credits": b.get("credits", 0.0), "sessions": len(b["sessions"]),
-                "models": _format_token_models(b["models"])}
+                "models": _format_token_models(b["models"]), "perf": _perf_summary(b.get("perf"))}
 
     piranges = {k: token_usage_range(pi["ranges"][k]) for k in RANGE_KEYS}
     paranges = {k: token_usage_range(prime["ranges"][k]) for k in RANGE_KEYS}

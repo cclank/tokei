@@ -2156,25 +2156,49 @@ def _dedupe_claude_events(file_events):
 
 
 # 1：每个请求附上计时（生成秒数、首字延迟），升级后整份重扫一次补上历史。
-_CLAUDE_PERF_VERSION = 1
+# 2：请求起点沿父链跳过附件行，找到真正触发请求的用户消息或工具结果。
+_CLAUDE_PERF_VERSION = 2
 # 顶层的 uuid 和 timestamp 紧挨着，正文里的引号都是转义过的，所以这个模式只会命中顶层字段。
 # 用它取用户消息、工具结果这些行的写入时间，不必整行解析大段的工具输出。
 _CLAUDE_LINE_TIME = re.compile(r'"uuid"\s*:\s*"([0-9a-f-]{36})"\s*,\s*"timestamp"\s*:\s*"([^"]+)"')
+# 附件行（系统提醒、待办提示等）顶层固定是 "type":"attachment","uuid":…；parentUuid 是每行第一个键。
+_CLAUDE_ATTACHMENT_LINE = re.compile(r'"type"\s*:\s*"attachment"\s*,\s*"uuid"\s*:\s*"([0-9a-f-]{36})"')
+_CLAUDE_LINE_PARENT = re.compile(r'^\{"parentUuid"\s*:\s*"([0-9a-f-]{36})"')
 
 
-def _claude_note_time(when, line):
+def _claude_note_time(when, line, via=None):
+    """when：触发请求的行（用户消息、工具结果）→ 写入时刻。
+
+    附件有时在回复到达时才写，时间比真正发请求晚，不能当起点：记进 via（附件 → 上一行），
+    算起点时沿父链跳过去。"""
     match = _CLAUDE_LINE_TIME.search(line)
-    if match:
-        dt = parse_ts(match.group(2))
-        if dt:
-            when[match.group(1)] = dt.timestamp()
+    if not match:
+        return
+    attachment = _CLAUDE_ATTACHMENT_LINE.search(line)
+    if via is not None and attachment and attachment.group(1) == match.group(1):
+        parent = _CLAUDE_LINE_PARENT.match(line)
+        via[match.group(1)] = parent.group(1) if parent else None
+        return
+    dt = parse_ts(match.group(2))
+    if dt:
+        when[match.group(1)] = dt.timestamp()
 
 
-def _claude_attach_perf(events, when):
+def _claude_request_start(parent, when, via):
+    for _ in range(64):
+        if parent in when:
+            return when[parent]
+        if parent not in via:
+            return None
+        parent = via[parent]
+    return None
+
+
+def _claude_attach_perf(events, when, via=None):
     """给同一个请求的每条事件附上计时 [生成秒数, 首字延迟]。
 
-    请求从触发它的那条消息（第一段输出的 parentUuid：用户提问或上一个工具结果）写入时开始，
-    到最后一段输出写入时结束。新版 Claude Code 的思考段带 thinkingDurationMs：思考段写入时刻
+    请求从触发它的那条消息（第一段输出沿 parentUuid 往上、跳过附件后的用户提问或工具结果）
+    写入时开始，到最后一段输出写入时结束。新版 Claude Code 的思考段带 thinkingDurationMs：思考段写入时刻
     减去它就是第一个 token 到达的时刻——有它就算纯生成速度和首字延迟，没有就只能算端到端。
     """
     by_request = {}
@@ -2196,7 +2220,7 @@ def _claude_attach_perf(events, when):
             if event.get("think_ms") and at is not None:
                 first = at - float(event["think_ms"]) / 1000
                 break
-        start = when.get(group[0].get("parent"))
+        start = _claude_request_start(group[0].get("parent"), when, via or {})
         gen = ttft = None
         if first is not None and end > first:
             gen = end - first
@@ -2255,15 +2279,16 @@ def scan_claude(bounds, cache):
             events = []
             proj = None
             when = {}   # 消息 uuid → 写入时刻，找请求的触发时间用
+            via = {}    # 附件 uuid → 它的上一行
             try:
                 with open(f, "r", encoding="utf-8", errors="ignore") as fh:
                     for line_number, line in enumerate(fh, 1):
                         if '"usage"' not in line:
-                            _claude_note_time(when, line)
+                            _claude_note_time(when, line, via)
                             continue
                         u = _claude_usage(line, want_dt=True)
                         if not u:
-                            _claude_note_time(when, line)
+                            _claude_note_time(when, line, via)
                             continue
                         if u.get("event_id"):
                             when[u["event_id"]] = u["dt"].timestamp()
@@ -2281,7 +2306,7 @@ def scan_claude(bounds, cache):
                             proj = u["cwd"]
             except OSError:
                 continue
-            _claude_attach_perf(events, when)
+            _claude_attach_perf(events, when, via)
             events = [event for _, event in _dedupe_claude_events((f, item) for item in events)]
             fc[f] = {"sig": sig, "events": events, "proj": proj, "perf_v": _CLAUDE_PERF_VERSION}
             changed = True

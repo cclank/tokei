@@ -187,6 +187,31 @@ class ClaudePerfTests(unittest.TestCase):
         self.assertEqual(summary["tps"], round(400 / 6, 1), "从用户消息算到最后一段输出")
         self.assertIsNone(summary["ttft"])
 
+    def test_request_start_skips_attachments_written_with_the_reply(self):
+        start = datetime.now().astimezone().replace(microsecond=0) - timedelta(hours=1)
+        at = lambda seconds: (start + timedelta(seconds=seconds)).isoformat()
+        user_id, reminder_id, todo_id = (str(uuid.uuid4()) for _ in range(3))
+        message = {"id": "msg-1", "model": "claude-opus-5-5",
+                   "usage": {"input_tokens": 10, "output_tokens": 400}}
+        # 真实日志的键序：parentUuid 打头，附件行的 type 紧挨着 uuid
+        rows = [
+            {"parentUuid": None, "isSidechain": False, "type": "user",
+             "message": {"role": "user", "content": "继续"}, "uuid": user_id, "timestamp": at(0)},
+            {"parentUuid": user_id, "isSidechain": False, "attachment": {"type": "todo_reminder"},
+             "type": "attachment", "uuid": reminder_id, "timestamp": at(2)},
+            {"parentUuid": reminder_id, "isSidechain": False, "attachment": {"type": "skill_listing"},
+             "type": "attachment", "uuid": todo_id, "timestamp": at(2)},
+            {"parentUuid": todo_id, "isSidechain": False, "type": "assistant", "requestId": "req-1",
+             "message": dict(message, content=[{"type": "thinking"}]),
+             "uuid": str(uuid.uuid4()), "timestamp": at(2), "thinkingDurationMs": 1500},
+            {"parentUuid": None, "isSidechain": False, "type": "assistant", "requestId": "req-1",
+             "message": dict(message, content=[{"type": "text"}]),
+             "uuid": str(uuid.uuid4()), "timestamp": at(6)},
+        ]
+        summary = USAGE._perf_summary(self.scan(rows)["ranges"]["all"].get("perf"))
+        self.assertEqual(summary["tn"], 1, "附件和回复同时写入，不能拿它当请求起点")
+        self.assertEqual(round(summary["ttft"], 1), 0.5, "从用户消息算起")
+
 
 if __name__ == "__main__":
     unittest.main()

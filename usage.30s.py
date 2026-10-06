@@ -1000,6 +1000,14 @@ def _migrate_legacy_scan_cache():
 _SCAN_CACHE_TRANSIENT_KEYS = frozenset({"_dirty", "_keys"})
 _SCAN_SHARD_MANIFEST = "manifest.json"
 _SCAN_SHARD_GRACE = 120
+# Claude、Codex 的缓存各有十几 MB，活跃时每轮都有一两个会话在变，整片重写一天要写几十 GB。
+# 超过这个体量的工具缓存再按条目（会话文件路径）拆成固定数量的桶，各桶照样按内容哈希命名，
+# 只重写变了的那几个桶；清单里这个工具记的是桶文件名列表。每个条目带着它在原字典里的位置，
+# 读回时按位置排好：有的去重逻辑「先遇到的留下」，顺序必须和拆桶前一样。新增条目追加在末尾，
+# 不挪动别的条目，只有删掉条目时后面的位置才整体前移（少见）。
+_SCAN_SHARD_BUCKET_BYTES = 512 * 1024
+_SCAN_SHARD_BUCKET_MIN_ENTRIES = 16
+_SCAN_SHARD_BUCKETS = 256
 
 
 def _scan_shard_dir():
@@ -1009,6 +1017,24 @@ def _scan_shard_dir():
 def _scan_shard_name(key, payload):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key) or "_"
     return f"{safe}.{hashlib.sha1(payload).hexdigest()[:16]}.json"
+
+
+def _scan_shard_payloads(key, value):
+    """[(文件名, 内容)]：小的整片一个文件，大的按条目拆桶。"""
+    def encode(data):
+        return json.dumps(data, separators=(",", ":")).encode("utf-8")
+    if isinstance(value, dict) and len(value) > _SCAN_SHARD_BUCKET_MIN_ENTRIES:
+        import zlib
+        buckets = {}
+        for position, (item_key, item) in enumerate(value.items()):
+            index = zlib.crc32(str(item_key).encode("utf-8")) % _SCAN_SHARD_BUCKETS
+            buckets.setdefault(index, []).append([position, item_key, item])
+        parts = [(index, encode({"items": bucket})) for index, bucket in sorted(buckets.items())]
+        if sum(len(payload) for _, payload in parts) > _SCAN_SHARD_BUCKET_BYTES:
+            return [(_scan_shard_name(f"{key}.b{index:03d}", payload), payload)
+                    for index, payload in parts]
+    payload = encode(value)
+    return [(_scan_shard_name(key, payload), payload)]
 
 
 def _read_scan_cache_file():
@@ -1028,12 +1054,21 @@ def _read_scan_cache_file():
             manifest = json.load(f)
         cache = dict(manifest.get("meta") or {})
         damaged = False
-        for key, name in (manifest.get("shards") or {}).items():
+        for key, names in (manifest.get("shards") or {}).items():
             try:
-                with open(os.path.join(directory, name), "r") as f:
-                    cache[key] = json.load(f)
-            except (OSError, ValueError):
-                damaged = True  # 只丢这一个键，下一轮重扫补上
+                if isinstance(names, list):
+                    items = []
+                    for name in names:
+                        with open(os.path.join(directory, name), "r") as f:
+                            items.extend(json.load(f)["items"])
+                    items.sort(key=lambda item: item[0])
+                    value = {item_key: item for _, item_key, item in items}
+                else:
+                    with open(os.path.join(directory, names), "r") as f:
+                        value = json.load(f)
+                cache[key] = value
+            except (OSError, ValueError, TypeError, KeyError, IndexError):
+                damaged = True  # 只丢这一个键（哪怕只坏了一个桶），下一轮重扫补上
         return cache, damaged
     with open(_SCAN_CACHE_FILE, "r") as f:
         return json.load(f), True
@@ -1068,17 +1103,20 @@ def _write_sharded_scan_cache(cache):
         if not isinstance(value, (dict, list)):
             meta[key] = value
             continue
-        payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
-        name = _scan_shard_name(key, payload)
-        path = os.path.join(directory, name)
-        if not os.path.exists(path):
-            write(path, payload)
-        shards[key] = name
+        names = []
+        for name, payload in _scan_shard_payloads(key, value):
+            path = os.path.join(directory, name)
+            if not os.path.exists(path):
+                write(path, payload)
+            names.append(name)
+        shards[key] = names if len(names) > 1 else names[0]
     write(os.path.join(directory, _SCAN_SHARD_MANIFEST),
           json.dumps({"format": 1, "shards": shards, "meta": meta},
                      separators=(",", ":")).encode("utf-8"))
 
-    keep = set(shards.values()) | {_SCAN_SHARD_MANIFEST}
+    keep = {_SCAN_SHARD_MANIFEST}
+    for names in shards.values():
+        keep.update(names if isinstance(names, list) else [names])
     horizon = _time.time() - _SCAN_SHARD_GRACE
     for entry in os.scandir(directory):
         try:
@@ -1171,7 +1209,17 @@ _LEDGER_VERSION = 1
 _LEDGER_FIELDS = ("in", "out", "cr", "cw", "reason", "cached", "cost")
 
 
-_LEDGER_CACHE = {"data": None, "dirty": False}
+_LEDGER_CACHE = {"data": None, "dirty": False, "urgent": False}
+# 只有今天的数变了时，距上次落盘不到这么久就先不写：今天的日志都还在，晚几分钟入账不丢数，
+# 省得活跃时每 30 秒把整份账本（约 1 MB）重写一遍。历史天的变化、迁移照旧立刻写。
+_LEDGER_TODAY_FLUSH_INTERVAL = 600
+
+
+def _ledger_mark_dirty(days=None):
+    _LEDGER_CACHE["dirty"] = True
+    today = date.today().isoformat()
+    if days is None or any(day != today for day in days):
+        _LEDGER_CACHE["urgent"] = True
 
 
 def _load_ledger():
@@ -1212,6 +1260,12 @@ def ledger_flush():
     每轮扫描只调一次,替代此前每工具一次的 15 轮锁+读+写(性能回归根因)。"""
     if not _LEDGER_CACHE["dirty"] or _LEDGER_CACHE["data"] is None:
         return
+    if not _LEDGER_CACHE.get("urgent"):
+        try:
+            if _time.time() - os.path.getmtime(_LEDGER_FILE) < _LEDGER_TODAY_FLUSH_INTERVAL:
+                return
+        except OSError:
+            pass
     lock_fd = None
     try:
         import fcntl
@@ -1251,11 +1305,14 @@ def ledger_flush():
                 elif (kept is None
                         or _ledger_record_version(day) > _ledger_record_version(kept)
                         or (_ledger_record_version(day) == _ledger_record_version(kept)
-                            and _ledger_day_total(day) > _ledger_day_total(kept))):
+                            and _ledger_day_total(day) >= _ledger_day_total(kept))):
+                    # 总量相同也写：模型名规范化、补上速度字段这类更新要能落盘，
+                    # 不然对账每轮都认为这天变了
                     stored[dk] = day
         _save_ledger(fresh)
         _LEDGER_CACHE["data"] = fresh
         _LEDGER_CACHE["dirty"] = False
+        _LEDGER_CACHE["urgent"] = False
     finally:
         if lock_fd is not None:
             try:
@@ -1366,7 +1423,7 @@ def _prepare_unpriced_cost_ledger(tool):
         if isinstance(day, dict):
             _reprice_unpriced_costs(day, tool)
     ledger[schema_key] = _UNPRICED_COST_SCHEMA
-    _LEDGER_CACHE["dirty"] = True
+    _ledger_mark_dirty()
 
 
 def _ledger_schema_keys():
@@ -1560,6 +1617,18 @@ def _ledger_add_record_source(sources, identity, day_key, record, hour=None):
     days[day_key] = _ledger_values(days.get(day_key, {}), contribution)
 
 
+def _ledger_same(left, right, skip=()):
+    """账本里同一天的两份值是否相同。浮点允许末位误差：来源「先减后加」会差一个 ulp，
+    不能因此认为这天变了、把整份账本重写一遍。"""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return all(_ledger_same(left.get(key), right.get(key))
+                   for key in (left.keys() | right.keys()) if key not in skip)
+    if (isinstance(left, float) or isinstance(right, float)) and \
+            isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-12)
+    return left == right
+
+
 def ledger_reconcile(tool, live_days, source_days=None):
     """对账:live_days={day: day_dict}(现存日志实时聚合,任意字段结构)。
 
@@ -1572,9 +1641,13 @@ def ledger_reconcile(tool, live_days, source_days=None):
     ledger = _load_ledger()
     stored = ledger["tools"].setdefault(tool, {})
     dirty = False
+    changed_days = set()
     merged = {}
     # 日志中偶发的坏时间戳(如 2024-01-08)不入账本,防止污染永久数据
     max_day = (date.today() + timedelta(days=1)).isoformat()
+    # 过了保留期的天落盘时会裁掉 _sources，下一轮对账又加回来；只差这一项不算改动，
+    # 否则这些天每轮都「变了」，账本每 30 秒整份重写一次
+    source_cutoff = (date.today() - timedelta(days=_LEDGER_SOURCES_RETAIN_DAYS)).isoformat()
     if source_days is not None:
         by_day = {}
         for source, days in source_days.items():
@@ -1592,9 +1665,18 @@ def ledger_reconcile(tool, live_days, source_days=None):
                     if value != kept:
                         stored[dk] = value
                         dirty = True
+                        changed_days.add(dk)
                 merged[dk] = value
                 continue
-            value = _ledger_merge_sources(kept, current, tool)
+            kept_sources = kept.get("_sources") if isinstance(kept, dict) else None
+            if isinstance(kept_sources, dict) and all(
+                    kept_sources.get(source_id) == snapshot
+                    for source_id, snapshot in current.items()):
+                # 这一天的来源一个没变（通常只有今天在变）：合并结果就是账本里那份，
+                # 不必每轮把每一天的所有来源重新相加
+                value = dict(kept)
+            else:
+                value = _ledger_merge_sources(kept, current, tool)
             # Preserve non-counter attribution supplied by the scanner.
             for key in ("projects", "sessions"):
                 live = live_days.get(dk, {}).get(key)
@@ -1602,10 +1684,14 @@ def ledger_reconcile(tool, live_days, source_days=None):
                     value[key] = sorted(set(value.get(key) or []) | set(live))
             merged[dk] = value
             if "2025-01-01" <= dk <= max_day and kept != value:
+                old_day = kept is not None and dk < source_cutoff and "_sources" not in kept
+                if kept is not None and _ledger_same(kept, value, ("_sources",) if old_day else ()):
+                    continue
                 stored[dk] = value
                 dirty = True
+                changed_days.add(dk)
         if dirty:
-            _LEDGER_CACHE["dirty"] = True
+            _ledger_mark_dirty(changed_days)
         return merged
     for dk, live in live_days.items():
         kept = stored.get(dk)
@@ -1627,14 +1713,15 @@ def ledger_reconcile(tool, live_days, source_days=None):
                 continue
             snapshot = {k: v for k, v in live.items()
                         if not isinstance(v, set)}
-            if kept != snapshot:
+            if kept is None or not _ledger_same(kept, snapshot):
                 stored[dk] = snapshot
                 dirty = True
+                changed_days.add(dk)
     for dk, kept in stored.items():
         if dk not in merged:
             merged[dk] = kept          # 日志已整体消失的天:账本兜底
     if dirty:
-        _LEDGER_CACHE["dirty"] = True
+        _ledger_mark_dirty(changed_days)
     return merged
 
 
@@ -1644,7 +1731,7 @@ def ledger_touch(tool):
         ledger = _load_ledger()
         if tool not in ledger.get("tools", {}):
             ledger.setdefault("tools", {})[tool] = {}
-            _LEDGER_CACHE["dirty"] = True
+            _ledger_mark_dirty()
     except Exception:
         pass
 
@@ -2216,6 +2303,74 @@ def _claude_note_time(when, line, via=None):
         when[match.group(1)] = dt.timestamp()
 
 
+# 活跃的长会话文件动辄几十上百 MB，不再每轮从头解析：记下最后一条用户消息（提问或工具结果）
+# 的位置作为切点，下一轮保留切点之前的事件，从切点往后重新解析。一次请求的所有行都在触发它的
+# 那条消息之后，从这里切开不会劈开任何请求，计时也照样完整。切点那一行带指纹，文件被改写、
+# 截断或指纹对不上就退回整份解析。用户消息行顶层的键序固定，行首就能认出来，不用整行解析。
+_CLAUDE_USER_LINE = re.compile(
+    r'^\{"parentUuid":(?:"[0-9a-f-]{36}"|null),"isSidechain":false,'
+    r'(?:"\w+":(?:"[^"\\]*"|true|false|null|-?\d+),)*?"type":"user"')
+
+
+def _claude_parse_lines(handle, offset, line_number, events, when, via):
+    """从二进制句柄当前位置往下逐行解析，和以前按文本整份读一样处理每一行（包括没写完的
+    最后一行）；切点只取写完整的用户消息行，切点之后的内容下一轮总会重新解析。
+
+    返回 (项目目录, 切点, 读到的字节偏移)；切点是最后一条用户消息行的 [偏移, 行号, 指纹]。"""
+    proj = None
+    cut = None
+    for raw in handle:
+        line_number += 1
+        line = raw.decode("utf-8", "ignore")
+        if raw.endswith(b"\n") and _CLAUDE_USER_LINE.match(line):
+            cut = [offset, line_number, hashlib.sha1(raw).hexdigest()[:16]]
+        offset += len(raw)
+        if '"usage"' not in line:
+            _claude_note_time(when, line, via)
+            continue
+        u = _claude_usage(line, want_dt=True)
+        if not u:
+            _claude_note_time(when, line, via)
+            continue
+        if u.get("event_id"):
+            when[u["event_id"]] = u["dt"].timestamp()
+        events.append({
+            "in": u["in"], "out": u["out"], "cr": u["cr"], "cw": u["cw"],
+            "cw5": u.get("cw5"), "cw1": u.get("cw1"),
+            "cost": u["cost"], "model": u.get("model") or "unknown",
+            "cwd": u.get("cwd"), "mid": u.get("mid"),
+            "request_id": u.get("request_id"), "event_id": u.get("event_id"),
+            "sidechain": bool(u.get("sidechain")), "timestamp": u["dt"].isoformat(),
+            "line": line_number,
+            "parent": u.get("parent"), "think_ms": u.get("think_ms"),
+        })
+        if proj is None and u.get("cwd"):
+            proj = u["cwd"]
+    return proj, cut, offset
+
+
+def _claude_parse_file(path, entry, size):
+    """(事件, 项目目录, 切点, 已解析到的偏移)；能从上次的切点续读就续读。"""
+    cut = entry.get("cut") if isinstance(entry, dict) else None
+    with open(path, "rb") as handle:
+        if (cut and entry.get("perf_v") == _CLAUDE_PERF_VERSION
+                and isinstance(entry.get("end"), int) and size >= entry["end"]):
+            handle.seek(cut[0])
+            if hashlib.sha1(handle.readline()).hexdigest()[:16] == cut[2]:
+                handle.seek(cut[0])
+                events, when, via = [], {}, {}
+                proj, new_cut, end = _claude_parse_lines(handle, cut[0], cut[1] - 1,
+                                                         events, when, via)
+                _claude_attach_perf(events, when, via)
+                kept = [event for event in entry.get("events", []) if event.get("line", 0) < cut[1]]
+                return kept + events, entry.get("proj") or proj, new_cut or cut, end
+            handle.seek(0)
+        events, when, via = [], {}, {}
+        proj, cut, end = _claude_parse_lines(handle, 0, 0, events, when, via)
+        _claude_attach_perf(events, when, via)
+        return events, proj, cut, end
+
+
 def _claude_request_start(parent, when, via):
     for _ in range(64):
         if parent in when:
@@ -2308,39 +2463,13 @@ def scan_claude(bounds, cache):
         entry = fc.get(f)
         if (not entry or entry.get("sig") != sig
                 or entry.get("perf_v") != _CLAUDE_PERF_VERSION):
-            events = []
-            proj = None
-            when = {}   # 消息 uuid → 写入时刻，找请求的触发时间用
-            via = {}    # 附件 uuid → 它的上一行
             try:
-                with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-                    for line_number, line in enumerate(fh, 1):
-                        if '"usage"' not in line:
-                            _claude_note_time(when, line, via)
-                            continue
-                        u = _claude_usage(line, want_dt=True)
-                        if not u:
-                            _claude_note_time(when, line, via)
-                            continue
-                        if u.get("event_id"):
-                            when[u["event_id"]] = u["dt"].timestamp()
-                        events.append({
-                            "in": u["in"], "out": u["out"], "cr": u["cr"], "cw": u["cw"],
-                            "cw5": u.get("cw5"), "cw1": u.get("cw1"),
-                            "cost": u["cost"], "model": u.get("model") or "unknown",
-                            "cwd": u.get("cwd"), "mid": u.get("mid"),
-                            "request_id": u.get("request_id"), "event_id": u.get("event_id"),
-                            "sidechain": bool(u.get("sidechain")), "timestamp": u["dt"].isoformat(),
-                            "line": line_number,
-                            "parent": u.get("parent"), "think_ms": u.get("think_ms"),
-                        })
-                        if proj is None and u.get("cwd"):
-                            proj = u["cwd"]
+                events, proj, cut, end = _claude_parse_file(f, entry, size)
             except OSError:
                 continue
-            _claude_attach_perf(events, when, via)
             events = [event for _, event in _dedupe_claude_events((f, item) for item in events)]
-            fc[f] = {"sig": sig, "events": events, "proj": proj, "perf_v": _CLAUDE_PERF_VERSION}
+            fc[f] = {"sig": sig, "events": events, "proj": proj, "perf_v": _CLAUDE_PERF_VERSION,
+                     "cut": cut, "end": end}
             changed = True
 
     for p in stale:
@@ -2983,8 +3112,28 @@ def _codex_event_cache_dir():
     return f"{_SCAN_CACHE_FILE}{_CODEX_EVENT_CACHE_SUFFIX}"
 
 
+_REALPATH_MEMO = {}
+
+
+def _realpath_memo(path):
+    """同一轮采集里同一个路径只解析一次：realpath 要沿路径逐级 lstat，几千个会话文件每轮
+    解析两遍就是几万次系统调用。采集器每轮是新进程，不会用到过期的结果。"""
+    real = _REALPATH_MEMO.get(path)
+    if real is None:
+        real = _REALPATH_MEMO[path] = os.path.realpath(path)
+    return real
+
+
+def _realpath_in_dir(path):
+    """目录的 realpath 复用，文件本身是软链接时才单独解析；结果与 os.path.realpath 相同。"""
+    if os.path.islink(path):
+        return _realpath_memo(path)
+    directory, name = os.path.split(path)
+    return os.path.join(_realpath_memo(directory), name)
+
+
 def _codex_event_cache_path(file_path):
-    normalized = os.path.normcase(os.path.realpath(file_path))
+    normalized = os.path.normcase(_realpath_memo(file_path))
     digest = hashlib.sha256(normalized.encode("utf-8", errors="surrogatepass")).hexdigest()
     return os.path.join(_codex_event_cache_dir(), f"{digest}.jsonl")
 
@@ -3517,7 +3666,7 @@ def _codex_migrate_mixed_ledger(main_sources, reserve_sources):
             stored[dk] = result
             changed = True
     if changed:
-        _LEDGER_CACHE["dirty"] = True
+        _ledger_mark_dirty()
 
 
 def _codex_accounted_days(cache, reserve=False):
@@ -4104,7 +4253,7 @@ def _codex_rollout_files():
     seen = set()
     for root in roots:
         for path in sorted(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True)):
-            real = os.path.realpath(path)
+            real = _realpath_in_dir(path)
             key = os.path.normcase(real)
             if key not in seen and os.path.isfile(real):
                 seen.add(key)
@@ -9183,7 +9332,7 @@ def _prepare_qodercli_ledger(tool="qodercli"):
         return
     ledger.setdefault("tools", {})[tool] = {}
     ledger[schema_key] = _QODERCLI_LEDGER_VERSION
-    _LEDGER_CACHE["dirty"] = True
+    _ledger_mark_dirty()
 
 
 def _qodercli_dir(tool="qodercli"):

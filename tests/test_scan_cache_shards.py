@@ -2,7 +2,8 @@
 
 以前整份 16 MB 的缓存在活跃使用时每 30 秒重写一次（每小时约 2 GB 写盘），
 哪怕只有 Claude 那一小块变了。现在每个工具一个分片、文件名带内容哈希，
-没变的分片不重写；清单是唯一的提交点。
+没变的分片不重写；清单是唯一的提交点。Claude、Codex 这种十几 MB 的工具缓存
+再按会话拆桶，活跃时只重写正在变的那一两个桶。
 """
 import json
 import os
@@ -109,6 +110,42 @@ class ScanCacheShardTests(unittest.TestCase):
         cache = USAGE._load_scan_cache()
         self.assertEqual(cache["claude"], {"a": 1})
         self.assertNotIn("codex", cache, "缺的那片下一轮重扫")
+        self.assertTrue(cache["_dirty"])
+
+    def big_tool(self, count=200):
+        # 故意打乱插入顺序：读回来要和写进去一样，不能变成按桶或按键排序
+        return {f"/sessions/{(i * 37) % count:04d}.jsonl": {"sig": i, "events": ["x" * 50]}
+                for i in range(count)}
+
+    def test_a_big_tool_is_bucketed_and_only_the_changed_bucket_is_rewritten(self):
+        codex = self.big_tool()
+        with mock.patch.object(USAGE, "_SCAN_SHARD_BUCKET_BYTES", 1024):
+            self.save({"codex": codex, "claude": {"a": 1}})
+            buckets = {p.name: p.stat().st_mtime_ns for p in self.shard_dir().glob("codex.b*.json")}
+            self.assertGreater(len(buckets), 1, "大的工具缓存拆成多个桶")
+            time.sleep(0.02)
+
+            changed = dict(codex)
+            changed["/sessions/0005.jsonl"] = {"sig": "new", "events": ["y" * 50]}
+            self.save({"codex": changed, "claude": {"a": 1}})
+
+        after = {p.name: p.stat().st_mtime_ns for p in self.shard_dir().glob("codex.b*.json")}
+        self.assertEqual(len(set(after) - set(buckets)), 1, "只有那个会话所在的桶写了新文件")
+        for name, mtime in buckets.items():
+            self.assertEqual(after[name], mtime, "没变的桶不能重写")
+        stored, dirty = USAGE._read_scan_cache_file()
+        self.assertFalse(dirty)
+        self.assertEqual(stored["codex"], changed)
+        self.assertEqual(list(stored["codex"]), list(changed), "条目顺序和拆桶前一样")
+
+    def test_a_missing_bucket_costs_only_that_tool(self):
+        with mock.patch.object(USAGE, "_SCAN_SHARD_BUCKET_BYTES", 1024):
+            self.save({"codex": self.big_tool(), "claude": {"a": 1}})
+        next(self.shard_dir().glob("codex.b*.json")).unlink()
+
+        cache = USAGE._load_scan_cache()
+        self.assertEqual(cache["claude"], {"a": 1})
+        self.assertNotIn("codex", cache, "缺了一个桶就整个工具重扫，不能只剩一部分会话")
         self.assertTrue(cache["_dirty"])
 
     def test_resetting_the_cache_clears_both_formats(self):

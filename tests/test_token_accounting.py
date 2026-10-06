@@ -20,6 +20,8 @@ class TokenAccountingTests(unittest.TestCase):
             ('CODEX_ARCHIVED_DIR', str(self.root / 'archive')),
             ('_SCAN_CACHE_FILE', str(self.root / 'cache.json')),
             ('_LEDGER_FILE', str(self.root / 'ledger.json')),
+            # 这里测的是落盘时的合并；只改了今天时攒着不写的逻辑另有测试
+            ('_LEDGER_TODAY_FLUSH_INTERVAL', 0),
         ):
             p = mock.patch.object(U, name, value)
             p.start()

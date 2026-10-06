@@ -646,6 +646,30 @@ final class DataLoader {
         return "/usr/bin/env"
     }()
 
+    /// 以 __main__ 身份导入采集器，字节码缓存放到 ~/.tokei/cache/pycache。直接运行
+    /// `python3 usage.30s.py` 时 Python 不缓存主脚本，每轮刷新都要把七十多万字节的脚本重新编译一遍。
+    /// 缓存目录在 App 包外面，不会写进 Contents/Resources 破坏签名，所以环境里即使设了
+    /// PYTHONDONTWRITEBYTECODE 也照样写；不支持 pycache_prefix 的老 Python（3.8 以前）干脆不写缓存。
+    private static let scriptLauncherPython = """
+    import importlib.util
+    import os
+    import sys
+
+    script_path = sys.argv[1]
+    sys.argv = sys.argv[1:]
+    if sys.version_info >= (3, 8):
+        sys.pycache_prefix = os.path.join(os.path.expanduser("~"), ".tokei", "cache", "pycache")
+        sys.dont_write_bytecode = False
+    else:
+        sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("__main__", script_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(1)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = module
+    spec.loader.exec_module(module)
+    """
+
     /// 这段脚本以模块方式导入 App 包里的采集器。不关掉字节码缓存的话，Python 会把
     /// __pycache__ 写进 Contents/Resources，App 签名随即失效
     /// （codesign: a sealed resource is missing or invalid）。
@@ -699,10 +723,10 @@ final class DataLoader {
         let proc = Process()
         if pythonPath == "/usr/bin/env" {
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            proc.arguments = ["python3", scriptPath] + args
+            proc.arguments = ["python3", "-c", scriptLauncherPython, scriptPath] + args
         } else {
             proc.executableURL = URL(fileURLWithPath: pythonPath)
-            proc.arguments = [scriptPath] + args
+            proc.arguments = ["-c", scriptLauncherPython, scriptPath] + args
         }
         var environment = ProcessInfo.processInfo.environment
         environment["TOKEI_DSH_DECOMPRESSED_DIR"] = deepSeekSessions.path

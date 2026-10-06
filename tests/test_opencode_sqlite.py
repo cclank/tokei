@@ -318,6 +318,34 @@ class SyncSnapshotBytecodeTests(unittest.TestCase):
         self.assertLess(helper.index("sys.dont_write_bytecode = True"),
                         helper.index("spec.loader.exec_module"))
 
+    def test_the_collector_launcher_caches_bytecode_outside_the_app_bundle(self):
+        """每轮刷新都跑的采集器：字节码缓存要有（省掉每轮重新编译），但不能写进 App 包。"""
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        source = (Path(__file__).resolve().parents[1]
+                  / "Tokei/Sources/Tokei/DataLoader.swift").read_text(encoding="utf-8")
+        start = source.index('"""', source.index("private static let scriptLauncherPython")) + 3
+        lines = source[start:source.index('"""', start)].splitlines()
+        indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
+        launcher = "\n".join(line[indent:] for line in lines)
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "Tokei.app" / "Contents" / "Resources"
+            bundle.mkdir(parents=True)
+            script = bundle / "usage.30s.py"
+            script.write_text("import sys\nif __name__ == '__main__':\n    print('ran', sys.argv[1:])\n",
+                              encoding="utf-8")
+            env = dict(os.environ, HOME=tmp)
+            for _ in range(2):
+                result = subprocess.run([sys.executable, "-c", launcher, str(script), "--json"],
+                                        capture_output=True, text=True, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "ran ['--json']")
+            self.assertFalse(any(bundle.rglob("__pycache__")), "App 包里不能出现 __pycache__")
+            cached = list((Path(tmp) / ".tokei" / "cache" / "pycache").rglob("usage.30s.*.pyc"))
+            self.assertEqual(len(cached), 1, "字节码缓存写在 App 包外面")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,12 +40,14 @@ final class DataLoader {
 
     // 首次全量定位 /usage，之后只检查变化项并复用最近一次有效候选。
     private struct ClaudeCacheRecord {
-        let url: URL
+        let path: String
         let modified: TimeInterval
         let size: Int
 
+        var url: URL { URL(fileURLWithPath: path) }
+
         var signature: String {
-            "\(url.path)|\(modified.bitPattern)|\(size)"
+            "\(path)|\(modified.bitPattern)|\(size)"
         }
     }
 
@@ -110,24 +112,32 @@ final class DataLoader {
             cacheDir = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/Claude/Cache/Cache_Data")
         }
-        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: cacheDir,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-        return urls.compactMap { url in
-            guard url.lastPathComponent.hasSuffix("_0"),
-                  let values = try? url.resourceValues(forKeys: keys),
-                  let modified = values.contentModificationDate,
-                  let size = values.fileSize else { return nil }
-            return ClaudeCacheRecord(
-                url: url.resolvingSymlinksInPath(),
-                modified: modified.timeIntervalSince1970,
-                size: size
-            )
-        }.sorted {
-            if $0.modified == $1.modified { return $0.url.path > $1.url.path }
+        // 缓存目录里有两万多个文件，每次刷新都要列一遍。逐个建 URL、读资源属性、解析软链接要
+        // 好几百毫秒，是 App 空闲时 CPU 的大头；这里目录只解析一次，文件用 lstat 读修改时间和大小。
+        // 时间按 Foundation 的换算方式（先减到 2001 年参考时间再加纳秒）算，和以前读出的值逐位
+        // 一致，已存的额度状态签名照样对得上。
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: cacheDir.path) else {
+            return []
+        }
+        let directory = cacheDir.resolvingSymlinksInPath().path
+        var records: [ClaudeCacheRecord] = []
+        records.reserveCapacity(names.count)
+        for name in names where name.hasSuffix("_0") && !name.hasPrefix(".") {
+            var path = directory + "/" + name
+            var info = stat()
+            guard lstat(path, &info) == 0 else { continue }
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                path = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                guard stat(path, &info) == 0 else { continue }
+            }
+            guard (info.st_mode & S_IFMT) == S_IFREG else { continue }
+            let modified = Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec)
+                                - 978_307_200 + Double(info.st_mtimespec.tv_nsec) * 1.0e-9)
+            records.append(ClaudeCacheRecord(path: path, modified: modified.timeIntervalSince1970,
+                                             size: Int(info.st_size)))
+        }
+        return records.sorted {
+            if $0.modified == $1.modified { return $0.path > $1.path }
             return $0.modified > $1.modified
         }
     }
@@ -220,7 +230,7 @@ final class DataLoader {
         let horizon = now.timeIntervalSince1970 + claudeQuotaFutureSkew
         let records = claudeCacheRecords().filter { $0.modified <= horizon }
         var recordsByPath: [String: ClaudeCacheRecord] = [:]
-        for record in records { recordsByPath[record.url.path] = record }
+        for record in records { recordsByPath[record.path] = record }
         let original = loadClaudeQuotaState()
         var state = original
         let initialScan = state.scanModified < 0
@@ -233,7 +243,7 @@ final class DataLoader {
         var selected: (ClaudeCacheRecord, ClaudeQuotaSnapshot)?
 
         func inspect(_ record: ClaudeCacheRecord) -> (ClaudeCacheRecord, ClaudeQuotaSnapshot)? {
-            inspected.insert(record.url.path)
+            inspected.insert(record.path)
             guard let snapshot = parseClaudeQuota(record) else { return nil }
             return (record, snapshot)
         }
@@ -251,7 +261,7 @@ final class DataLoader {
             if let record = candidateRecord {
                 let changedCandidate = record.modified != candidate.modified || record.size != candidate.size
                 if changedCandidate {
-                    if !inspected.contains(record.url.path) {
+                    if !inspected.contains(record.path) {
                         selected = inspect(record)
                     }
                     candidateInvalid = selected == nil
@@ -304,8 +314,8 @@ final class DataLoader {
             : claudeQuotaFullScanInterval
         let needsFullScan = candidateInvalid || nowEpoch - state.lastFullScan >= retryInterval
         if selected == nil && needsFullScan {
-            for record in records where !inspected.contains(record.url.path) {
-                inspected.insert(record.url.path)
+            for record in records where !inspected.contains(record.path) {
+                inspected.insert(record.path)
                 if let snapshot = parseClaudeQuota(record) {
                     selected = (record, snapshot)
                     break
@@ -316,7 +326,7 @@ final class DataLoader {
 
         if let (record, snapshot) = selected {
             state.candidate = ClaudeQuotaCandidate(
-                path: record.url.path,
+                path: record.path,
                 modified: record.modified,
                 size: record.size
             )

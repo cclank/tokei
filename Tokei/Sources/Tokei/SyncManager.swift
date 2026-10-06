@@ -555,6 +555,7 @@ final class SyncManager {
             d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeClaudeModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -566,6 +567,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cached, input: d.in)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -577,6 +579,7 @@ final class SyncManager {
             d.thoughts += s.thoughts; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cached, input: d.in)
             mergeGeminiModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -611,6 +614,7 @@ final class SyncManager {
             let ctxUsed = d.ctx_used ?? 0
             let ctxWindow = d.ctx_window ?? 0
             d.ctx = ctxWindow > 0 ? Double(ctxUsed) / Double(ctxWindow) * 100 : 0
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -630,6 +634,7 @@ final class SyncManager {
             d.hit = inputTotal > 0 ? Double(d.cr) / Double(inputTotal) * 100 : 0
             mergeTokenModels(&d.models, s.models)
             d.ctx = weightedAverage(d.ctx, originalSessions, s.ctx, s.sessions)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -654,6 +659,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -666,6 +672,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -678,6 +685,7 @@ final class SyncManager {
             d.cost_cny = (d.cost_cny ?? 0) + (s.cost_cny ?? 0)
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }

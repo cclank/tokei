@@ -19,18 +19,39 @@ class PerfHelperTests(unittest.TestCase):
         self.assertFalse(USAGE._perf_add(perf, "m", 500, 0), "没有时长不计")
         self.assertEqual((perf["m"]["o"], perf["m"]["g"], perf["m"]["n"]), (500, 10.0, 1))
 
-    def test_summary_is_token_weighted_and_ttft_needs_enough_samples(self):
+    def test_summary_is_token_weighted_and_ttft_is_a_median(self):
         perf = {}
-        for _ in range(4):
-            USAGE._perf_add(perf, "claude-opus-5-5", 100, 1, 1.1)
-        USAGE._perf_add(perf, "claude-opus-5-5", 900, 29)   # 一个慢的长请求
+        USAGE._perf_add(perf, "claude-opus-5-5", 100, 1, 2.4)
+        USAGE._perf_add(perf, "claude-opus-5-5", 900, 29)   # 一个拿不到首字时间的慢请求
         summary = USAGE._perf_summary(perf)
-        self.assertEqual(summary["tps"], round(1300 / 33, 1), "按总 token / 总时长，不是平均每个请求的速度")
-        self.assertIsNone(summary["ttft"], "首字只有 4 个样本，中位数不稳，不显示")
-        USAGE._perf_add(perf, "claude-opus-5-5", 100, 1, 1.2)
+        self.assertEqual(summary["tps"], round(1000 / 30, 1), "按总 token / 总时长，不是平均每个请求的速度")
+        self.assertEqual(round(summary["ttft"], 1), 2.4, "一个样本也显示，细分桶插值不出显示精度")
+        for seconds in (1.0, 1.1, 60.0, 90.0):
+            USAGE._perf_add(perf, "claude-opus-5-5", 100, 1, seconds)
         summary = USAGE._perf_summary(perf)
-        self.assertTrue(1.0 <= summary["ttft"] <= 1.25)
+        self.assertEqual(round(summary["ttft"], 1), 2.4, "排队几十秒的长尾不把典型值拉高")
+        self.assertEqual((summary["n"], summary["tn"], summary["o"]), (6, 5, 1400))
+        self.assertEqual(sum(summary["th"].values()), 5, "直方图一起给 App，合并多台设备时重算中位数")
         self.assertIn("Opus 5.5", summary["models"], "按显示名汇总，和卡片上的模型行对得上")
+
+    def test_every_ttft_lands_in_a_bucket_within_five_percent(self):
+        for seconds in (0.0, 0.03, 0.05, 0.51, 3.0, 37.5, 120.0):
+            low, high = USAGE._perf_ttft_bounds(USAGE._perf_ttft_bucket(seconds))
+            self.assertTrue(low <= seconds < high or seconds == high, seconds)
+            self.assertTrue(high - low <= max(0.05, high * 0.05 / 1.05) + 1e-9, seconds)
+
+    def test_legacy_bucket_counts_never_exceed_the_request_count(self):
+        legacy = {"m": {"o": 400, "g": 4.0, "n": 2, "t": {"9": 2}}}   # 旧的 2.0–2.5 秒粗桶
+        self.assertTrue(2.2 <= USAGE._perf_summary(legacy)["ttft"] <= 2.4, "按粗桶中点 2.25 秒折进细分桶")
+        stale = {"m": {"o": 400, "g": 4.0, "n": 2, "t": {"9": 2}, "th": {"40": 2}}}
+        self.assertEqual(USAGE._perf_summary(stale)["tn"], 2, "新旧两份计数叠在一起时只认新的")
+
+    def test_ledger_remainder_drops_speed_stats_without_requests(self):
+        kept = {"in": 10, "perf": {"m": {"o": 100, "g": 1.0, "n": 1, "t": {"9": 1}}}}
+        live = {"in": 10, "perf": {"m": {"o": 100, "g": 1.0, "n": 1, "th": {"40": 1}}}}
+        merged = USAGE._ledger_merge_sources(kept, {"session": live}, "tool")
+        self.assertEqual(merged["perf"]["m"]["n"], 1)
+        self.assertNotIn("t", merged["perf"]["m"], "旧记录减去现有日志后没有剩下请求，旧分桶不该留下")
 
     def test_merging_two_sources_adds_everything_up(self):
         a, b = {}, {}
@@ -38,7 +59,7 @@ class PerfHelperTests(unittest.TestCase):
         USAGE._perf_add(b, "m", 300, 4, 3.0)
         merged = USAGE._perf_merge(USAGE._perf_merge({}, a), b)
         self.assertEqual((merged["m"]["o"], merged["m"]["g"], merged["m"]["n"]), (400, 6.0, 2))
-        self.assertEqual(sum(merged["m"]["t"].values()), 2)
+        self.assertEqual(sum(merged["m"]["th"].values()), 2)
 
 
 def _line(record):
@@ -106,8 +127,7 @@ class CodexPerfTests(unittest.TestCase):
         summary = USAGE._perf_summary(result["ranges"]["all"].get("perf"))
         self.assertEqual(summary["n"], 6)
         self.assertEqual(summary["tps"], 50.0, "500 token / 从首字到落盘的 10 秒")
-        # 首字分桶存，中位数在桶内插值：正好 2 秒的样本落在 2–2.5 秒那一桶
-        self.assertTrue(2.0 <= summary["ttft"] <= 2.5, "首字算到第一段思考，工具执行不算")
+        self.assertEqual(round(summary["ttft"], 1), 2.0, "首字算到第一段思考，工具执行不算")
 
     def test_an_incremental_read_keeps_the_timing_state(self):
         lines = self.rollout(6)
@@ -159,7 +179,7 @@ class ClaudePerfTests(unittest.TestCase):
         # 思考段 2 秒写入、思考了 1.5 秒 → 第 0.5 秒出首字；第 6 秒结束 → 生成 5.5 秒
         self.assertEqual(summary["n"], 5)
         self.assertEqual(summary["tps"], round(400 / 5.5, 1))
-        self.assertTrue(0.4 <= summary["ttft"] <= 0.6)
+        self.assertEqual(round(summary["ttft"], 1), 0.5)
 
     def test_without_thinking_timing_speed_is_end_to_end(self):
         result = self.scan(self.records(5, think=False))
@@ -267,12 +287,14 @@ class DeepSeekHarnessPerfTests(unittest.TestCase):
         start = int(datetime.now().timestamp() * 1000) - 60_000
         perf = self.scan(self.step(start))
         self.assertEqual((perf["n"], perf["tps"]), (1, 96.2), "含推理的 500 token / 首块到 finish 的 5.2 秒")
+        self.assertEqual(round(perf["ttft"], 1), 0.8, "step 开始到第一个内容块")
         self.assertEqual(perf["models"]["Deepseek V4 Pro"]["n"], 1)
 
     def test_a_retry_restarts_the_clock(self):
         start = int(datetime.now().timestamp() * 1000) - 60_000
         perf = self.scan(self.step(start, retry_at=10_000))
         self.assertEqual(perf["tps"], 100.0, "重试后首块到 finish 是 5 秒")
+        self.assertEqual(round(perf["ttft"], 1), 1.0, "TTFT 从重试开始算")
 
 
 class LogAndDatabasePerfTests(unittest.TestCase):
@@ -320,3 +342,36 @@ class LogAndDatabasePerfTests(unittest.TestCase):
                                [(at, json.dumps(data)) for at, data in parts])
         timing = USAGE._opencode_step_timing(connection, {"message", "part"})
         self.assertEqual(timing["m1"], [(4.0, 2.0, 400), (2.0, 2.5, 200)])
+
+
+class PerfStatMergeSwiftTests(unittest.TestCase):
+    def test_devices_merge_by_recomputing_the_averages(self):
+        import subprocess
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "perf-stat-merge-check"
+            result = subprocess.run(
+                ["swiftc", "-parse-as-library",
+                 str(root / "Tokei/Sources/Tokei/Model.swift"),
+                 str(root / "Tokei/Sources/Tokei/L10n.swift"),
+                 str(root / "tests/swift/PerfStatMergeCheck.swift"),
+                 "-o", str(binary)],
+                capture_output=True, text=True, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("perf stat merge checks passed", result.stdout)
+
+    def test_every_range_with_perf_merges_it_across_devices(self):
+        import re
+        root = Path(__file__).resolve().parents[1]
+        model = (root / "Tokei/Sources/Tokei/Model.swift").read_text(encoding="utf-8")
+        sync = (root / "Tokei/Sources/Tokei/SyncManager.swift").read_text(encoding="utf-8")
+        with_perf = {match.group(1) for match in re.finditer(
+            r"struct (\w+)Range: Codable \{(?:(?!\nstruct ).)*?var perf: PerfStat\?", model, re.S)}
+        self.assertTrue({"Claude", "Codex", "Hermes", "TokenUsage"} <= with_perf)
+        for name in with_perf:
+            body = re.search(r"func mergeRanges\(_ dst: inout " + name + r"Ranges,.*?\n    \}\n",
+                             sync, re.S)
+            self.assertIsNotNone(body, name)
+            self.assertIn("PerfStat.merged(d.perf, s.perf)", body.group(0), name)

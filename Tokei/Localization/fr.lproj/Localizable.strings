@@ -6,7 +6,6 @@
 "%@ Credits" = "Crédits %@";
 "%@ 上下文快照" = "Instantané de contexte %@";
 "%@ 上次读到剩余 %@%%" = "%@ : dernière lecture %@%% restant";
-"%@ 个请求的平均输出速度与首字延迟中位数" = "Vitesse de sortie moyenne et délai médian du premier token sur %@ requêtes";
 "%@ 会话" = "%@ sessions";
 "%@ 分钟" = "%@ min";
 "%@ 剩余 %@%%" = "%@ restant %@%%";
@@ -447,7 +446,6 @@
 "这个周期已经用了" = "Déjà utilisé ce cycle";
 "这些 token ≈ 码了 %@ 字 ✍️" = "Ces tokens ≈ %@ caractères écrits ✍️";
 "这些花费 ≈ %@ 杯咖啡 ☕" = "Ces dépenses ≈ %@ cafés ☕";
-"输出速度" = "Vitesse de sortie";
 "这些花费 ≈ %@ 顿火锅 🍲" = "Ces dépenses ≈ %@ repas fondue 🍲";
 "远程 Linux" = "Linux distant";
 "远程采集" = "Collecte à distance";
@@ -461,7 +459,6 @@
 "重置卡" = "Cartes de réinit.";
 "重试" = "Réessayer";
 "错误" = "Erreur";
-"速度" = "Vitesse";
 "长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。" = "Les plages longues tracent la consommation réelle quotidienne de tokens, fusionnée sur tous les appareils ; les instantanés de pourcentage ne sont gardés que 7 jours.";
 "间隔" = "Intervalle";
 "防休眠" = "Caféine";
@@ -484,7 +481,15 @@
 "额度窗口" = "Fenêtre de quota";
 "额度轨迹" = "Historique des quotas";
 "首字延迟：从发出请求到收到第一个 token 的时间" = "Délai du premier token : de l'envoi de la requête à la réception du premier token";
-"首字延迟：从发出请求到收到第一个 token 的时间，取各请求的中位数" = "Délai du premier token : de l'envoi de la requête à la réception du premier token, médiane des requêtes";
+"平均输出速度" = "Vitesse de sortie moy.";
+"平均速度" = "Vitesse moy.";
+"平均 TTFT" = "TTFT moy.";
+"TTFT 中位数" = "TTFT médian";
+"平均响应" = "Réponse moy.";
+"输出 token 总数 ÷ 生成总时长，来自 %@ 个请求；拿不到首字时间的请求按整个请求的耗时算" = "Total des tokens de sortie ÷ durée totale de génération sur %@ requêtes ; les requêtes sans heure du premier token comptent leur durée complète";
+"首字延迟：从发出请求到收到第一个 token 的时间，%@ 个请求的中位数" = "Délai du premier token : de l'envoi de la requête à la réception du premier token, médiane sur %@ requêtes";
+"平均输出速度来自 %@ 个请求" = "Vitesse de sortie moyenne sur %@ requêtes";
+"平均输出速度来自 %@ 个请求，TTFT 中位数来自其中 %@ 个" = "Vitesse de sortie moyenne sur %@ requêtes ; TTFT médian sur %@ d'entre elles";
 "默认关闭。开启后仅在 Claude Desktop 缓存不可用时，使用 Claude Code CLI 已有登录态向 Anthropic 查询 5h、周及模型额度，并缓存 5 分钟。登录 Token 只在内存中使用，不写入 Tokei 文件。" = "Désactivé par défaut. Si activé, seulement si le cache Claude Desktop est indisponible, Tokei utilise la session Claude Code CLI pour interroger Anthropic pour 5h, hebdo et modèles (en cache 5 min). Les identifiants restent en mémoire.";
 "默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。" = "Désactivé par défaut. Si activé, Tokei se connecte uniquement au point d'accès local 127.0.0.1 de l'app QwenWork. Tokei ne stocke aucun identifiant.";
 "默认只读 ~/.grok 本地日志，不访问网络" = "Par défaut, lit uniquement les journaux locaux ~/.grok, aucun accès réseau";

@@ -1271,11 +1271,11 @@ struct PanelView: View {
                         items.append(.init("chart.bar.fill", L("窗口"), String(format: "%.0f%%", ctx)))
                     }
                     if let ttft = r.ttft, ttft > 0 {
-                        items.append(.init("timer", "TTFT", String(format: "%.1fs", Double(ttft) / 1000),
+                        items.append(.init("timer", L("平均 TTFT"), String(format: "%.1fs", Double(ttft) / 1000),
                                            help: L("首字延迟：从发出请求到收到第一个 token 的时间")))
                     }
                     if let response = r.response, response > 0 {
-                        items.append(.init("speedometer", L("响应"), String(format: "%.1fs", Double(response) / 1000)))
+                        items.append(.init("speedometer", L("平均响应"), String(format: "%.1fs", Double(response) / 1000)))
                     }
                     // TTFT 已经有 Grok 自己的统计，这里只补输出速度
                     items += perfMetrics(r.perf, includeTTFT: false)
@@ -1907,14 +1907,15 @@ struct PanelView: View {
         }
     }
 
-    /// 输出速度、TTFT 两格，只在有样本时出现。速度按 token 总数除以生成总时长，
-    /// TTFT 取中位数；拿不到首字时间的工具速度含等待（端到端）。
+    /// 平均输出速度、TTFT 中位数两格，只在有样本时出现。速度 = 输出 token 总数 ÷ 生成总时长，
+    /// 拿不到首字时间的请求速度含等待（端到端）；TTFT 有长尾，取中位数。
     func perfMetrics(_ perf: PerfStat?, includeTTFT: Bool = true) -> [Metric] {
         guard let perf, perf.n > 0 else { return [] }
-        var items: [Metric] = [.init("gauge.medium", L("输出速度"), Fmt.tps(perf.tps))]
+        var items: [Metric] = [.init("gauge.medium", L("平均输出速度"), Fmt.tps(perf.tps),
+                                     help: L("输出 token 总数 ÷ 生成总时长，来自 %@ 个请求；拿不到首字时间的请求按整个请求的耗时算", perf.n))]
         if includeTTFT, let ttft = perf.ttft {
-            items.append(.init("timer", "TTFT", Fmt.seconds(ttft),
-                               help: L("首字延迟：从发出请求到收到第一个 token 的时间，取各请求的中位数")))
+            items.append(.init("timer", L("TTFT 中位数"), Fmt.seconds(ttft),
+                               help: L("首字延迟：从发出请求到收到第一个 token 的时间，%@ 个请求的中位数", perf.tn ?? perf.n)))
         }
         return items
     }
@@ -2381,18 +2382,20 @@ struct PanelView: View {
                 }
                 if let perf {
                     HStack(spacing: 2) {
-                        Text(L("速度")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(L("平均速度")).font(labelFont).foregroundStyle(Theme.tTertiary)
                         Text(Fmt.tps(perf.tps)).font(tagFont).foregroundStyle(tint)
                         if let ttft = perf.ttft {
                             Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
-                            Text("TTFT").font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text(L("TTFT 中位数")).font(labelFont).foregroundStyle(Theme.tTertiary)
                             Text(Fmt.seconds(ttft)).font(tagFont).foregroundStyle(tint)
                         }
                     }
                     .padding(.horizontal, 6).padding(.vertical, 2.5)
                     .background(Capsule().fill(bg))
                     .overlay(Capsule().strokeBorder(border, lineWidth: 0.5))
-                    .help(L("%@ 个请求的平均输出速度与首字延迟中位数", perf.n))
+                    .help(perf.ttft == nil
+                          ? L("平均输出速度来自 %@ 个请求", perf.n)
+                          : L("平均输出速度来自 %@ 个请求，TTFT 中位数来自其中 %@ 个", perf.n, perf.tn ?? perf.n))
                 }
                 if hit > 0 {
                     HStack(spacing: 2) {

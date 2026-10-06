@@ -31,18 +31,89 @@ struct ClaudeModelStat: Codable, Identifiable {
     var total: Int { `in` + out + cr + cw }
 }
 
-/// 输出速度（token/秒）与首字延迟（秒）。采集器按请求计时后汇总；没有样本时整个字段缺省。
+/// 平均输出速度（token/秒）与 TTFT 中位数（秒）。采集器按请求计时后汇总；没有样本时整个字段缺省。
+/// o/g/th 是算出它们的累加值（输出 token、生成秒数、TTFT 细分桶直方图），合并多台设备时据此重算。
 struct PerfStat: Codable, Equatable {
     var tps: Double
     var ttft: Double?
     var n: Int
+    var o: Int? = nil
+    var g: Double? = nil
+    var tn: Int? = nil
+    var th: [String: Int]? = nil
     var models: [String: PerfModelStat]? = nil
+
+    var overall: PerfModelStat { .init(tps: tps, ttft: ttft, n: n, o: o, g: g, tn: tn, th: th) }
+
+    /// 跨设备合并：速度 = 输出 token 合计 ÷ 生成秒数合计，TTFT 按合并后的直方图重新取中位数。
+    static func merged(_ lhs: PerfStat?, _ rhs: PerfStat?) -> PerfStat? {
+        guard let lhs else { return rhs }
+        guard let rhs else { return lhs }
+        let total = lhs.overall.merged(with: rhs.overall)
+        var models = lhs.models ?? [:]
+        for (name, stat) in rhs.models ?? [:] {
+            models[name] = models[name].map { $0.merged(with: stat) } ?? stat
+        }
+        return PerfStat(tps: total.tps, ttft: total.ttft, n: total.n, o: total.o, g: total.g,
+                        tn: total.tn, th: total.th, models: models.isEmpty ? nil : models)
+    }
 }
 
 struct PerfModelStat: Codable, Equatable {
     var tps: Double
     var ttft: Double?
     var n: Int
+    var o: Int? = nil
+    var g: Double? = nil
+    var tn: Int? = nil
+    var th: [String: Int]? = nil
+
+    func merged(with other: PerfModelStat) -> PerfModelStat {
+        let n = n + other.n
+        var result = PerfModelStat(tps: 0, ttft: nil, n: n)
+        if let o, let g, let otherO = other.o, let otherG = other.g, g + otherG > 0 {
+            result.o = o + otherO
+            result.g = g + otherG
+            result.tps = (Double(o + otherO) / (g + otherG) * 10).rounded() / 10
+        } else if n > 0 {
+            // 没带累加值的旧数据只能按请求数加权
+            result.tps = ((tps * Double(self.n) + other.tps * Double(other.n)) / Double(n) * 10).rounded() / 10
+        }
+        if let th, let otherTh = other.th {
+            let hist = th.merging(otherTh, uniquingKeysWith: +)
+            result.th = hist
+            result.tn = hist.values.reduce(0, +)
+            result.ttft = PerfModelStat.median(hist)
+        } else {
+            // 没有直方图时只能按样本数加权两边的中位数
+            let left = tn ?? (ttft == nil ? 0 : self.n), right = other.tn ?? (other.ttft == nil ? 0 : other.n)
+            if left + right > 0 {
+                result.tn = left + right
+                let value = ((ttft ?? 0) * Double(left) + (other.ttft ?? 0) * Double(right)) / Double(left + right)
+                result.ttft = (value * 100).rounded() / 100
+            }
+        }
+        return result
+    }
+
+    /// 和采集器同一套分桶：第 0 桶 [0, 0.05)，第 k 桶 [0.05×1.05^(k-1), 0.05×1.05^k)，桶内线性插值。
+    static func median(_ hist: [String: Int]) -> Double? {
+        let buckets = hist.compactMap { key, count in Int(key).map { ($0, count) } }
+            .filter { $0.1 > 0 }.sorted { $0.0 < $1.0 }
+        let total = buckets.reduce(0) { $0 + $1.1 }
+        guard total > 0 else { return nil }
+        let half = Double(total) / 2
+        var seen = 0.0
+        for (bucket, count) in buckets {
+            if seen + Double(count) >= half {
+                let low = bucket <= 0 ? 0 : 0.05 * pow(1.05, Double(bucket - 1))
+                let high = 0.05 * pow(1.05, Double(max(bucket, 0)))
+                return ((low + (high - low) * ((half - seen) / Double(count))) * 100).rounded() / 100
+            }
+            seen += Double(count)
+        }
+        return nil
+    }
 }
 
 struct ClaudeRange: Codable {

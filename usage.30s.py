@@ -1468,7 +1468,7 @@ def _ledger_merge_sources(kept, current, tool=None):
             live = _ledger_values(live, snapshot)
         # v1 had no provenance. Preserve only its unattributed remainder, not
         # the whole old total plus all currently visible sessions.
-        sources["legacy"] = _ledger_values(kept, live, subtract=True)
+        sources["legacy"] = _perf_drop_empty(_ledger_values(kept, live, subtract=True))
     for source, snapshot in current.items():
         authoritative_codex_source = (
             tool in ("codex", "codex_reserve")
@@ -1820,17 +1820,36 @@ def _iter_cached_token_days(tool_cache):
             yield day["date"], day
 
 
-# ---------- 输出速度 / 首字延迟 ----------
-# 每个请求一个样本：输出 token、生成秒数、首字延迟（拿得到才有）。按「天 × 模型」累加进
+# ---------- 平均输出速度 / TTFT 中位数 ----------
+# 每个请求一个样本：输出 token、生成秒数、TTFT（拿得到才有）。按「天 × 模型」累加进
 # day["perf"]，跟着按会话合并和账本一起走——_ledger_values 对嵌套字典逐项相加，正好是对的。
 # 生成秒数：拿得到首字时间就从首字算到输出结束（纯生成），拿不到就从请求开始算（端到端）。
-# 首字延迟存成分桶直方图取中位数，偶尔排队几十秒的请求不会把典型值拉偏。
-_PERF_TTFT_EDGES = (0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0,
-                    6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 120.0)
+# 平均输出速度 = 输出 token 总数 ÷ 生成总秒数，存累加值 o/g/n，合并后再相除，是精确的。
+# TTFT 有长尾（排队、压缩上下文能等上几十秒），平均值会被少数请求拉高，所以取中位数：
+# 存成按 5% 等比分桶的直方图 "th"，桶内插值的误差在 0.1 秒显示精度以内，跨天、跨设备可直接相加。
 _PERF_MIN_OUTPUT = 20       # 输出太少的请求，时间基本都花在网络和排队上，速度没有意义
 _PERF_MAX_TPS = 3000.0      # 比这还快说明时间戳不可信
 _PERF_MAX_SECONDS = 1800.0  # 单个请求超过半小时，多半是中途挂起或时间戳错位
-_PERF_MIN_TTFT_SAMPLES = 5
+_PERF_MAX_TTFT = 120.0
+_PERF_TTFT_BASE = 0.05      # 第 0 桶是 [0, 0.05)，第 k 桶是 [0.05×1.05^(k-1), 0.05×1.05^k)
+_PERF_TTFT_RATIO = 1.05
+# 早期缓存和账本里 TTFT 存的是粗分桶 "t"，按桶中点折进细分桶；对应日志重读后就换成精确值
+_PERF_LEGACY_TTFT_EDGES = (0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5, 4.0,
+                           5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 120.0)
+
+
+def _perf_ttft_bucket(seconds):
+    import math
+    if seconds < _PERF_TTFT_BASE:
+        return 0
+    return int(math.floor(math.log(seconds / _PERF_TTFT_BASE) / math.log(_PERF_TTFT_RATIO))) + 1
+
+
+def _perf_ttft_bounds(bucket):
+    if bucket <= 0:
+        return 0.0, _PERF_TTFT_BASE
+    return (_PERF_TTFT_BASE * _PERF_TTFT_RATIO ** (bucket - 1),
+            _PERF_TTFT_BASE * _PERF_TTFT_RATIO ** bucket)
 
 
 def _perf_add(perf, model, out_tokens, gen_seconds, ttft_seconds=None):
@@ -1849,10 +1868,9 @@ def _perf_add(perf, model, out_tokens, gen_seconds, ttft_seconds=None):
         ttft = float(ttft_seconds) if ttft_seconds is not None else None
     except (TypeError, ValueError):
         ttft = None
-    if ttft is not None and 0 <= ttft <= _PERF_TTFT_EDGES[-1]:
-        import bisect
-        bucket = str(bisect.bisect_right(_PERF_TTFT_EDGES, ttft))
-        hist = stats.setdefault("t", {})
+    if ttft is not None and 0 <= ttft <= _PERF_MAX_TTFT:
+        hist = stats.setdefault("th", {})
+        bucket = str(_perf_ttft_bucket(ttft))
         hist[bucket] = hist.get(bucket, 0) + 1
     return True
 
@@ -1865,30 +1883,62 @@ def _perf_merge(dst, src):
         target["o"] += int(stats.get("o", 0) or 0)
         target["g"] = round(target["g"] + float(stats.get("g", 0) or 0), 3)
         target["n"] += int(stats.get("n", 0) or 0)
-        for bucket, count in (stats.get("t") or {}).items():
-            hist = target.setdefault("t", {})
-            hist[bucket] = hist.get(bucket, 0) + count
+        for key in ("th", "t"):
+            for bucket, count in (stats.get(key) or {}).items():
+                hist = target.setdefault(key, {})
+                hist[bucket] = hist.get(bucket, 0) + count
     return dst
 
 
+def _perf_drop_empty(day):
+    """账本里「旧记录减去现有日志」得到的余量：请求数减到 0 的速度统计没有意义，去掉。"""
+    perf = day.get("perf") if isinstance(day, dict) else None
+    if isinstance(perf, dict):
+        kept = {model: stats for model, stats in perf.items()
+                if isinstance(stats, dict) and int(stats.get("n", 0) or 0) > 0}
+        if kept:
+            day["perf"] = kept
+        else:
+            day.pop("perf", None)
+    return day
+
+
+def _perf_ttft_histogram(stats):
+    """细分桶直方图；旧的粗分桶按桶中点折进来，但 TTFT 样本数不会超过请求数。"""
+    hist = {int(bucket): int(count or 0) for bucket, count in (stats.get("th") or {}).items()
+            if int(count or 0) > 0}
+    room = int(stats.get("n", 0) or 0) - sum(hist.values())
+    edges = _PERF_LEGACY_TTFT_EDGES
+    for bucket, count in sorted((stats.get("t") or {}).items(), key=lambda item: int(item[0])):
+        count = min(int(count or 0), room)
+        if count <= 0:
+            continue
+        index = int(bucket)
+        low = edges[index - 1] if 0 < index <= len(edges) else 0.0
+        fine = _perf_ttft_bucket((low + edges[min(index, len(edges) - 1)]) / 2)
+        hist[fine] = hist.get(fine, 0) + count
+        room -= count
+    return hist
+
+
 def _perf_ttft_median(hist):
-    total = sum(int(count or 0) for count in (hist or {}).values())
+    total = sum(hist.values())
     if not total:
         return None
     half, seen = total / 2, 0
-    for bucket in sorted(hist, key=int):
-        count = int(hist[bucket] or 0)
-        index = int(bucket)
-        low = _PERF_TTFT_EDGES[index - 1] if index > 0 else 0.0
-        high = _PERF_TTFT_EDGES[min(index, len(_PERF_TTFT_EDGES) - 1)]
+    for bucket in sorted(hist):
+        count = hist[bucket]
         if count and seen + count >= half:
+            low, high = _perf_ttft_bounds(bucket)
             return round(low + (high - low) * ((half - seen) / count), 2)
         seen += count
     return None
 
 
 def _perf_summary(perf, name=None):
-    """{"tps", "ttft", "n", "models": {显示名: {...}}}；没有样本时为 None。"""
+    """{"tps", "ttft", "n", "o", "g", "tn", "th", "models": {显示名: {...}}}；没有样本时为 None。
+
+    tps 是平均输出速度，ttft 是 TTFT 中位数；o/g/th 是算出它们的累加值，App 合并多台设备时用。"""
     name = name or nice_model
     total, by_name = {}, {}
     for model, stats in (perf or {}).items():
@@ -1898,11 +1948,10 @@ def _perf_summary(perf, name=None):
     def one(stats):
         if not stats or not stats.get("g"):
             return None
-        hist = stats.get("t") or {}
-        # 首字样本太少时中位数不稳，宁可不显示
-        ttft = (_perf_ttft_median(hist) if sum(hist.values()) >= _PERF_MIN_TTFT_SAMPLES
-                else None)
-        return {"tps": round(stats["o"] / stats["g"], 1), "ttft": ttft, "n": stats["n"]}
+        hist = _perf_ttft_histogram(stats)
+        return {"tps": round(stats["o"] / stats["g"], 1), "ttft": _perf_ttft_median(hist),
+                "n": stats["n"], "o": stats["o"], "g": round(stats["g"], 3),
+                "tn": sum(hist.values()), "th": {str(bucket): hist[bucket] for bucket in sorted(hist)}}
 
     overall = one(total.get("*"))
     if not overall:
@@ -4066,7 +4115,8 @@ def _codex_canonical_file_cache(file_cache):
 
 # 计时是后来加的：旧缓存里的事件没有它。不为此整体重扫 33GB 历史，而是每轮挑最近几天
 # 改动过、还没带计时的会话，从新到旧重解析一小批，几十轮刷新后最近一周就补齐了。
-_CODEX_PERF_VERSION = 1
+# 3：TTFT 改存细分桶直方图，取中位数。
+_CODEX_PERF_VERSION = 3
 _CODEX_PERF_BACKFILL_DAYS = 7
 _CODEX_PERF_BACKFILL_BYTES = 120 * 1024 * 1024
 
@@ -5040,8 +5090,9 @@ def _load_gemini_usage_file(path):
 
 
 # 1：Antigravity 的输出不再重复计入思考 token，并带上首字延迟与流式时长。
+# 3：TTFT 改存细分桶直方图，取中位数。
 # 账本按「取大」合并，修正后更小的数要靠版本号才能替换掉旧记录。
-_GEMINI_PARSE_VERSION = 1
+_GEMINI_PARSE_VERSION = 3
 
 
 def scan_gemini(bounds, cache):
@@ -11202,7 +11253,8 @@ def scan_deepseek_harness(bounds, cache):
 # V2（session_message 表）的助手消息角色在行的 type 列，模型是 {id, providerID}
 # 引用，tokens / cost 与 V1 同形。迁移过来的历史两张表都有，同一条消息 ID 相同。
 # 4：数据库里的每一步附上计时（首字延迟、生成时间）。
-_OPENCODE_COST_CACHE_VERSION = 4
+# 6：TTFT 改存细分桶直方图，取中位数。
+_OPENCODE_COST_CACHE_VERSION = 6
 
 
 def _opencode_db_paths():
@@ -11669,7 +11721,8 @@ def scan_zcode(bounds, cache):
 # 否则被高水位规则记下的旧数（例如兄弟节点翻倍那版）会一直压住修正后的值。
 # 同一个常量也用作扫描缓存的版本，两边一起失效。
 # 4：附上每次回复的计时（首字延迟、生成时间）。
-_DEVIN_COST_VERSION = 4
+# 6：TTFT 改存细分桶直方图，取中位数。
+_DEVIN_COST_VERSION = 6
 
 
 def _devin_cli_db_path():
@@ -12235,7 +12288,8 @@ def _mimocode_db_paths():
 
 # 解析口径版本。加 1 可让旧缓存失效重扫（例如新增了按项目的用量拆分）。
 # 3：数据库里的每一步附上计时（首字延迟、生成时间）。
-_MIMOCODE_SCAN_VERSION = 3
+# 5：TTFT 改存细分桶直方图，取中位数。
+_MIMOCODE_SCAN_VERSION = 5
 
 
 def scan_mimocode(bounds, cache):

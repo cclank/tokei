@@ -337,3 +337,65 @@ class GrokBotTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrokBotBackgroundHelperTests(unittest.TestCase):
+    """辅助程序拉全年用量可能要一分多钟：放到后台跑，不拖住刷新、也不因超时丢结果。"""
+
+    PAYLOAD = {"quotaFetched": True, "usageFetched": False,
+               "sandUsage": {"hasNonZeroIncludedLimit": True, "usagePercent": 42}}
+
+    def helper(self, tmp, delay=0.0, exit_code=0):
+        script = Path(tmp) / "helper.sh"
+        counter = Path(tmp) / "runs"
+        script.write_text(
+            "#!/bin/sh\n"
+            f"echo run >> '{counter}'\n"
+            f"sleep {delay}\n"
+            f"[ {exit_code} -eq 0 ] || exit {exit_code}\n"
+            f"printf '%s' '{json.dumps(self.PAYLOAD)}'\n", encoding="utf-8")
+        script.chmod(0o700)
+        return str(script), counter
+
+    def patches(self, tmp, script, wait):
+        return [mock.patch.object(USAGE, "PROVIDER_QUOTA_CACHE", str(Path(tmp) / "quota.json")),
+                mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="a" * 64),
+                mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=1),
+                mock.patch.object(USAGE, "_grok_bot_helper_path", return_value=script),
+                mock.patch.object(USAGE, "_GROK_BOT_HELPER_WAIT", wait),
+                mock.patch.object(USAGE, "_cursor_session", return_value=None)]
+
+    def run_with(self, tmp, script, wait, steps):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            for patch in self.patches(tmp, script, wait):
+                stack.enter_context(patch)
+            return [step() for step in steps]
+
+    def test_a_slow_helper_finishes_in_the_background_and_is_picked_up_next_round(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            script, counter = self.helper(tmp, delay=1.5)
+            first, second = self.run_with(tmp, script, 0.3, [
+                USAGE.fetch_grok_bot_quota,
+                lambda: (time.sleep(2.5), USAGE.fetch_grok_bot_quota())[1],
+            ])
+            runs = counter.read_text().count("run")
+        self.assertEqual(first, {}, "当轮没跑完：先用上一次的结果（这里没有）")
+        self.assertEqual(second["windows"][0]["used_pct"], 42, "下一轮取到后台跑完的结果")
+        self.assertEqual(runs, 1, "在跑的时候不重复启动")
+
+    def test_a_fast_helper_is_still_answered_in_the_same_round(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self.helper(tmp, delay=0)
+            (quota,) = self.run_with(tmp, script, 5, [USAGE.fetch_grok_bot_quota])
+        self.assertEqual(quota["windows"][0]["used_pct"], 42)
+
+    def test_a_failing_helper_is_backed_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script, counter = self.helper(tmp, delay=0, exit_code=2)
+            results = self.run_with(tmp, script, 5,
+                                    [USAGE.fetch_grok_bot_quota, USAGE.fetch_grok_bot_quota])
+            runs = counter.read_text().count("run")
+        self.assertEqual(results, [{}, {}])
+        self.assertEqual(runs, 1, "失败后五分钟内不再启动")

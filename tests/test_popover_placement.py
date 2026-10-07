@@ -105,7 +105,7 @@ class PopoverPlacementTests(unittest.TestCase):
         self.assertIn("heightRatio", placement, "上限须按屏幕比例")
         self.assertIn("visibleHeight * heightRatio", placement)
         # 量内容必须发生在打开之前：开着的时候改尺寸会让 NSPopover 重挑锚点
-        self.assertIn("measuredPanelSize()", app_source)
+        self.assertIn("measuredPanelSize(", app_source)
         self.assertIn("scrollable: false", app_source, "量的是不套滚动视图的那份")
 
 

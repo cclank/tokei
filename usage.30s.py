@@ -7084,28 +7084,121 @@ def _grok_bot_helper_path():
     return None
 
 
-def _grok_bot_helper_sand_usage():
-    helper = _grok_bot_helper_path()
-    if not helper:
+# 辅助程序从年初开始分页拉全部用量事件，用得越多越慢：上万条要一分多钟，同步等它
+# 会拖住整轮刷新，超时又白白丢掉结果。所以放到后台跑：结果先写临时文件再改名，
+# 下一轮来取；只等一小会儿，快的照样当轮拿到。结果文件放在额度缓存旁边。
+_GROK_BOT_HELPER_PENDING = object()
+_GROK_BOT_HELPER_WAIT = 8
+_GROK_BOT_HELPER_MAX_RUNTIME = 600
+_GROK_BOT_HELPER_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _grok_bot_native_marker():
+    account_id = _grok_bot_active_account_id()
+    generation = _grok_bot_authorization_generation()
+    if not account_id or generation is None:
+        return None
+    return _provider_credential_marker("grok-bot-account-v1", account_id, generation)
+
+
+def _grok_bot_helper_files():
+    directory = os.path.dirname(PROVIDER_QUOTA_CACHE) or "."
+    return (os.path.join(directory, "grok_bot_helper.json"),
+            os.path.join(directory, "grok_bot_helper.state.json"))
+
+
+def _grok_bot_helper_running(state):
+    pid, started = state.get("pid"), state.get("started")
+    if not isinstance(pid, int) or not isinstance(started, (int, float)):
+        return False
+    if _time.time() - started > _GROK_BOT_HELPER_MAX_RUNTIME:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _grok_bot_helper_take_result(marker):
+    """后台跑完的结果（属于当前账号与授权的才算），取走即删。"""
+    result_path, state_path = _grok_bot_helper_files()
+    if not os.path.isfile(result_path):
+        return None
+    state = _load_json(state_path, {})
+    try:
+        with open(result_path, "rb") as handle:
+            raw = handle.read(_GROK_BOT_HELPER_MAX_BYTES + 1)
+    except OSError:
         return None
     try:
-        result = subprocess.run(
-            [helper, "--grok-bot-data-json"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=35,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        os.remove(result_path)
+    except OSError:
+        pass
+    if not isinstance(state, dict) or state.get("marker") != marker \
+            or len(raw) > _GROK_BOT_HELPER_MAX_BYTES:
         return None
-    if result.returncode != 0 or len(result.stdout) > 16 * 1024 * 1024:
-        return None
+    _atomic_write_json(state_path, dict(state, done=True))
     try:
-        payload = json.loads(result.stdout.decode("utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _grok_bot_helper_start(marker):
+    """后台没在跑就启动一次辅助程序。返回 (是否有一次在跑, 是不是这次启动的)。"""
+    helper = _grok_bot_helper_path()
+    if not helper or not marker:
+        return False, False
+    result_path, state_path = _grok_bot_helper_files()
+    state = _load_json(state_path, {})
+    if isinstance(state, dict) and state.get("marker") == marker and not state.get("done") \
+            and _grok_bot_helper_running(state):
+        return True, False
+    temporary = f"{result_path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(result_path) or ".", mode=0o700, exist_ok=True)
+        process = subprocess.Popen(
+            ["/bin/sh", "-c", 'umask 077; "$0" --grok-bot-data-json > "$1" && mv -f "$1" "$2" || rm -f "$1"',
+             helper, temporary, result_path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True)
+    except OSError:
+        return False, False
+    _atomic_write_json(state_path, {"pid": process.pid, "started": int(_time.time()), "marker": marker})
+    return True, True
+
+
+def _grok_bot_helper_sand_usage():
+    """跑完的结果、None（拿不到）或 _GROK_BOT_HELPER_PENDING（后台还在跑，下一轮再取）。"""
+    marker = _grok_bot_native_marker()
+    payload = _grok_bot_helper_take_result(marker)
+    if payload is not None:
+        return payload
+    result_path, state_path = _grok_bot_helper_files()
+    state = _load_json(state_path, {})
+    if isinstance(state, dict) and state.get("marker") == marker and not state.get("done") \
+            and state.get("pid") and not _grok_bot_helper_running(state):
+        # 上一次后台跑完了却没留下结果：算一次失败，交给调用方退避
+        _atomic_write_json(state_path, dict(state, done=True))
+        return None
+    running, started_now = _grok_bot_helper_start(marker)
+    if not running:
+        return None
+    if started_now:
+        deadline = _time.time() + _GROK_BOT_HELPER_WAIT
+        while _time.time() < deadline:
+            _time.sleep(0.2)
+            payload = _grok_bot_helper_take_result(marker)
+            if payload is not None:
+                return payload
+            if not _grok_bot_helper_running(_load_json(state_path, {})):
+                _atomic_write_json(state_path, dict(_load_json(state_path, {}), done=True))
+                return None
+    return _GROK_BOT_HELPER_PENDING
 
 
 def _grok_bot_repair_authorization_marker():
@@ -7345,6 +7438,15 @@ def fetch_grok_bot_quota(session=None):
             cached = _cached_provider_quota(
                 "grok_bot", native_marker, _PROVIDER_QUOTA_TTL)
             if cached:
+                finished = _grok_bot_helper_take_result(native_marker)
+                fresh = _grok_bot_provider_data(finished, updated=finished.get("updated")) \
+                    if finished is not None else None
+                if fresh:
+                    _save_provider_quota_cache("grok_bot", native_marker, fresh)
+                    return fresh
+                # 过了一半有效期就在后台先续上，过期那一刻已经有新结果，不留空档
+                if _cached_provider_quota("grok_bot", native_marker, _PROVIDER_QUOTA_TTL // 2) is None:
+                    _grok_bot_helper_start(native_marker)
                 return cached
             native_fallback = _cached_provider_quota(
                 "grok_bot", native_marker, _PROVIDER_QUOTA_FALLBACK_TTL, stale=True) \
@@ -7355,6 +7457,8 @@ def fetch_grok_bot_quota(session=None):
                 return {}
             if recent_attempt is None:
                 payload = _grok_bot_helper_sand_usage()
+                if payload is _GROK_BOT_HELPER_PENDING:
+                    return native_fallback   # 后台还在拉，先用上一次的结果
                 if payload is not None:
                     quota = _grok_bot_provider_data(
                         payload, updated=payload.get("updated"))

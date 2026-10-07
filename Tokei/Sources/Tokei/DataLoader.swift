@@ -223,9 +223,24 @@ final class DataLoader {
         return result
     }
 
+    /// 缓存目录里两万多个文件，扫一遍要几百毫秒；一次刷新要用两遍，面板开着时 10 秒刷新一次。
+    /// 而这份额度要等 Claude 桌面版自己去刷新才会变（几分钟一次），所以 60 秒内直接复用上次的结果。
+    private static let claudeQuotaScanReuse: TimeInterval = 60
+    private static var lastClaudeQuotaScan: (at: Date, result: [String: Any]?)?
+
     static func scanClaudeQuota(now: Date = Date()) -> [String: Any]? {
         claudeQuotaScanLock.lock()
         defer { claudeQuotaScanLock.unlock() }
+        if let last = lastClaudeQuotaScan {
+            let age = now.timeIntervalSince(last.at)
+            if age >= 0 && age < claudeQuotaScanReuse { return last.result }
+        }
+        let result = scanClaudeQuotaNow(now: now)
+        lastClaudeQuotaScan = (now, result)
+        return result
+    }
+
+    private static func scanClaudeQuotaNow(now: Date) -> [String: Any]? {
         let nowEpoch = Int(now.timeIntervalSince1970)
         let horizon = now.timeIntervalSince1970 + claudeQuotaFutureSkew
         let records = claudeCacheRecords().filter { $0.modified <= horizon }

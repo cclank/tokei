@@ -58,7 +58,7 @@ struct GrokBotHelperManagerCheck {
         #!/bin/sh
         # \(marker)
         if [ "$1" = "--grok-bot-helper-version" ]; then
-          echo 1
+          echo \(GrokBotHelperManager.requiredProtocolVersion)
           exit 0
         fi
         if [ "$1" = "--grok-bot-verify" ]; then

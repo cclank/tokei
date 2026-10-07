@@ -7148,6 +7148,116 @@ def _grok_bot_helper_take_result(marker):
     return payload if isinstance(payload, dict) else None
 
 
+# 用量事件按天存在额度缓存旁边：今年已有上万条，每次从年初全量拉既慢又会撞上
+# 辅助程序的翻页上限。平时只拉最近两天（--since 那天零点起），这两天整天替换，
+# 更早的日子原样留着；还没有存档时才从年初拉一次。只留今年的，跨年自动清掉。
+def _grok_bot_event_dir():
+    return os.path.join(os.path.dirname(PROVIDER_QUOTA_CACHE) or ".", "grok_bot_events")
+
+
+def _grok_bot_stored_days():
+    """{日期: 事件文件路径}，只算今年的。"""
+    directory = _grok_bot_event_dir()
+    year = str(date.today().year)
+    days = {}
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return days
+    for name in names:
+        day = name[:-5] if name.endswith(".json") else None
+        if day and re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and day.startswith(year + "-"):
+            days[day] = os.path.join(directory, name)
+    return days
+
+
+def _grok_bot_events_since():
+    """该从哪天零点（毫秒）起补拉；还没有存档就返回 None，从年初拉。"""
+    days = _grok_bot_stored_days()
+    if not days:
+        return None
+    last = min(date.fromisoformat(max(days)), date.today())
+    start = max(last - timedelta(days=1), date(date.today().year, 1, 1))
+    return int(datetime.combine(start, datetime.min.time()).timestamp() * 1000)
+
+
+def _grok_bot_merge_events(payload):
+    """把这次拉到的事件并进按天的存档，返回换成全年事件的 payload。
+
+    拉取窗口从某天零点开始时，窗口内的日子整天替换（拉到的就是那几天的全部）；
+    旧版辅助程序不认 --since、从年初拉，同样按整段替换处理。"""
+    if not isinstance(payload, dict):
+        return payload
+    directory = _grok_bot_event_dir()
+    year = date.today().year
+    events = payload.get("usageEventsDisplay")
+    if payload.get("usageFetched") is True and isinstance(events, list):
+        try:
+            start = datetime.fromtimestamp(int(payload.get("usageStartDate")) / 1000)
+        except (TypeError, ValueError, OSError, OverflowError):
+            start = None
+        if start is not None:
+            first_full_day = start.date() if start.time() == datetime.min.time() \
+                else start.date() + timedelta(days=1)
+            by_day = {}
+            for event in events:
+                try:
+                    day = datetime.fromtimestamp(int(event.get("timestamp")) / 1000).date()
+                except (AttributeError, TypeError, ValueError, OSError, OverflowError):
+                    continue
+                if day.year == year:
+                    by_day.setdefault(day.isoformat(), []).append(event)
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            stored = _grok_bot_stored_days()
+            for day, path in stored.items():
+                if day >= first_full_day.isoformat() and day not in by_day:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+            for day, day_events in by_day.items():
+                if day < start.date().isoformat():
+                    continue
+                path = os.path.join(directory, f"{day}.json")
+                if day < first_full_day.isoformat():
+                    # 窗口从这天中途开始：只补新的，不删旧的
+                    seen = {json.dumps(event, sort_keys=True) for event in day_events}
+                    for event in _load_json(path, []) if day in stored else []:
+                        if json.dumps(event, sort_keys=True) not in seen:
+                            day_events.append(event)
+                # 和 _atomic_write_json 写出来的一模一样，内容没变就不重写
+                content = json.dumps(day_events, ensure_ascii=False, separators=(",", ":"))
+                try:
+                    with open(path, "r", encoding="utf-8") as handle:
+                        if handle.read() == content:
+                            continue
+                except OSError:
+                    pass
+                try:
+                    _atomic_write_json(path, day_events)
+                except OSError:
+                    pass
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        names = []
+    for name in names:   # 去年的存档用不上了
+        if name.endswith(".json") and not name.startswith(f"{year}-"):
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
+    stored_events = []
+    for _, path in sorted(_grok_bot_stored_days().items()):
+        loaded = _load_json(path, [])
+        if isinstance(loaded, list):
+            stored_events.extend(event for event in loaded if isinstance(event, dict))
+    if not stored_events:
+        return payload
+    return dict(payload, usageFetched=True, usageEventsDisplay=stored_events,
+                usageStartDate=str(int(datetime(year, 1, 1).timestamp() * 1000)))
+
+
 def _grok_bot_helper_start(marker):
     """后台没在跑就启动一次辅助程序。返回 (是否有一次在跑, 是不是这次启动的)。"""
     helper = _grok_bot_helper_path()
@@ -7159,11 +7269,14 @@ def _grok_bot_helper_start(marker):
             and _grok_bot_helper_running(state):
         return True, False
     temporary = f"{result_path}.{os.getpid()}.tmp"
+    since = _grok_bot_events_since()
+    since_args = '--since "$3"' if since is not None else ""
     try:
         os.makedirs(os.path.dirname(result_path) or ".", mode=0o700, exist_ok=True)
         process = subprocess.Popen(
-            ["/bin/sh", "-c", 'umask 077; "$0" --grok-bot-data-json > "$1" && mv -f "$1" "$2" || rm -f "$1"',
-             helper, temporary, result_path],
+            ["/bin/sh", "-c",
+             f'umask 077; "$0" --grok-bot-data-json {since_args} > "$1" && mv -f "$1" "$2" || rm -f "$1"',
+             helper, temporary, result_path, str(since or "")],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, close_fds=True)
     except OSError:
@@ -7439,7 +7552,8 @@ def fetch_grok_bot_quota(session=None):
                 "grok_bot", native_marker, _PROVIDER_QUOTA_TTL)
             if cached:
                 finished = _grok_bot_helper_take_result(native_marker)
-                fresh = _grok_bot_provider_data(finished, updated=finished.get("updated")) \
+                fresh = _grok_bot_provider_data(
+                    _grok_bot_merge_events(finished), updated=finished.get("updated")) \
                     if finished is not None else None
                 if fresh:
                     _save_provider_quota_cache("grok_bot", native_marker, fresh)
@@ -7461,7 +7575,7 @@ def fetch_grok_bot_quota(session=None):
                     return native_fallback   # 后台还在拉，先用上一次的结果
                 if payload is not None:
                     quota = _grok_bot_provider_data(
-                        payload, updated=payload.get("updated"))
+                        _grok_bot_merge_events(payload), updated=payload.get("updated"))
                     if quota:
                         _save_provider_quota_cache("grok_bot", native_marker, quota)
                         return quota

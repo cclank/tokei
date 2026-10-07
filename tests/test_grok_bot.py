@@ -399,3 +399,74 @@ class GrokBotBackgroundHelperTests(unittest.TestCase):
             runs = counter.read_text().count("run")
         self.assertEqual(results, [{}, {}])
         self.assertEqual(runs, 1, "失败后五分钟内不再启动")
+
+
+class GrokBotIncrementalEventsTests(unittest.TestCase):
+    """用量事件按天存档，平时只拉最近两天，不再每次从年初全量拉。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patch = mock.patch.object(USAGE, "PROVIDER_QUOTA_CACHE", str(Path(self.tmp.name) / "quota.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.today = datetime.now().astimezone().date()
+
+    def ms(self, day, hour=12):
+        return int(datetime(day.year, day.month, day.day, hour).timestamp() * 1000)
+
+    def event(self, day, tokens, hour=12):
+        return {"timestamp": str(self.ms(day, hour)), "model": "grok-bot-default",
+                "tokenUsage": {"inputTokens": tokens, "outputTokens": 0}}
+
+    def payload(self, start_day, events):
+        return {"quotaFetched": True, "usageFetched": True,
+                "usageStartDate": str(self.ms(start_day, 0)), "usageEventsDisplay": events,
+                "sandUsage": {"hasNonZeroIncludedLimit": True, "usagePercent": 10}}
+
+    def test_a_full_fetch_then_a_two_day_fetch_keep_the_whole_year(self):
+        jan1 = self.today.replace(month=1, day=1)
+        days = sorted({jan1, self.today - timedelta(days=2) if self.today.toordinal() - 2 >= jan1.toordinal() else jan1,
+                       self.today})
+        full = USAGE._grok_bot_merge_events(self.payload(jan1, [self.event(day, 100) for day in days]))
+        self.assertEqual(len(full["usageEventsDisplay"]), len(days))
+
+        since = USAGE._grok_bot_events_since()
+        self.assertEqual(since, self.ms(max(self.today - timedelta(days=1), jan1), 0),
+                         "从最后一天的前一天零点起补拉")
+        fresh = USAGE._grok_bot_merge_events(self.payload(
+            max(self.today - timedelta(days=1), jan1),
+            [self.event(self.today, 100), self.event(self.today, 50, hour=13)]))
+        tokens = sum(e["tokenUsage"]["inputTokens"] for e in fresh["usageEventsDisplay"])
+        self.assertEqual(tokens, 100 * (len(days) - 1) + 150, "窗口里的今天整天替换，更早的留着")
+
+    def test_quota_only_payload_still_shows_stored_usage(self):
+        USAGE._grok_bot_merge_events(self.payload(self.today, [self.event(self.today, 70)]))
+        merged = USAGE._grok_bot_merge_events({"quotaFetched": True, "usageFetched": False})
+        self.assertEqual(merged["usageEventsDisplay"][0]["tokenUsage"]["inputTokens"], 70,
+                         "这次没拉到用量时用存档")
+
+    def test_last_years_files_are_removed(self):
+        directory = Path(USAGE._grok_bot_event_dir())
+        directory.mkdir(parents=True)
+        old = directory / f"{self.today.year - 1}-12-31.json"
+        old.write_text("[]", encoding="utf-8")
+        USAGE._grok_bot_merge_events(self.payload(self.today, [self.event(self.today, 1)]))
+        self.assertFalse(old.exists())
+
+    def test_the_helper_is_asked_only_for_recent_days(self):
+        USAGE._grok_bot_merge_events(self.payload(self.today, [self.event(self.today, 1)]))
+        args_file = Path(self.tmp.name) / "args"
+        script = Path(self.tmp.name) / "helper.sh"
+        script.write_text(f"#!/bin/sh\necho \"$@\" > '{args_file}'\nexit 2\n", encoding="utf-8")
+        script.chmod(0o700)
+        with mock.patch.object(USAGE, "_grok_bot_helper_path", return_value=str(script)):
+            running, started = USAGE._grok_bot_helper_start("marker")
+            import time
+            for _ in range(50):
+                if args_file.exists():
+                    break
+                time.sleep(0.05)
+        self.assertTrue(running and started)
+        self.assertEqual(args_file.read_text().split(),
+                         ["--grok-bot-data-json", "--since", str(USAGE._grok_bot_events_since())])

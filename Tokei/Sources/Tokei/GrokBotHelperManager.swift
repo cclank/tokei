@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 enum GrokBotHelperManager {
-    static let requiredProtocolVersion = 1
+    static let requiredProtocolVersion = 2
     private static let helperName = "TokeiGrokBotHelper"
     private static let resolutionLock = NSLock()
     private static var cachedHelperURL: URL?

@@ -16,7 +16,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         }
     }
 
-    static let releaseTag = "v1.0.45"
+    static let releaseTag = "v1.0.46"
     static let isLocalBuild = Bundle.main.object(forInfoDictionaryKey: "TokeiLocalBuild") as? Bool ?? false
     static let automaticCheckInterval: TimeInterval = 6 * 3600
     @Published var state: State = .idle

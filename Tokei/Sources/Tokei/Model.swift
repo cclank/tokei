@@ -1286,13 +1286,31 @@ enum Fmt {
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(e)))
     }
 
-    static func beijingTime(_ epoch: Int, full: Bool = false) -> String {
-        let d = Date(timeIntervalSince1970: TimeInterval(epoch))
+    /// 按系统时区显示时刻（Codex 重置卡到期时间等），和额度行的重置时间一致。
+    static func localTime(_ epoch: Int) -> String {
         let f = DateFormatter()
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = full ? "yyyy-MM-dd HH:mm:ss" : "MM-dd HH:mm"
-        return f.string(from: d)
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
+    }
+
+    /// 重置卡到期列表上的时区说明，如「本地 · GMT+8」。
+    static func localTimeZoneCaption() -> String {
+        let zone = TimeZone.current
+        let locale = Locale(identifier: AppLanguage.current.rawValue)
+        let name = zone.localizedName(for: .shortStandard, locale: locale)
+            ?? zone.localizedName(for: .generic, locale: locale)
+            ?? zone.identifier
+        return L("本地 · %@", name)
+    }
+
+    /// 离到期还有多久。重置卡往往十几天后才到期，两天以上按天显示（16d6h），
+    /// 两天以内同 countdown；已经过了就是「已到期」。
+    static func remaining(_ epoch: Int, now: Date = Date()) -> String {
+        let seconds = Int(TimeInterval(epoch) - now.timeIntervalSince1970)
+        if seconds <= 0 { return L("已到期") }
+        if seconds >= 2 * 86400 { return "\(seconds / 86400)d\((seconds % 86400) / 3600)h" }
+        let h = seconds / 3600, m = (seconds % 3600) / 60
+        return h > 0 ? "\(h)h\(m)m" : "\(max(m, 1))m"
     }
 
     static func countdown(_ epoch: Int?) -> String {

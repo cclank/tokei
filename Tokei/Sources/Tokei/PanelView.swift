@@ -843,11 +843,14 @@ struct PanelView: View {
                 Text(L("%@ 张", cards.count))
                     .font(.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
-                Spacer(minLength: 6)
+                Spacer(minLength: 4)
                 if let nearest = expirations.first {
-                    Text(L("最近 %@ · 北京时间", Fmt.beijingTime(nearest)))
+                    // 按系统时区显示，再带上还剩多久；单行放不下时略缩小，不折行
+                    Text(L("%@ · %@后", Fmt.localTime(nearest), Fmt.remaining(nearest)))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Image(systemName: codexResetCardsOpen ? "chevron.down" : "chevron.right")
                     .font(.system(size: Theme.fontSize(8), weight: .bold))
@@ -856,7 +859,8 @@ struct PanelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(L("查看重置卡到期时间"))
+        .help(expirations.first.map { L("最近一张 %@ 后到期", Fmt.remaining($0)) }
+              ?? L("查看重置卡到期时间"))
 
         if codexResetCardsOpen {
             VStack(alignment: .leading, spacing: 7) {
@@ -865,9 +869,10 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(9.5), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                     Spacer()
-                    Text(L("北京时间 UTC+8"))
+                    Text(Fmt.localTimeZoneCaption())
                         .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
                 }
                 ForEach(Array(expirations.enumerated()), id: \.offset) { index, expiry in
                     HStack(spacing: 7) {
@@ -880,9 +885,11 @@ struct PanelView: View {
                             .font(.system(size: Theme.fontSize(10.5), weight: .medium))
                             .foregroundStyle(Theme.tSecondary)
                         Spacer()
-                        Text(Fmt.beijingTime(expiry, full: true))
+                        Text(L("%@ · %@后", Fmt.localTime(expiry), Fmt.remaining(expiry)))
                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
             }

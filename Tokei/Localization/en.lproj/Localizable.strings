@@ -169,7 +169,10 @@
 "加载中…" = "Loading…";
 "加载中…(%@)" = "Loading… (%@)";
 "加载失败" = "Load failed";
-"北京时间 UTC+8" = "Beijing time (UTC+8)";
+"本地 · %@" = "Local · %@";
+"%@ · %@后" = "%@ · in %@";
+"最近一张 %@ 后到期" = "Next one expires in %@";
+"已到期" = "Expired";
 "区域" = "Region";
 "十万刀" = "$100K Club";
 "十亿先生" = "Billion Club";
@@ -363,7 +366,6 @@
 "更新时间未知" = "Update time unknown";
 "更早" = "Earlier";
 "最大区间下降" = "Largest range drop";
-"最近 %@ · 北京时间" = "Latest %@ · Beijing time";
 "最近一次 · %@" = "Latest · %@";
 "最近额度变化" = "Recent quota changes";
 "月" = "Month";

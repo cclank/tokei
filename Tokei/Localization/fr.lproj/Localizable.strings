@@ -136,7 +136,10 @@
 "加载中…" = "Chargement…";
 "加载中…(%@)" = "Chargement en cours… (%@)";
 "加载失败" = "Échec du chargement";
-"北京时间 UTC+8" = "Heure de Pékin (UTC+8)";
+"本地 · %@" = "Local · %@";
+"%@ · %@后" = "%@ · dans %@";
+"最近一张 %@ 后到期" = "La prochaine expire dans %@";
+"已到期" = "Expiré";
 "区域" = "Région";
 "千问办公" = "QwenWork";
 "千问办公额度查询" = "Consultation du quota QwenWork";
@@ -301,7 +304,6 @@
 "更新时间未知" = "Heure de mise à jour inconnue";
 "更早" = "Plus tôt";
 "最大区间下降" = "Plus grande baisse sur la plage";
-"最近 %@ · 北京时间" = "Dernier %@ · Heure de Pékin";
 "最近一次 · %@" = "Dernier · %@";
 "最近额度变化" = "Changements récents de quota";
 "月" = "Mois";

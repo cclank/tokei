@@ -11,16 +11,19 @@ except ImportError:
     from test_codex_limits import USAGE
 
 
-def harness_event(event_type, timestamp, turn, step, usage, model=None):
+def harness_event(event_type, timestamp, turn, step, usage, model=None, served=None):
     data = {"turn": turn, "step": step}
     if event_type == "assistant/chunk":
         data["chunk"] = {"type": "usage", "usage": usage}
     else:
         data["usage"] = usage
-        data["message"] = {
-            "source": {"kind": "model", "provider": "deepseek-official",
-                       "model": model or "deepseek-v4-pro"}
-        }
+        source = {"kind": "model", "provider": "deepseek-official",
+                  "model": model or "deepseek-v4-pro"}
+        if served is not None:
+            source["replayState"] = {"response": {
+                "kind": "pi-ai", "version": 2,
+                "model": model or "deepseek-v4-pro", "responseModel": served}}
+        data["message"] = {"source": source}
     return {"type": event_type, "time": timestamp, "data": data}
 
 
@@ -184,6 +187,61 @@ class DeepSeekHarnessTests(unittest.TestCase):
         self.assertEqual(record["out"], 4)
         self.assertEqual(record["reason"], 5)
         self.assertEqual(USAGE.token_total(record), 27)
+
+    def test_replay_response_model_is_used_when_the_request_was_a_group(self):
+        # 经网关选路由组时 source.model 是 group/<id>，它不是一个模型；
+        # 真正作答的成员记在 replayState.response.responseModel 里。
+        record = USAGE._deepseek_harness_usage_record(harness_event(
+            "assistant/message", 1_704_672_000_000, 1, 1,
+            {"inputTokens": 10, "outputTokens": 5},
+            model="group/auto-glm-5-3-flash", served="zcode/GLM-5.3-Flash",
+        ))
+
+        self.assertEqual(record["model"], "zcode/GLM-5.3-Flash")
+
+    def test_request_model_is_kept_when_the_reply_names_no_member(self):
+        record = USAGE._deepseek_harness_usage_record(harness_event(
+            "assistant/message", 1_704_672_000_000, 1, 1,
+            {"inputTokens": 10, "outputTokens": 5},
+            model="workbuddy/deepseek-v4-pro",
+        ))
+
+        self.assertEqual(record["model"], "workbuddy/deepseek-v4-pro")
+
+    def test_placeholder_served_model_falls_back_to_the_request(self):
+        # 厂商把真实名报成 auto（「我自己挑了一个」）时，它说不出是哪个模型，
+        # 采用它会比请求名更没有信息量。
+        record = USAGE._deepseek_harness_usage_record(harness_event(
+            "assistant/message", 1_704_672_000_000, 1, 1,
+            {"inputTokens": 10, "outputTokens": 5},
+            model="qoder/Qwen3.8-Flash", served="auto",
+        ))
+
+        self.assertEqual(record["model"], "qoder/Qwen3.8-Flash")
+
+    def test_slug_spellings_of_one_model_merge_into_one_row(self):
+        # 网关修好之前记的是裸名、之后记的是 provider/model，两者是同一个模型。
+        merged = USAGE._merge_model_identities({
+            "glm-5.3-flash": {"in": 10, "out": 1},
+            "zcode/GLM-5.3-Flash": {"in": 20, "out": 2},
+        })
+
+        self.assertEqual(list(merged), ["zcode/GLM-5.3-Flash"])
+        self.assertEqual(merged["zcode/GLM-5.3-Flash"], {"in": 30, "out": 3})
+
+    def test_a_release_date_is_not_absorbed_by_the_merge(self):
+        # 带日期的版本与基础版是两个模型，不能被归并成一行。
+        merged = USAGE._merge_model_identities({
+            "deepseek/deepseek-v4-pro": {"in": 10},
+            "deepseek/deepseek-v4-pro-202606": {"in": 20},
+        })
+
+        self.assertEqual(len(merged), 2)
+
+    def test_a_routing_group_is_not_treated_as_a_model(self):
+        self.assertFalse(USAGE._names_model("group/auto-glm-5-3-flash"))
+        self.assertFalse(USAGE._names_model("qoder/auto"))
+        self.assertTrue(USAGE._names_model("zcode/GLM-5.3-Flash"))
 
 
 if __name__ == "__main__":

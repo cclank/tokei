@@ -2057,8 +2057,14 @@ def _perf_ttft_median(hist):
 def _perf_summary(perf, name=None):
     """{"tps", "ttft", "n", "o", "g", "tn", "th", "models": {显示名: {...}}}；没有样本时为 None。
 
-    tps 是平均输出速度，ttft 是 TTFT 中位数；o/g/th 是算出它们的累加值，App 合并多台设备时用。"""
-    name = name or nice_model
+    tps 是平均输出速度，ttft 是 TTFT 中位数；o/g/th 是算出它们的累加值，App 合并多台设备时用。
+    每个模型的名字要和这个工具的模型行一致：默认按 _format_token_models 的归并与标准名；
+    模型行直接用原始名起名的（Claude、Gemini）传 name=nice_model。"""
+    if name is None:
+        # 和模型行同一套归并与标准名，名字才对得上（App 匹配时再忽略大小写和标点）
+        representatives = _model_merge_representatives(perf or {})
+        name = lambda model: nice_model(_model_identity_id(representatives.get(model, model))
+                                        or representatives.get(model, model))
     total, by_name = {}, {}
     for model, stats in (perf or {}).items():
         _perf_merge(total, {"*": stats})
@@ -2144,8 +2150,9 @@ def _format_token_models(models, include_prices=True, price_model=None):
     # sorting, preserving accumulated costs rather than repricing usage.
     # price_model：该工具算成本时实际用的查价规则。给了就按它展示单价，
     # 这样没有公开价、按别的模型估算的行也能看到是按什么价算的（pref）。
+    # 先把同一模型的不同写法（裸名 / 带 provider、大小写、「.」与「-」）合成一行
     canonical_models = {}
-    for model, usage in models.items():
+    for model, usage in _merge_model_identities(models).items():
         model_id = _model_identity_id(model)
         merged = canonical_models.setdefault(model_id, {})
         for field in ("in", "out", "cr", "cw", "reason", "cost", "cost_cny", "credits"):
@@ -10521,6 +10528,80 @@ def _pi_model_id(msg):
     return model or provider or "unknown"
 
 
+# 经网关（如 magpie）选路由组时，会话里有两个模型名：message.model 是「请求的」，
+# 可能是 group/<id> 这种分组名，根本不是一个模型；responseModel 是回包里厂商报的、
+# 真正作答的那个。归因和计价都按后者，取不到再退回请求名。
+# 厂商有时把真实名报成 auto 之类（「我自己挑了一个」），说不出是哪个模型，也不采用。
+_MODEL_PLACEHOLDERS = {"auto", "default", "unknown", "none"}
+
+
+def _names_model(model):
+    """这个名字是否点出了一个具体模型（分组名、占位值都不算）。"""
+    s = (model or "").strip()
+    if not s or s.startswith("group/"):
+        return False
+    return s.rsplit("/", 1)[-1].lower() not in _MODEL_PLACEHOLDERS
+
+
+def _pi_served_model(msg):
+    """pi-ai 系消息里真正作答的模型；裸名补上 provider 前缀，好和带前缀的写法归并。"""
+    served = msg.get("responseModel") if isinstance(msg, dict) else None
+    served = served.strip() if isinstance(served, str) else ""
+    if not served:
+        return ""
+    provider = msg.get("provider")
+    provider = provider.strip() if isinstance(provider, str) else ""
+    if provider and "/" not in served and not served.startswith("group/"):
+        return f"{provider}/{served}"
+    return served
+
+
+def _served_identity(served, requested):
+    """真实名优先、请求名兜底；都没有就是 unknown。"""
+    served = (served or "").strip()
+    if _names_model(served):
+        return served
+    return (requested or "").strip() or "unknown"
+
+
+def _has_model_provider(model):
+    s = (model or "").strip()
+    return "/" in s and not s.startswith("group/")
+
+
+def _model_merge_key(model):
+    """同一模型不同写法的归并键：只吸收 provider 前缀有无、大小写、「.」与「-」。
+
+    版本日期不吸收（带日期的和基础版是两个模型）；分组名原样保留、不参与归并。"""
+    s = (model or "").strip().lower()
+    if not s or s == "unknown" or s.startswith("group/"):
+        return s
+    return s.rsplit("/", 1)[-1].replace(".", "-")
+
+
+def _model_merge_representatives(models):
+    """{原始名: 代表名}：同一归并键下优先用带 provider 的写法，否则用最先出现的。"""
+    chosen = {}
+    for model in models:
+        key = _model_merge_key(model)
+        current = chosen.get(key)
+        if current is None or (_has_model_provider(model) and not _has_model_provider(current)):
+            chosen[key] = model
+    return {model: chosen[_model_merge_key(model)] for model in models}
+
+
+def _merge_model_identities(models):
+    """把同一模型的不同写法（见 _model_merge_key）合成一行，用量逐项相加。"""
+    representatives = _model_merge_representatives(models)
+    merged = {}
+    for model, usage in models.items():
+        target = merged.setdefault(representatives[model], {})
+        for field, value in usage.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                target[field] = target.get(field, 0) + value
+    return merged
+
+
 def _pi_usage_int(usage, *fields):
     for field in fields:
         if field in usage and usage[field] is not None:
@@ -10566,7 +10647,8 @@ def _pi_usage_cost(u, model):
 # 解析口径版本。1：没有公开价的模型不再按 Opus 兜底价估美元。
 # 2：不带厂商前缀的模型名按名字到价目表里查价。3：没有的沿用上一个版本的价。
 # 4：附上每条回复的端到端耗时。
-_PI_PARSER_VERSION = 4
+# 5：经网关选路由组时按回包里真正作答的模型归因（responseModel）。
+_PI_PARSER_VERSION = 5
 
 
 def scan_pi(bounds, cache):
@@ -10629,7 +10711,7 @@ def scan_pi(bounds, cache):
                         cr = _pi_usage_int(u, "cacheRead", "cache_read")
                         cw = _pi_usage_int(u, "cacheWrite", "cache_write")
                         reason = _pi_usage_int(u, "reasoning", "reason", "reasoningTokens")
-                        model = _pi_model_id(msg)
+                        model = _served_identity(_pi_served_model(msg), _pi_model_id(msg))
                         cost = _pi_usage_cost(u, model)
                         if inp + out + cr + cw + reason == 0 and cost <= 0:
                             continue
@@ -10726,7 +10808,7 @@ def _parse_prime_session_file(path):
                 dt = parse_ts(obj.get("timestamp") or msg.get("timestamp") or "")
                 if dt is None:
                     continue
-                current_model = _pi_model_id(msg)
+                current_model = _served_identity(_pi_served_model(msg), _pi_model_id(msg))
                 current_model = current_model if current_model != "unknown" else model
                 inp = _pi_usage_int(usage, "input")
                 out = _pi_usage_int(usage, "output")
@@ -10754,7 +10836,11 @@ def _parse_prime_session_file(path):
             _perf_add(day.setdefault("perf", {}), event["model"], event["out"], event["gen"])
         day["hours"][event["hour"]] += token_total(event)
     return {"session": session_id, "sid": session_id, "proj": project,
-            "events": events, "days": days, "perf_v": 1}
+            "events": events, "days": days, "perf_v": _PRIME_PARSER_VERSION}
+
+
+# 缓存口径版本，变了就重读一次。1：附上回复计时。2：按真正作答的模型归因。
+_PRIME_PARSER_VERSION = 2
 
 
 def scan_prime_agent(bounds, cache):
@@ -10775,8 +10861,8 @@ def scan_prime_agent(bounds, cache):
             continue
         sig = f"{st.st_mtime_ns}:{st.st_size}"
         entry = fc.get(path)
-        # perf_v：旧缓存没有回复计时，升级后重读一次
-        if not isinstance(entry, dict) or entry.get("sig") != sig or entry.get("perf_v") != 1:
+        if not isinstance(entry, dict) or entry.get("sig") != sig \
+                or entry.get("perf_v") != _PRIME_PARSER_VERSION:
             parsed = _parse_prime_session_file(path)
             parsed["sig"] = sig
             fc[path] = parsed
@@ -11431,7 +11517,8 @@ def scan_grok_bot(bounds, cache):
 # ---------- DeepSeek Harness ----------
 # Harness 会为同一次调用写 usage chunk 和最终 message。按 session/turn/step
 # 只保留最终 message；异常中断时再用 usage chunk 兜底。
-_DEEPSEEK_HARNESS_COST_VERSION = 6
+# 7：经网关选路由组时按 replayState 里真正作答的模型归因。
+_DEEPSEEK_HARNESS_COST_VERSION = 7
 
 
 def _deepseek_harness_usage_record(item, fallback_model="", fallback_provider="deepseek-official"):
@@ -11453,6 +11540,13 @@ def _deepseek_harness_usage_record(item, fallback_model="", fallback_provider="d
         if isinstance(source, dict):
             model = source.get("model") or model
             provider = source.get("provider") or provider
+            # source.model 是「请求的」，经网关时可能是 group/<id>；真正作答的记在 replayState
+            replay = source.get("replayState") or source.get("replay_state")
+            response = replay.get("response") if isinstance(replay, dict) else None
+            served = (response.get("responseModel") or response.get("response_model")) \
+                if isinstance(response, dict) else None
+            if isinstance(served, str) and _names_model(served.strip()):
+                model = served.strip()
         priority = 2
     elif event_type == "assistant/chunk":
         chunk = data.get("chunk") or {}
@@ -14575,7 +14669,7 @@ def compute():
                            "pin": p["in"], "pout": p["out"], "pcr": p["cache_read"]})
         return {"hit": hit, "in": b["in"], "out": b["out"],
                 "cr": b["cr"], "cw": b["cw"], "cost": b["cost"], "models": models,
-                "sessions": len(b["sessions"]), "perf": _perf_summary(b.get("perf"))}
+                "sessions": len(b["sessions"]), "perf": _perf_summary(b.get("perf"), name=nice_model)}
 
     def codex_range(b):
         b = b or {}
@@ -14599,7 +14693,7 @@ def compute():
         return {"hit": hit, "in": max(b["in"] - b["cached"], 0), "out": b["out"],
                 "cached": b["cached"], "thoughts": b["thoughts"], "cost": b["cost"],
                 "models": models, "sessions": len(b["sessions"]),
-                "perf": _perf_summary(b.get("perf"))}
+                "perf": _perf_summary(b.get("perf"), name=nice_model)}
 
     def grok_range(b):
         latency_count = b.get("latency_count", 0)
@@ -15445,7 +15539,7 @@ def _scan_local_models():
                             o = json.loads(line)
                             msg = o.get("message") or {}
                             if msg.get("role") == "assistant":
-                                models.add(_pi_model_id(msg))
+                                models.add(_served_identity(_pi_served_model(msg), _pi_model_id(msg)))
                         except Exception:
                             pass
             except OSError:

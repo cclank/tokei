@@ -639,7 +639,7 @@ struct PanelView: View {
                     return ModelRow(name: m.name, pin: m.pin, pout: m.pout, pcr: m.pcr ?? 0,
                                    cost: m.cost, total: m.total, hit: hit,
                                    tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw,
-                                   perf: r.perf?.models?[m.name])
+                                   perf: r.perf?.model(named: m.name))
                 }
                 if !claudeRows.isEmpty {
                     modelDisclosure(claudeRows, open: $claudeModelsOpen, tint: Theme.claude)
@@ -2298,7 +2298,7 @@ struct PanelView: View {
                                            tokReason: m.reason,
                                            pin: m.pin, pout: m.pout, pcr: m.pcr, hit: hit, tint: tint,
                                            componentsAreSubtotals: inclusiveIO, priceRef: m.pref,
-                                           perf: perf?.models?[m.name])
+                                           perf: perf?.model(named: m.name))
                         }
                     }
                 }

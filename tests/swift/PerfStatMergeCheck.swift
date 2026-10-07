@@ -37,6 +37,12 @@ struct PerfStatMergeCheck {
         let mixed = old.merged(with: PerfModelStat(tps: 100, ttft: 2, n: 3))
         try expect(mixed.tps == 87.5, "没带累加值时按请求数加权")
         try expect(mixed.ttft == 2 && mixed.tn == 3, "只有一边有 TTFT 时就用那一边的")
+        let named = PerfStat(tps: 1, ttft: nil, n: 1, models: [
+            "GLM 5.3 Flash": PerfModelStat(tps: 50, ttft: nil, n: 1),
+            "GPT-5.6 Sol": PerfModelStat(tps: 30, ttft: nil, n: 1)])
+        try expect(named.model(named: "Glm 5.3 Flash")?.tps == 50, "大小写、标点不同的同一模型也要对上")
+        try expect(named.model(named: "GPT-5.6 Luna") == nil, "不同的模型不能误配")
+
         print("perf stat merge checks passed")
     }
 }

@@ -63,6 +63,87 @@ class PiOmpUsageTests(unittest.TestCase):
         self.assertTrue(cache["_dirty"])
         self.assertEqual(len(cache["pi"]), 1)
 
+    def test_response_model_wins_over_a_routing_group_request(self):
+        # 经网关选路由组时 message.model 是 group/<id>，它不是一个模型；
+        # 回包里的 responseModel 才是真正作答的成员。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".pi" / "agent" / "sessions"
+            session = root / "project" / "session.jsonl"
+            session.parent.mkdir(parents=True)
+            timestamp = datetime.now().astimezone().replace(microsecond=0).isoformat()
+            records = [
+                {"type": "session", "id": "pi-session", "cwd": "/tmp/pi-project"},
+                {"type": "model_change", "modelId": "group/auto-glm-5-3-flash"},
+                {
+                    "type": "message",
+                    "timestamp": timestamp,
+                    "message": {
+                        "role": "assistant",
+                        "provider": "magpie",
+                        "model": "group/auto-glm-5-3-flash",
+                        "responseModel": "zcode/GLM-5.3-Flash",
+                        "usage": {"input": 100, "output": 20},
+                    },
+                },
+            ]
+            session.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+
+            old_omp = USAGE.OMP_SESSION_DIR
+            old_pi = USAGE.PI_SESSION_DIR
+            old_agent = USAGE.PI_AGENT_DIR
+            USAGE.OMP_SESSION_DIR = str(Path(tmp) / "missing-omp")
+            USAGE.PI_SESSION_DIR = str(root)
+            USAGE.PI_AGENT_DIR = str(Path(tmp) / "missing-agent")
+            try:
+                result = USAGE.scan_pi(USAGE.range_bounds(), {"v": USAGE._SCAN_CACHE_VERSION})
+            finally:
+                USAGE.OMP_SESSION_DIR = old_omp
+                USAGE.PI_SESSION_DIR = old_pi
+                USAGE.PI_AGENT_DIR = old_agent
+
+        models = result["ranges"]["all"]["models"]
+        self.assertEqual(list(models), ["zcode/GLM-5.3-Flash"])
+        self.assertEqual(models["zcode/GLM-5.3-Flash"]["in"], 100)
+
+    def test_placeholder_response_model_falls_back_to_the_request(self):
+        # 厂商把真实名报成 auto 时，不能说这个模型叫 Auto。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".pi" / "agent" / "sessions"
+            session = root / "project" / "session.jsonl"
+            session.parent.mkdir(parents=True)
+            timestamp = datetime.now().astimezone().replace(microsecond=0).isoformat()
+            records = [
+                {"type": "session", "id": "pi-session", "cwd": "/tmp/pi-project"},
+                {
+                    "type": "message",
+                    "timestamp": timestamp,
+                    "message": {
+                        "role": "assistant",
+                        "provider": "qoder",
+                        "model": "Qwen3.8-Flash",
+                        "responseModel": "auto",
+                        "usage": {"input": 100, "output": 20},
+                    },
+                },
+            ]
+            session.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+
+            old_omp = USAGE.OMP_SESSION_DIR
+            old_pi = USAGE.PI_SESSION_DIR
+            old_agent = USAGE.PI_AGENT_DIR
+            USAGE.OMP_SESSION_DIR = str(Path(tmp) / "missing-omp")
+            USAGE.PI_SESSION_DIR = str(root)
+            USAGE.PI_AGENT_DIR = str(Path(tmp) / "missing-agent")
+            try:
+                result = USAGE.scan_pi(USAGE.range_bounds(), {"v": USAGE._SCAN_CACHE_VERSION})
+            finally:
+                USAGE.OMP_SESSION_DIR = old_omp
+                USAGE.PI_SESSION_DIR = old_pi
+                USAGE.PI_AGENT_DIR = old_agent
+
+        models = result["ranges"]["all"]["models"]
+        self.assertEqual(list(models), ["qoder/Qwen3.8-Flash"])
+
     def test_resolved_duplicate_roots_and_first_present_reasoning_are_stable(self):
         with tempfile.TemporaryDirectory() as tmp:
             real_root = Path(tmp) / "sessions"

@@ -56,6 +56,19 @@ final class PerfStat: Codable, Equatable {
 
     var overall: PerfModelStat { .init(tps: tps, ttft: ttft, n: n, o: o, g: g, tn: tn, th: th) }
 
+    /// 按模型行的显示名找这一行的速度。两边名字出自同一套归并规则，但同一模型的大小写、
+    /// 标点写法可能不完全一样（GLM-5.3 / glm 5.3），对不上时只比字母和数字。
+    func model(named name: String) -> PerfModelStat? {
+        if let exact = models?[name] { return exact }
+        let key = Self.matchKey(name)
+        return models?.first { Self.matchKey($0.key) == key }?.value
+    }
+
+    static func matchKey(_ name: String) -> String {
+        String(String.UnicodeScalarView(
+            name.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }))
+    }
+
     /// 跨设备合并：速度 = 输出 token 合计 ÷ 生成秒数合计，TTFT 按合并后的直方图重新取中位数。
     static func merged(_ lhs: PerfStat?, _ rhs: PerfStat?) -> PerfStat? {
         guard let lhs else { return rhs }

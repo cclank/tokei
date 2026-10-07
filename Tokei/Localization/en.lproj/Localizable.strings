@@ -318,6 +318,9 @@
 "按模型 · %@" = "By model · %@";
 "按量预算" = "Pay-as-you-go budget";
 "授权 Grok Bot" = "Authorize Grok Bot";
+"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Helper updated: re-authorize once for faster reads with no event limit";
+"重新授权" = "Re-authorize";
+"重新授权 Grok Bot" = "Re-authorize Grok Bot";
 "授权 Zed" = "Authorize Zed";
 "授权助手不可用，请重新安装 Tokei" = "Auth helper unavailable; please reinstall Tokei";
 "授权成功，可在 Grok Bot 卡片查看" = "Authorized; see the Grok Bot card";

@@ -1242,7 +1242,36 @@ struct PanelView: View {
                     .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
             }
+            if grokBotQuotaEnabled && GrokBotHelperManager.needsReauthorization {
+                grokBotReauthorizePrompt
+            }
         }
+    }
+
+    /// 授权助手有新版时直接在卡片上提示：换新版要重新授权一次，不能指望用户自己去设置里找。
+    /// 不重新授权也照常可用，旧版助手每次从年初全量读取，慢一些。
+    private var grokBotReauthorizePrompt: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "key.fill")
+                .font(.system(size: Theme.fontSize(9)))
+                .foregroundStyle(Theme.grokBot)
+            Text(grokBotAuthorizationResult.isEmpty
+                 ? L("授权助手已更新：重新授权一次，读取更快、不受条数上限")
+                 : grokBotAuthorizationResult)
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button(grokBotAuthorizing ? L("等待授权…") : L("重新授权")) {
+                authorizeGrokBotQuota()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: Theme.fontSize(9), weight: .semibold))
+            .foregroundStyle(Theme.grokBot)
+            .disabled(grokBotAuthorizing)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.grokBot.opacity(0.08)))
     }
 
     // MARK: - Grok 卡片
@@ -3408,7 +3437,9 @@ struct PanelView: View {
                 HStack(spacing: 8) {
                     settingsActionButton(
                         icon: "key.fill",
-                        title: grokBotAuthorizing ? L("等待授权…") : L("授权 Grok Bot")
+                        title: grokBotAuthorizing ? L("等待授权…")
+                            : GrokBotHelperManager.needsReauthorization ? L("重新授权 Grok Bot")
+                            : L("授权 Grok Bot")
                     ) {
                         authorizeGrokBotQuota()
                     }

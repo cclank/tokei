@@ -21,6 +21,36 @@ struct GrokBotHelperManagerCheck {
         }
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // 已授权的旧版助手照常用来采集，并提示重新授权；用户点授权时才换成新版。
+        // 先跑这一段：管理器在进程里缓存解析结果。
+        let legacyRoot = root.appendingPathComponent("legacy")
+        let legacyBundled = legacyRoot.appendingPathComponent("BundledHelper")
+        let legacyInstalled = legacyRoot.appendingPathComponent("installed/TokeiGrokBotHelper")
+        try FileManager.default.createDirectory(
+            at: legacyInstalled.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try writeHelper(to: legacyBundled, marker: "new")
+        try writeHelper(to: legacyInstalled, marker: "old",
+                        version: GrokBotHelperManager.minimumProtocolVersion)
+        // 标记事先就在：这一段不触发补标记，免得占掉后面那次（每 5 分钟最多一次）
+        let legacyMarker = legacyRoot.appendingPathComponent("authorization-marker")
+        try Data("ok\n".utf8).write(to: legacyMarker)
+        setenv("TOKEI_GROK_BOT_BUNDLED_HELPER", legacyBundled.path, 1)
+        setenv("TOKEI_GROK_BOT_PERSISTENT_HELPER", legacyInstalled.path, 1)
+        setenv("TOKEI_GROK_BOT_AUTH_MARKER", legacyMarker.path, 1)
+        try expect(GrokBotHelperManager.resolvedHelperURL() == legacyInstalled,
+                   "an authorized older helper should keep collecting data after an app update")
+        try expect(GrokBotHelperManager.needsReauthorization,
+                   "an older helper should prompt for re-authorization")
+        try expect(GrokBotHelperManager.installIfNeeded() == legacyInstalled,
+                   "authorizing should upgrade the helper in place")
+        try expect(try String(contentsOf: legacyInstalled, encoding: .utf8).contains("# new"),
+                   "authorizing should replace the older helper with the bundled one")
+        try expect(!GrokBotHelperManager.needsReauthorization,
+                   "the prompt should go away after upgrading")
+
         try writeHelper(to: bundled, marker: "original")
         try FileManager.default.createDirectory(
             at: installed.deletingLastPathComponent(),
@@ -53,12 +83,15 @@ struct GrokBotHelperManagerCheck {
         print("grok bot helper manager checks passed")
     }
 
-    private static func writeHelper(to url: URL, marker: String) throws {
+    private static func writeHelper(
+        to url: URL, marker: String,
+        version: Int = GrokBotHelperManager.requiredProtocolVersion
+    ) throws {
         let script = """
         #!/bin/sh
         # \(marker)
         if [ "$1" = "--grok-bot-helper-version" ]; then
-          echo \(GrokBotHelperManager.requiredProtocolVersion)
+          echo \(version)
           exit 0
         fi
         if [ "$1" = "--grok-bot-verify" ]; then

@@ -261,6 +261,9 @@
 "按模型 · %@" = "Par modèle · %@";
 "按量预算" = "Budget à l'usage";
 "授权 Grok Bot" = "Autoriser Grok Bot";
+"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Assistant mis à jour : réautorisez une fois pour une lecture plus rapide et sans limite";
+"重新授权" = "Réautoriser";
+"重新授权 Grok Bot" = "Réautoriser Grok Bot";
 "授权 Zed" = "Autoriser Zed";
 "授权助手不可用，请重新安装 Tokei" = "Assistant d'autorisation indisponible ; veuillez réinstaller Tokei";
 "授权成功，可在 Grok Bot 卡片查看" = "Semaine restante";

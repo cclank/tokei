@@ -62,6 +62,20 @@ class PopoverPlacementTests(unittest.TestCase):
         self.assertIn("layout.pageDidChange(next.rawValue, width: pageWidth(for: next))",
                       panel_source)
 
+    def test_open_panel_follows_the_status_item_when_its_width_changes(self):
+        """面板开着时在设置里切到「仅图标」，菜单栏按钮变窄、图标挪了位置，箭头却还指着原处。
+
+        跟着状态栏窗口的 didMove 只换定位矩形：实测在改宽度的同一轮里设置不生效，
+        而重新 show 会让 NSPopover 重挑屏幕和锚点（issue #97）。
+        """
+        app_source = (ROOT / "Tokei/Sources/Tokei/main.swift").read_text()
+
+        self.assertIn("NSWindow.didMoveNotification", app_source)
+        self.assertIn("self.popover.positioningRect = button.bounds", app_source)
+        # 打开面板、换宽页重新挂上两处之后都要接着跟踪
+        self.assertEqual(app_source.count("followAnchorWindow(of: "), 2)
+        self.assertEqual(app_source.count("popover.show(relativeTo: "), 2, "跟随不能靠重新 show")
+
     def test_status_item_stays_visible_and_reopening_the_app_shows_the_panel(self):
         """macOS 26 上可变宽度初始化的状态栏项偶发被压没，进程在跑、图标却看不到（issue #8）。"""
         app_source = (ROOT / "Tokei/Sources/Tokei/main.swift").read_text()

@@ -255,6 +255,10 @@ _DEFAULT_PRICES = {
     "anthropic/claude-sonnet-5":    {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
     # OpenRouter 目录还没收录 Sonnet 5.5；官方价与 Sonnet 5 相同。收录后以目录为准。
     "anthropic/claude-sonnet-5.5":  {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
+    # Anthropic 官方价（2026-10-08 核对）。新一代刚发布时 OpenRouter 目录常常还没收录，
+    # 查不到就会沿用上一代的价——Haiku 5.5 会被按 Haiku 4.5 计成 10 倍。收录后以目录为准。
+    "anthropic/claude-opus-5.5":    {"in": 4.0,   "out": 20.0, "cache_read": 0.2,    "cache_write": 5.0},
+    "anthropic/claude-haiku-5.5":   {"in": 0.1,   "out": 0.5,  "cache_read": 0.01,   "cache_write": 0.125},
     "anthropic/claude-opus-4.8":     {"in": 5.0,   "out": 25.0, "cache_read": 0.5,    "cache_write": 6.25},
     "anthropic/claude-sonnet-4.6":   {"in": 3.0,   "out": 15.0, "cache_read": 0.3,    "cache_write": 3.75},
     "anthropic/claude-haiku-4.5":    {"in": 1.0,   "out": 5.0,  "cache_read": 0.1,    "cache_write": 1.25},
@@ -396,6 +400,13 @@ _OVERRIDES = _load_json(OVERRIDES_FILE, {})
 _OV_MODELS, _OV_ALIASES = _merge_pricing_overrides(_OVERRIDES)
 
 
+# 按单次请求提示长度分档的 Claude 模型：(提示 token 上限, 超出后整次请求的倍数)。
+# 提示 = 输入 + 缓存读 + 缓存写。Haiku 5.5 超过 100K 后是 $0.50 / $2.50，缓存读写同比例。
+_CLAUDE_LONG_PROMPT_TIERS = {
+    "anthropic/claude-haiku-5.5": (100_000, 5.0),
+}
+
+
 def _effective_pricing_map(catalog=None):
     fields = ("in", "out", "cache_read", "cache_write", "write1h")
     catalog = catalog if isinstance(catalog, dict) else _PRICING_DB
@@ -406,6 +417,10 @@ def _effective_pricing_map(catalog=None):
         value.update(catalog.get(model, {}))
         value.update(_OV_MODELS.get(model, {}))
         result[model] = {field: value.get(field, 0.0) for field in fields}
+        # 分档规则也算价格的一部分：规则变了，缓存里这个模型的成本要跟着重算。
+        tier = _CLAUDE_LONG_PROMPT_TIERS.get(model)
+        if tier:
+            result[model]["long_prompt"] = list(tier)
     return result
 
 
@@ -2206,8 +2221,12 @@ def _claude_event_cost(event):
     else:
         write_cost = (int(w5 or 0) / 1e6 * p["write5m"]
                       + int(w1 or 0) / 1e6 * p["write1h"])
-    return (inp / 1e6 * p["in"] + out / 1e6 * p["out"]
+    cost = (inp / 1e6 * p["in"] + out / 1e6 * p["out"]
             + cr / 1e6 * p["cache_read"] + write_cost)
+    tier = _CLAUDE_LONG_PROMPT_TIERS.get(_resolve_id(event.get("model")))
+    if tier and inp + cr + cw > tier[0]:
+        cost *= tier[1]
+    return cost
 
 
 def _reprice_claude_events(file_cache, changed_models):

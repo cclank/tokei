@@ -30,6 +30,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private var checkedReleases: [UpdateRelease] = []
     private var sawValidMetadata = false
     private var sawNewerIncompleteRelease = false
+    private var lastCheckUserInitiated = false
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForResource = 300
@@ -38,12 +39,14 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     static let shared = Updater()
 
-    func checkForUpdate() {
-        // 本地验证包可能含有尚未发布的修复，不能被线上旧代码替换。
-        guard !Self.isLocalBuild else { return }
+    /// 自动检查（启动、定时）跳过本地验证包：它可能含有尚未发布的修复，不能被线上旧代码悄悄替换。
+    /// 用户在设置里手动点「检查更新」时照常检查；查到新版也要再点一次「升级」才会安装。
+    func checkForUpdate(userInitiated: Bool = false) {
+        guard userInitiated || !Self.isLocalBuild else { return }
         guard state == .idle || state == .upToDate || {
             if case .failed = state { return true }; return false
         }() else { return }
+        lastCheckUserInitiated = userInitiated
         state = .checking
         checkedReleases = []
         sawValidMetadata = false
@@ -109,7 +112,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     }
 
     func performUpdate() {
-        guard !Self.isLocalBuild else { return }
+        guard !Self.isLocalBuild || lastCheckUserInitiated else { return }
         guard case .available(_, let url, let sha256) = state,
               UpdateSecurity.isAllowedDownloadSourceURL(url) else {
             state = .failed(L("更新地址不受信任"))

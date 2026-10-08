@@ -2273,12 +2273,12 @@ struct PanelView: View {
                                     if total > 0 {
                                         Text(Fmt.human(total))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                     }
                                     if hit > 0 {
                                         Text(String(format: "%.0f%%", hit))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                             .padding(.horizontal, 4).padding(.vertical, 1)
                                             .background(Capsule().fill(Color.primary.opacity(0.06)))
                                     }
@@ -2370,12 +2370,12 @@ struct PanelView: View {
                                     if m.total > 0 {
                                         Text(Fmt.human(m.total))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                     }
                                     if m.hit > 0 {
                                         Text(String(format: "%.0f%%", m.hit))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                             .padding(.horizontal, 4).padding(.vertical, 1)
                                             .background(Capsule().fill(Color.primary.opacity(0.06)))
                                     }
@@ -2407,8 +2407,10 @@ struct PanelView: View {
                          pin: Double, pout: Double, pcr: Double = 0, hit: Double = 0, tint: Color,
                          componentsAreSubtotals: Bool = false, priceRef: String? = nil,
                          perf: PerfModelStat? = nil) -> some View {
-        let tagFont = Font.system(size: 9, weight: .medium, design: .monospaced)
-        let labelFont = Font.system(size: 8.5)
+        // 跟卡片上的指标一个规格：字号随面板字号设置，数值用主色，标签用次级色。
+        // 以前固定 8.5 / 9 号加三级灰，叠在半透明底色上看着发虚。
+        let tagFont = Font.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced)
+        let labelFont = Font.system(size: Theme.fontSize(9.5))
         let bg = tint.opacity(0.08)
         let border = tint.opacity(0.18)
         HStack(spacing: 0) {
@@ -2430,11 +2432,11 @@ struct PanelView: View {
                 }
                 if let perf {
                     HStack(spacing: 2) {
-                        Text(L("平均速度")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(L("平均速度")).font(labelFont).foregroundStyle(Theme.tSecondary)
                         Text(Fmt.tps(perf.tps)).font(tagFont).foregroundStyle(tint)
                         if let ttft = perf.ttft {
                             Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
-                            Text(L("TTFT 中位数")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text(L("TTFT 中位数")).font(labelFont).foregroundStyle(Theme.tSecondary)
                             Text(Fmt.seconds(ttft)).font(tagFont).foregroundStyle(tint)
                         }
                     }
@@ -2447,7 +2449,7 @@ struct PanelView: View {
                 }
                 if hit > 0 {
                     HStack(spacing: 2) {
-                        Text(L("命中")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(L("命中")).font(labelFont).foregroundStyle(Theme.tSecondary)
                         Text(String(format: "%.0f%%", hit)).font(tagFont).foregroundStyle(tint)
                     }
                     .padding(.horizontal, 6).padding(.vertical, 2.5)
@@ -2464,7 +2466,7 @@ struct PanelView: View {
                         // 比较两个模型会得出反直觉的结论（例如 Opus 5.5 与 Sonnet 5.5 同为 0.2）。
                         if pcr > 0 {
                             Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
-                            Text(L("读")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text(L("读")).font(labelFont).foregroundStyle(Theme.tSecondary)
                             Text(String(format: "%.2g", pcr)).font(tagFont).foregroundStyle(tint)
                         }
                     }
@@ -2483,8 +2485,8 @@ struct PanelView: View {
     func detailTag(_ value: String, label: String, tagFont: Font, labelFont: Font,
                     bg: Color, border: Color) -> some View {
         HStack(spacing: 3) {
-            Text(label).font(labelFont).foregroundStyle(Theme.tTertiary)
-            Text(value).font(tagFont).foregroundStyle(Theme.tSecondary)
+            Text(label).font(labelFont).foregroundStyle(Theme.tSecondary)
+            Text(value).font(tagFont).foregroundStyle(Theme.tPrimary)
         }
         .padding(.horizontal, 6).padding(.vertical, 2.5)
         .background(Capsule().fill(bg))
@@ -2738,7 +2740,7 @@ struct PanelView: View {
                     .foregroundStyle(Theme.claude)
             }
         case .failed:
-            Button { updater.checkForUpdate() } label: {
+            Button { updater.checkForUpdate(userInitiated: true) } label: {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: Theme.fontSize(11), weight: .medium))
                     .foregroundStyle(.red)
@@ -2999,20 +3001,16 @@ struct PanelView: View {
                     Text(L("当前版本 %@", Updater.releaseTag))
                         .font(.system(size: Theme.fontSize(10), weight: .medium))
                         .foregroundStyle(Theme.tPrimary)
-                    Text(Updater.isLocalBuild ? L("本地验证版不检查线上更新") : L("启动时自动检查，也可在这里手动检查"))
+                    Text(Updater.isLocalBuild ? L("本地验证版不自动检查，可手动检查") : L("启动时自动检查，也可在这里手动检查"))
                         .font(.system(size: Theme.fontSize(8.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
                 Spacer()
-                if Updater.isLocalBuild {
-                    Text(L("本地验证版"))
-                        .font(.system(size: Theme.fontSize(9), weight: .medium))
-                        .foregroundStyle(Theme.tTertiary)
-                } else {
+                Group {
                     switch updater.state {
                     case .idle:
                         settingsActionButton(icon: "arrow.triangle.2.circlepath", title: L("检查更新")) {
-                            updater.checkForUpdate()
+                            updater.checkForUpdate(userInitiated: true)
                         }
                     case .checking:
                         HStack(spacing: 5) {
@@ -3043,7 +3041,7 @@ struct PanelView: View {
                     case .failed(let message):
                         VStack(alignment: .trailing, spacing: 3) {
                             settingsActionButton(icon: "arrow.clockwise", title: L("重试")) {
-                                updater.checkForUpdate()
+                                updater.checkForUpdate(userInitiated: true)
                             }
                             Text(message)
                                 .font(.system(size: Theme.fontSize(8)))
@@ -3931,8 +3929,9 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.tPrimary)
                     Text("\(Updater.releaseTag) · \(Self.buildVersion)")
-                        .font(.system(size: Theme.fontSize(8), design: .monospaced))
-                        .foregroundStyle(Theme.tTertiary.opacity(0.6))
+                        .font(.system(size: Theme.fontSize(9), design: .monospaced))
+                        .foregroundStyle(Theme.tTertiary)
+                    headerUpdateControl
                 }
                 Text(L("显示、同步和诊断"))
                     .font(.system(size: Theme.fontSize(9.5)))
@@ -3949,32 +3948,6 @@ struct PanelView: View {
             }
             .buttonStyle(.plain)
             .tip("GitHub")
-            if Updater.isLocalBuild {
-                Text(L("本地验证版"))
-                    .font(.system(size: Theme.fontSize(9)))
-                    .foregroundStyle(Theme.tTertiary)
-                    .tip(L("此版本包含尚未发布的改动，不检查线上更新"))
-            } else if case .idle = updater.state {
-                Button { updater.checkForUpdate() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: Theme.fontSize(10), weight: .semibold))
-                        .foregroundStyle(Theme.tTertiary)
-                        .frame(width: 24, height: 24)
-                        .background(Circle().fill(Color.primary.opacity(0.06)))
-                }
-                .buttonStyle(.plain)
-                .tip(L("检查更新"))
-            } else if case .checking = updater.state {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 24, height: 24)
-            } else if case .upToDate = updater.state {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: Theme.fontSize(12)))
-                    .foregroundStyle(.green)
-                    .frame(width: 24, height: 24)
-            }
-            updatePill
             Button {
                 withAnimation(.easeInOut(duration: 0.25)) { mode = .cards }
             } label: {
@@ -3988,6 +3961,70 @@ struct PanelView: View {
             .tip(L("关闭设置"))
         }
         .padding(.bottom, 2)
+    }
+
+    /// 版本号旁边的「检查更新」：检查、升级、下载进度都在这一个按钮上，不用翻到页面底部。
+    /// 本地验证版不会自动检查，但用户手动点了照样查、照样能升级。
+    @ViewBuilder
+    private var headerUpdateControl: some View {
+        let font = Font.system(size: Theme.fontSize(9), weight: .semibold)
+        switch updater.state {
+        case .idle:
+            headerUpdateButton(L("检查更新"), icon: "arrow.triangle.2.circlepath", tint: Theme.tSecondary) {
+                updater.checkForUpdate(userInitiated: true)
+            }
+            .tip(Updater.isLocalBuild ? L("本地验证版不自动检查，可手动检查") : L("启动时自动检查，也可在这里手动检查"))
+        case .checking:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L("正在检查"))
+            }
+            .font(font)
+            .foregroundStyle(Theme.tTertiary)
+        case .upToDate:
+            Label(L("已是最新版本"), systemImage: "checkmark.circle.fill")
+                .font(font)
+                .foregroundStyle(.green)
+        case .available(let tag, _, _):
+            headerUpdateButton(L("升级到 %@", tag), icon: "arrow.down.circle.fill", tint: .cyan) {
+                updater.performUpdate()
+            }
+        case .downloading(let progress):
+            Text(L("下载中 %@%%", Int(progress * 100)))
+                .font(.system(size: Theme.fontSize(9), weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.tSecondary)
+        case .installing:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L("正在安装"))
+            }
+            .font(font)
+            .foregroundStyle(Theme.tSecondary)
+        case .failed(let message):
+            headerUpdateButton(L("重试"), icon: "exclamationmark.triangle.fill", tint: .orange) {
+                updater.checkForUpdate(userInitiated: true)
+            }
+            .tip(message)
+        }
+    }
+
+    private func headerUpdateButton(_ title: String, icon: String, tint: Color,
+                                    action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: Theme.fontSize(8), weight: .bold))
+                Text(title)
+                    .font(.system(size: Theme.fontSize(9), weight: .semibold))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Capsule().fill(Color.primary.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     func settingsSection<C: View>(_ icon: String, _ title: String, @ViewBuilder content: () -> C) -> some View {

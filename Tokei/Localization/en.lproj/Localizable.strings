@@ -387,8 +387,7 @@
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Local activity · official tokens, models and cost after authorization";
 "本地缓存" = "Local cache";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Local log · %@ messages · %@ responses";
-"本地验证版" = "Local dev build";
-"本地验证版不检查线上更新" = "Local dev builds do not check for online updates";
+"本地验证版不自动检查，可手动检查" = "Local dev builds don't check automatically; you can check manually";
 "本年" = "This Year";
 "本月" = "This Month";
 "本机 QwenWork 接口" = "Local QwenWork endpoint";
@@ -415,7 +414,6 @@
 "正在开始记录额度轨迹" = "Starting quota history recording";
 "正在检查" = "Checking";
 "正在读取周额度…" = "Reading weekly quota…";
-"此版本包含尚未发布的改动，不检查线上更新" = "This build contains unreleased changes; online updates are not checked";
 "每天用了多少额度" = "Daily quota usage";
 "每百万 token 的输入 / 输出单价，读 = 缓存读" = "Input / output price per 1M tokens; cache = cache read";
 "永动机" = "Perpetual Motion";

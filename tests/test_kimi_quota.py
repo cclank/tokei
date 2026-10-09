@@ -7,10 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-try:
-    from test_codex_limits import USAGE
-except ModuleNotFoundError:
-    from tests.test_codex_limits import USAGE
+from test_codex_limits import USAGE
 
 
 def iso(dt):

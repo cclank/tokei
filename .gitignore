@@ -10,7 +10,6 @@ __pycache__/
 tokei-article.md
 Tokei-feature/
 .qoder/
-.commandcode/
 
 # Windows 版（Tauri）
 !windows/src-tauri/icons/*.png

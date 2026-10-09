@@ -217,6 +217,15 @@ class KimiQuotaFetchTests(unittest.TestCase):
         self.assertEqual(plan, "LEVEL_INTERMEDIATE")
         self.assertAlmostEqual(limits["five_hour"]["used_percent"], 100.0)
 
+    def test_exhausted_limits_still_rechecks_periodically(self):
+        """耗尽时只是放慢复查，超过复查间隔照样视为过期。"""
+        self.write_creds(expires_in_seconds=7200)
+        self.write_cache(
+            age_seconds=USAGE._QUOTA_EXHAUSTED_RECHECK_TTL + 60, used=100.0)
+        auth_key = hashlib.sha256(self.current_token.encode()).hexdigest()
+        self.assertIsNone(
+            USAGE._cached_kimi_live_limits(USAGE._KIMI_QUOTA_TTL, auth_key))
+
     def test_exhausted_limits_refreshes_after_reset(self):
         """重置时间过后，缓存不再因用尽而休眠，立即发请求刷新。"""
         self.write_creds(expires_in_seconds=7200)

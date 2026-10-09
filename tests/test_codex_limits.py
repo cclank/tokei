@@ -309,7 +309,7 @@ class CodexQuotaValuesTests(unittest.TestCase):
             auth_path = Path(temp_dir) / "auth.json"
             auth_path.write_text(json.dumps(auth))
             cache_path.write_text(json.dumps({
-                "fetched_at": now - 900,  # 15 分钟前获取，已超过 300s TTL
+                "fetched_at": now - 600,  # 10 分钟前获取，已超过 300s TTL
                 "limits": limits,
                 "plan": "plus",
                 "account_key": account_key,
@@ -323,7 +323,37 @@ class CodexQuotaValuesTests(unittest.TestCase):
         opener.assert_not_called()
         self.assertEqual(cached_limits["primary"]["used_percent"], 100.0)
         self.assertEqual(plan, "plus")
-        self.assertEqual(fetched_at, now - 900)
+        self.assertEqual(fetched_at, now - 600)
+
+    def test_exhausted_limits_still_rechecks_periodically(self):
+        """耗尽时只是放慢复查，不是一直睡到重置：提前重置、升级套餐要能看到。"""
+        now = USAGE.datetime.now().timestamp()
+        limits = {
+            "primary": {"used_percent": 100.0, "window_minutes": 300,
+                        "resets_at": int(now + 86400)},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache.json"
+            cache_path.write_text(json.dumps({
+                "fetched_at": now - USAGE._QUOTA_EXHAUSTED_RECHECK_TTL - 60,
+                "limits": limits,
+            }))
+            with mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)):
+                self.assertIsNone(
+                    USAGE._cached_codex_live_limits(USAGE._CODEX_QUOTA_TTL))
+
+    def test_exhausted_limits_do_not_hide_another_windows_reset(self):
+        """周额度耗尽时，5h 窗口过了重置时刻照样要刷新。"""
+        now = USAGE.datetime.now().timestamp()
+        limits = {
+            "primary": {"used_percent": 60.0, "resets_at": int(now - 1)},
+            "secondary": {"used_percent": 100.0, "resets_at": int(now + 86400)},
+        }
+        self.assertIsNone(USAGE._codex_limits_exhausted_reset_at(limits, now_epoch=now))
+        limits["primary"]["resets_at"] = int(now + 60)
+        self.assertEqual(
+            USAGE._codex_limits_exhausted_reset_at(limits, now_epoch=now),
+            int(now + 86400))
 
     def test_exhausted_limits_refreshes_once_reset_reached(self):
         """重置时间一到，缓存视为过期，立即发起联网请求更新额度。"""

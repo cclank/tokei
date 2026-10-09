@@ -44,6 +44,9 @@ enum ClaudeCLIQuotaBridge {
 
     private static let lock = NSLock()
     private static let refreshInterval = 5 * 60
+    // 额度耗尽、还没到重置时刻时放慢复查。必须短于 staleInterval，
+    // 否则复用的快照会被标成过期；也不能一直睡到重置，提前重置和升级套餐要能看到。
+    private static let exhaustedRefreshInterval = 15 * 60
     private static let staleInterval = 30 * 60
     private static let maxCredentialBytes = 1024 * 1024
     private static let maxResponseBytes = 1024 * 1024
@@ -78,12 +81,10 @@ enum ClaudeCLIQuotaBridge {
     ) -> [String: Any]? {
         var state = loadState(from: cacheURL)
         if let snapshot = state.snapshot {
-            if let exhaustedUntil = exhaustedResetAt(snapshot, nowEpoch: nowEpoch),
-               nowEpoch < exhaustedUntil {
-                return dictionary(from: snapshot, nowEpoch: nowEpoch)
-            }
+            let interval = isExhausted(snapshot, nowEpoch: nowEpoch)
+                ? exhaustedRefreshInterval : refreshInterval
             let fetchedAge = nowEpoch - state.fetchedAt
-            if -300...refreshInterval ~= fetchedAge,
+            if -300...interval ~= fetchedAge,
                !resetReached(snapshot, nowEpoch: nowEpoch) {
                 return dictionary(from: snapshot, nowEpoch: nowEpoch)
             }
@@ -350,18 +351,12 @@ enum ClaudeCLIQuotaBridge {
         return formatter.date(from: raw).map { Int($0.timeIntervalSince1970) }
     }
 
-    private static func exhaustedResetAt(_ snapshot: Snapshot, nowEpoch: Int) -> Int? {
-        var resets: [Int] = []
-        if let q5 = snapshot.q5, q5 >= 100.0, let r5 = snapshot.q5Reset, r5 > nowEpoch {
-            resets.append(r5)
-        }
-        if let q7 = snapshot.q7, q7 >= 100.0, let r7 = snapshot.q7Reset, r7 > nowEpoch {
-            resets.append(r7)
-        }
-        if let qf = snapshot.qf, qf >= 100.0, let rf = snapshot.qfReset, rf > nowEpoch {
-            resets.append(rf)
-        }
-        return resets.min()
+    private static func isExhausted(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {
+        [(snapshot.q5, snapshot.q5Reset), (snapshot.q7, snapshot.q7Reset), (snapshot.qf, snapshot.qfReset)]
+            .contains { used, reset in
+                guard let used, let reset else { return false }
+                return used >= 100.0 && reset > nowEpoch
+            }
     }
 
     private static func resetReached(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "托盘面板窗口的权限",
+  "windows": ["panel"],
+  "permissions": ["core:default", "opener:default", "autostart:default"]
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../usage.30s.py": "collector/usage.30s.py",
+      "../../pricing.json": "collector/pricing.json",
+      "python/": "python/"
+    }
+  }
+}

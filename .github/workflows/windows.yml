@@ -37,4 +37,66 @@ jobs:
       - name: Full test suite (informational)
         if: runner.os == 'Windows'
         continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
         run: python -m unittest discover -s tests
+
+  app:
+    name: App installer (windows-latest)
+    needs: collector
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: windows/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows/src-tauri
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 安装包自带 Python：官方 embeddable 包 + zstandard（读 Claude 桌面版额度缓存要用）。
+      # 3.12 进入只修安全问题阶段后不再出二进制包，固定在最后一个带 embeddable 包的版本。
+      - name: Embed Python runtime
+        shell: pwsh
+        env:
+          EMBED_PYTHON: "3.12.10"
+        run: |
+          $version = $env:EMBED_PYTHON
+          $target = "windows/src-tauri/python"
+          Invoke-WebRequest "https://www.python.org/ftp/python/$version/python-$version-embed-amd64.zip" -OutFile python-embed.zip
+          Expand-Archive python-embed.zip -DestinationPath $target
+          python -m pip install zstandard --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp --target "$target/Lib/site-packages"
+          $pth = Get-ChildItem $target -Filter "python*._pth" | Select-Object -First 1
+          $lines = (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site'
+          $lines + 'Lib\site-packages' | Set-Content $pth.FullName -Encoding ascii
+          & "$target/python.exe" -c "import sqlite3, zstandard, ssl; print('embedded python ok', sqlite3.sqlite_version)"
+
+      # 用 cmd 重定向拿原始字节：PowerShell 管道会先按控制台代码页解码，中文就乱了。
+      - name: Collector runs on the embedded runtime
+        shell: cmd
+        run: |
+          windows\src-tauri\python\python.exe usage.30s.py --json --no-sync-snapshot > collector.json || exit /b 1
+          python -c "import json; d = json.load(open('collector.json', encoding='utf-8')); print(sorted(d)[:6], len(d))"
+
+      - name: Install frontend dependencies
+        working-directory: windows
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installer
+        working-directory: windows
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tokei-windows-installer
+          path: windows/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

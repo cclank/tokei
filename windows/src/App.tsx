@@ -1,18 +1,22 @@
 // 托盘面板（Mac 版 PanelView 的外壳）：头部、页签、卡片网格、页脚，以及设置等其他页面。
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CARDS } from "./cards/registry";
 import type { CardContext, CardSpec } from "./cards/spec";
 import { call, inTauri } from "./lib/collector";
-import { L } from "./lib/i18n";
+import { currentLanguage, L } from "./lib/i18n";
+import { recordQuotaHistory } from "./lib/quotaHistory";
+import { copySingleToolImage, copyUsageImage, currentShareVisibility } from "./lib/share";
+import { pushTrayMenu } from "./lib/native";
 import { getPref, usePrefsVersion } from "./lib/prefs";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
 import DashboardPage from "./pages/Dashboard";
+import { prewarmDashboard } from "./pages/dashboard/repository";
 import ProjectsPage from "./pages/Projects";
 import QuotaHistoryPage from "./pages/QuotaHistory";
 import SettingsPage from "./pages/Settings";
 import { Icon } from "./ui/Icon";
-import { Card, HStack, Spacer } from "./ui/kit";
+import { Card, CardHeadTrailing, HStack, Spacer } from "./ui/kit";
 import { fill, fs, gradient, rgba, T, Theme } from "./ui/theme";
 
 export type PanelMode = "cards" | "quotaHistory" | "dashboard" | "projects" | "settings";
@@ -73,11 +77,62 @@ function SegmentedTabs({ value, onChange }: { value: RangeKey; onChange: (k: Ran
   );
 }
 
+/** 「已复制」的反馈：页脚和卡头同一时间只亮一处，1.6 秒后复原（同 Mac）。 */
+interface CopyFeedback {
+  footer: boolean;
+  tool: string | null;
+}
+
+function useCopyFeedback() {
+  const [state, setState] = useState<CopyFeedback>({ footer: false, tool: null });
+  const timer = useRef<number | undefined>(undefined);
+  const mark = (next: CopyFeedback) => {
+    setState(next);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setState({ footer: false, tool: null }), 1600);
+  };
+  return {
+    state,
+    markFooter: () => mark({ footer: true, tool: null }),
+    markTool: (id: string) => mark({ footer: false, tool: id }),
+  };
+}
+
+type Copy = ReturnType<typeof useCopyFeedback>;
+
+/** 卡头右侧的「复制此工具用量图」（Mac 版 cardCopyButton）。 */
+function CardCopyButton({ spec, range, copy }: { spec: CardSpec; range: RangeKey; copy: Copy }) {
+  const { usage, lastUpdated } = useUsageStore();
+  const done = copy.state.tool === spec.id;
+  const onClick = async () => {
+    if (usage && (await copySingleToolImage(spec.id, usage, range, currentShareVisibility(), lastUpdated))) copy.markTool(spec.id);
+  };
+  return (
+    <button
+      className="plain"
+      title={done ? L("已复制图片") : L("复制此工具用量图")}
+      onClick={onClick}
+      style={{
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        flex: "none",
+        display: "grid",
+        placeItems: "center",
+        background: fill(done ? 0.1 : 0.06),
+        color: done ? rgba(spec.tint) : T.tertiary,
+      }}
+    >
+      <Icon name={done ? "checkmark" : "photo.on.rectangle"} size={fs(10)} strokeWidth={2.6} />
+    </button>
+  );
+}
+
 function cardName(spec: CardSpec) {
   return typeof spec.name === "function" ? spec.name() : spec.name;
 }
 
-function CardsPage({ range, setRange }: { range: RangeKey; setRange: (k: RangeKey) => void }) {
+function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: RangeKey) => void; copy: Copy }) {
   const { usage, error, refreshing } = useUsageStore();
   usePrefsVersion();
   if (!usage) {
@@ -102,7 +157,11 @@ function CardsPage({ range, setRange }: { range: RangeKey; setRange: (k: RangeKe
   const inactive = visible.filter((spec) => !shown.includes(spec)).map(cardName);
   const render = (spec: CardSpec) => (
     <Card key={`${spec.id}:${range}`} tint={spec.tint}>
-      {safe(() => spec.render(ctx), <span style={{ color: T.tertiary, fontSize: fs(10) }}>{L("暂无数据")}</span>)}
+      <CardHeadTrailing.Provider
+        value={safe(() => spec.copyable?.(ctx) ?? true, false) ? <CardCopyButton spec={spec} range={range} copy={copy} /> : null}
+      >
+        {safe(() => spec.render(ctx), <span style={{ color: T.tertiary, fontSize: fs(10) }}>{L("暂无数据")}</span>)}
+      </CardHeadTrailing.Provider>
     </Card>
   );
   return (
@@ -140,8 +199,8 @@ function FooterButton({ icon, label, onClick, active = false, tip }: { icon: str
   );
 }
 
-function Footer({ mode }: { mode: PanelMode }) {
-  const { refresh } = useUsageStore();
+function Footer({ mode, range, copy }: { mode: PanelMode; range: RangeKey; copy: Copy }) {
+  const { usage, lastUpdated, refresh } = useUsageStore();
   const [awake, setAwake] = useState(false);
   useEffect(() => {
     void call<boolean>("keep_awake_active").then((value) => setAwake(Boolean(value)));
@@ -155,6 +214,13 @@ function Footer({ mode }: { mode: PanelMode }) {
       <span style={{ fontSize: fs(9), color: T.tertiary }}>{mode === "settings" ? "Made by lank" : L("成本按 API 价估算,非订阅实付")}</span>
       <Spacer />
       <FooterButton icon={awake ? "cup.and.saucer.fill" : "cup.and.saucer"} label={L("防休眠")} active={awake} onClick={toggleAwake} />
+      <FooterButton
+        icon={copy.state.footer ? "checkmark" : "photo.on.rectangle"}
+        label={copy.state.footer ? L("已复制") : L("复制")}
+        onClick={async () => {
+          if (usage && (await copyUsageImage(usage, range, currentShareVisibility(), lastUpdated))) copy.markFooter();
+        }}
+      />
       <FooterButton icon="arrow.clockwise" label={L("刷新")} onClick={refresh} />
       <FooterButton icon="power" label={L("退出")} onClick={() => void call("quit_app")} />
     </HStack>
@@ -164,7 +230,12 @@ function Footer({ mode }: { mode: PanelMode }) {
 function Panel() {
   const [mode, setMode] = useState<PanelMode>("cards");
   const [range, setRange] = useState<RangeKey>("today");
+  const copy = useCopyFeedback();
   usePrefsVersion();
+  const language = currentLanguage();
+  useEffect(() => {
+    if (inTauri) void pushTrayMenu();
+  }, [language]);
   useEffect(() => {
     if (!inTauri) return;
     let off: (() => void) | undefined;
@@ -183,7 +254,7 @@ function Panel() {
   const content = useMemo(() => {
     switch (mode) {
       case "settings":
-        return <SettingsPage />;
+        return <SettingsPage onClose={() => setMode("cards")} />;
       case "dashboard":
         return <DashboardPage />;
       case "projects":
@@ -191,9 +262,9 @@ function Panel() {
       case "quotaHistory":
         return <QuotaHistoryPage />;
       default:
-        return <CardsPage range={range} setRange={setRange} />;
+        return <CardsPage range={range} setRange={setRange} copy={copy} />;
     }
-  }, [mode, range]);
+  }, [mode, range, copy]);
   return (
     <div className="panel" style={{ background: `${gradient([0.2, 0.21, 0.25], 0.97)}` }}>
       <div className="panel-scroll">
@@ -201,16 +272,28 @@ function Panel() {
           <Header mode={mode} setMode={setMode} />
           {content}
           <div style={{ flex: 1 }} />
-          <Footer mode={mode} />
+          <Footer mode={mode} range={range} copy={copy} />
         </div>
       </div>
     </div>
   );
 }
 
+let dashboardPrewarmed = false;
+
+/** 每次刷新成功：更新托盘提示、记一笔额度曲线；第一次刷新完顺带预热数据面板的「全部」（同 Mac）。 */
+function onUsage(usage: Usage) {
+  pushTrayTooltip(usage);
+  void recordQuotaHistory(usage);
+  if (!dashboardPrewarmed) {
+    dashboardPrewarmed = true;
+    prewarmDashboard();
+  }
+}
+
 export default function App() {
   return (
-    <UsageProvider onUsage={(usage: Usage) => pushTrayTooltip(usage)}>
+    <UsageProvider onUsage={onUsage}>
       <Panel />
     </UsageProvider>
   );

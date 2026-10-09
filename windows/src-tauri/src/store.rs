@@ -9,10 +9,14 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
 const KEYRING_SERVICE: &str = "com.tokei.windows.provider-api-key";
+
+/// 命令在各自线程里跑，两次按键合并同时读改写会丢掉一边（Mac 版用 config.lock 串行）。
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 /// 与 Mac 版 ProviderCredentialStore.environmentOverrides 同一张表。
 const SECRETS: &[(&str, &str)] = &[
@@ -69,24 +73,28 @@ pub fn write_tokei_file(name: String, content: String) -> Result<(), String> {
     atomic_write(&path, content.as_bytes())
 }
 
-fn read_config() -> Map<String, Value> {
-    let Ok(dir) = tokei_dir() else { return Map::new() };
-    fs::read(dir.join("config.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default()
+/// 文件不存在算空配置；内容坏了报错，免得合并写入时把用户其他配置整份冲掉。
+fn read_config() -> Result<Map<String, Value>, String> {
+    match fs::read(tokei_dir()?.join("config.json")) {
+        Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+            Ok(Value::Object(map)) => Ok(map),
+            _ => Err("config.json 不是有效的 JSON 对象".to_string()),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 #[tauri::command]
 pub fn read_tokei_config() -> Value {
-    Value::Object(read_config())
+    Value::Object(read_config().unwrap_or_default())
 }
 
 /// 按键合并：值为 null 的键删掉，其余覆盖；没提到的键原样保留。
 #[tauri::command]
 pub fn update_tokei_config(patch: Map<String, Value>) -> Result<Value, String> {
-    let mut config = read_config();
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut config = read_config()?;
     for (key, value) in patch {
         if value.is_null() {
             config.remove(&key);

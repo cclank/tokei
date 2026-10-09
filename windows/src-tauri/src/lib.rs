@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 /// 前端调采集脚本：`args` 如 `["--json"]`、`["--dashboard", "--period", "7d"]`。
@@ -18,12 +18,47 @@ async fn run_collector(app: AppHandle, args: Vec<String>) -> Result<String, Stri
         .map_err(|err| err.to_string())?
 }
 
+/// 设置页「诊断」：不管成败都交回退出状态和两路输出（Mac 版 runScriptRaw，超时 8 秒）。
+#[tauri::command]
+async fn run_collector_raw(app: AppHandle, args: Vec<String>) -> Result<collector::RawOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        collector::run_raw(&app, &args, &store::secret_environment(), std::time::Duration::from_secs(8))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 /// 托盘悬停提示，前端每次刷新后写一份当前额度摘要。
 #[tauri::command]
 fn set_tray_tooltip(app: AppHandle, text: String) {
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(text));
     }
+}
+
+/// 托盘右键菜单的几项；文字由前端按界面语言推过来（`set_tray_menu_labels`）。
+struct TrayMenu {
+    refresh: MenuItem<Wry>,
+    settings: MenuItem<Wry>,
+    autostart: CheckMenuItem<Wry>,
+    quit: MenuItem<Wry>,
+}
+
+/// 顺带按实际状态重设「登录时启动」的勾（设置页里改了开关也会调这里）。
+#[tauri::command]
+fn set_tray_menu_labels(
+    app: AppHandle,
+    menu: tauri::State<'_, TrayMenu>,
+    refresh: String,
+    settings: String,
+    autostart: String,
+    quit: String,
+) {
+    let _ = menu.refresh.set_text(refresh);
+    let _ = menu.settings.set_text(settings);
+    let _ = menu.autostart.set_text(autostart);
+    let _ = menu.autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
+    let _ = menu.quit.set_text(quit);
 }
 
 #[tauri::command]
@@ -59,7 +94,9 @@ pub fn run() {
         .manage(panel::PanelState::default())
         .invoke_handler(tauri::generate_handler![
             run_collector,
+            run_collector_raw,
             set_tray_tooltip,
+            set_tray_menu_labels,
             hide_panel,
             quit_app,
             set_keep_awake,
@@ -97,13 +134,20 @@ pub fn run() {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // 先用中文原文占位，前端起来后按界面语言换成译文。
     let refresh = MenuItem::with_id(app, "refresh", "刷新", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
-    let autostart = CheckMenuItem::with_id(app, "autostart", "开机自启", true, autostart_on, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Tokei", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "autostart", "登录时启动", true, autostart_on, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&refresh, &settings, &autostart, &separator, &quit])?;
+    app.manage(TrayMenu {
+        refresh: refresh.clone(),
+        settings: settings.clone(),
+        autostart: autostart.clone(),
+        quit: quit.clone(),
+    });
 
     let icon = app.default_window_icon().cloned().expect("bundle icon");
     TrayIconBuilder::with_id("main")

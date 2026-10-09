@@ -80,7 +80,7 @@ function detailValue(detail: ProviderQuotaDetail): string {
   const label = detail.label ?? "";
   const value = detail.value ?? "";
   // 采集器给的标签是中文原文（显示时才翻译），按原文认。
-  if (label.includes("到期") && /^\d+$/.test(value)) return Fmt.reset(Number(value));
+  if (label.includes("到期") && /^\d+$/.test(value)) return Fmt.reset(Number(value)); // l10n-ignore
   return data(value);
 }
 
@@ -236,6 +236,8 @@ function providerQuotaCard(config: ProviderQuotaCardConfig): CardSpec {
       return Boolean(quota.available) || totalTokens(r) > 0;
     },
     presentation: (ctx) => (totalTokens(usageOf(ctx)) > 0 ? "standard" : "compact"),
+    // Mac 版这几张额度卡（Cursor、Zed、Sub2API、z.ai）的卡头没有复制按钮。
+    copyable: () => false,
     render: (ctx) => {
       const quota = quotaOf(ctx, config.key);
       const r = usageOf(ctx);

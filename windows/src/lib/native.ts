@@ -1,8 +1,14 @@
 // Rust 侧命令的前端封装（src-tauri/src/store.rs、lib.rs）。浏览器里单独调界面时都是空操作。
 import { call, inTauri } from "./collector";
+import { L } from "./i18n";
 
 /** 读 `~/.tokei/<name>`；不存在返回 null。只允许单层文件名。 */
 export async function readTokeiFile(name: string): Promise<string | null> {
+  if (!inTauri) {
+    // 浏览器调界面：vite 开发中间件只读地给一份。
+    const response = await fetch(`/__tokei/file?name=${encodeURIComponent(name)}`).catch(() => null);
+    return response?.ok ? response.text() : null;
+  }
   return (await call<string | null>("read_tokei_file", { name })) ?? null;
 }
 
@@ -45,6 +51,12 @@ export async function setAutostart(on: boolean): Promise<void> {
   if (!inTauri) return;
   const { enable, disable } = await import("@tauri-apps/plugin-autostart");
   await (on ? enable() : disable());
+  await pushTrayMenu();
+}
+
+/** 托盘右键菜单换成当前界面语言，顺带按实际状态重设「登录时启动」的勾。 */
+export async function pushTrayMenu(): Promise<void> {
+  await call("set_tray_menu_labels", { refresh: L("刷新"), settings: L("设置"), autostart: L("登录时启动"), quit: L("退出") });
 }
 
 export async function openExternal(url: string): Promise<void> {

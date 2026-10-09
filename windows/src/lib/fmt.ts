@@ -7,7 +7,7 @@ export function human(n: number): string {
   const v = Number(n) || 0;
   // 中文按「亿」进位；其他语言用国际通行的 B（十亿）。
   if (isChinese()) {
-    if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}亿`;
+    if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}亿`; // l10n-ignore
   } else if (v >= 1_000_000_000) {
     return `${(v / 1_000_000_000).toFixed(1)}B`;
   }
@@ -109,7 +109,7 @@ export function g2(x: number): string {
 }
 
 export function weekdayLabels(): string[] {
-  if (isChinese()) return ["一", "二", "三", "四", "五", "六", "日"];
+  if (isChinese()) return ["一", "二", "三", "四", "五", "六", "日"]; // l10n-ignore
   try {
     const formatter = new Intl.DateTimeFormat(currentLanguage(), { weekday: "short" });
     // 2024-01-01 是周一

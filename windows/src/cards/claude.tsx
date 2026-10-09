@@ -55,7 +55,7 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
     [c.qf, c.qf_stale],
   ]);
   const rows: ModelRow[] = (r.models ?? [])
-    .filter((m) => m.name !== "合成")
+    .filter((m) => m.name !== "合成") // l10n-ignore
     .map((m) => {
       const denom = m.cr + m.cw + m.in;
       return {
@@ -94,7 +94,7 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
             ]}
             tint={Theme.claude}
           />
-          {rows.length > 0 && <ModelDisclosure rows={rows} tint={Theme.claude} periodLabel={ctx.rangeLabel} />}
+          {rows.length > 0 && <ModelDisclosure rows={rows} tint={Theme.claude} periodLabel={ctx.rangeLabel} alwaysShowCost />}
         </>
       ) : (
         state !== "unavailable" && (

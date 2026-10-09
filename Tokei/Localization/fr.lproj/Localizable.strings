@@ -188,6 +188,7 @@
 "团队账号个人可用积分" = "Crédits personnels du compte d'équipe";
 "圆点" = "Points";
 "在 Finder 中显示" = "Afficher dans le Finder";
+"在资源管理器中显示" = "Afficher dans l’Explorateur de fichiers";
 "在 Ghostty 打开" = "Ouvrir dans Ghostty";
 "在 iTerm 打开" = "Ouvrir dans iTerm";
 "在终端打开" = "Ouvrir dans Terminal";
@@ -396,6 +397,7 @@
 "缓存写" = "Écriture cache";
 "缓存写 %@" = "Écriture cache %@";
 "缓存命中" = "Succès de cache";
+"缓存可能已过期" = "Le cache est peut-être obsolète";
 "缓存数据 · 后台更新中" = "Données en cache · mise à jour en arrière-plan";
 "缓存数据 · 等待刷新" = "Données en cache · en attente de rafraîchissement";
 "缓存读" = "Lecture cache";

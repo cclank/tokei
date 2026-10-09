@@ -4,6 +4,9 @@
 `Tokei/Localization/<lang>.lproj/Localizable.strings` 把原文映射成译文。采集器输出的
 中文标签（额度窗口名、成就等）同样是 key，界面显示时用 `L10n.data()` 翻译。
 
+Windows 版（windows/src，Tauri + React）直接读同一份词表：它的 `L("…")` 也算在用的 key
+（判断旧词条时算上）；那边是否缺词由 windows/scripts/check-i18n.mjs 检查。
+
 这里卡住四件事：
 1. 代码里用到的每一句（含采集器吐出来的）英文词表都有；
 2. 各语言占位符与原文一致（只用 %@ / %N$@）；
@@ -198,6 +201,16 @@ def placeholders(text):
     return sorted(int(n) for n in positional) + list(range(1, sequential + 1))
 
 
+def windows_keys():
+    """Windows 版界面 `L("…")` 的字面量 key。"""
+    keys = set()
+    for path in sorted((ROOT / "windows" / "src").rglob("*.ts*")):
+        src = path.read_text(encoding="utf-8")
+        for m in re.finditer(r'\bL\(\s*"((?:[^"\\]|\\.)*)"', src):
+            keys.add(_swift_unescape(m.group(1)))
+    return keys
+
+
 def all_keys():
     keys = set(swift_keys()) | set(collector_keys()) | DYNAMIC_KEYS
     return keys
@@ -225,7 +238,7 @@ class LocalizationTests(unittest.TestCase):
                          "包进 L()；数据标识等刻意保留的中文在行尾写 // l10n-ignore")
 
     def test_tables_hold_no_stale_entries(self):
-        keys = all_keys()
+        keys = all_keys() | windows_keys()
         for language in LANGUAGES:
             stale = sorted(set(load_strings(language)) - keys)
             self.assertEqual(stale, [], f"{language} 词表里有已经不用的词条")

@@ -60,8 +60,36 @@ pub fn resolve(app: &AppHandle) -> Result<Runtime, String> {
     Ok(Runtime { python, script })
 }
 
+/// 一次运行的原始结果，设置页「诊断」照 Mac 版 formatDiagnostics 拼文本用。
+#[derive(serde::Serialize)]
+pub struct RawOutput {
+    pub python: String,
+    pub script: String,
+    pub script_exists: bool,
+    pub script_size: u64,
+    /// 超时被杀或被信号结束时没有退出码。
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub elapsed: f64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 /// 跑一次采集脚本，返回 stdout（UTF-8）。`env` 用来传 Key 这类只给脚本看的值。
 pub fn run(app: &AppHandle, args: &[String], env: &[(String, String)]) -> Result<String, String> {
+    let raw = run_raw(app, args, env, TIMEOUT)?;
+    if raw.timed_out {
+        return Err("采集超时".to_string());
+    }
+    if raw.exit_code != Some(0) {
+        let tail: String = raw.stderr.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+        return Err(format!("采集脚本退出码 {:?}\n{tail}", raw.exit_code));
+    }
+    Ok(raw.stdout)
+}
+
+/// 跑一次采集脚本，不管成败都把退出状态和两路输出交回来。
+pub fn run_raw(app: &AppHandle, args: &[String], env: &[(String, String)], timeout: Duration) -> Result<RawOutput, String> {
     let runtime = resolve(app)?;
     let mut command = Command::new(&runtime.python);
     command
@@ -101,25 +129,35 @@ pub fn run(app: &AppHandle, args: &[String], env: &[(String, String)]) -> Result
     });
 
     let started = Instant::now();
+    let mut timed_out = false;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() > TIMEOUT => {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() > timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("采集超时".to_string());
+                timed_out = true;
+                break None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(err) => return Err(format!("等待采集进程失败：{err}")),
         }
     };
+    let elapsed = started.elapsed().as_secs_f64();
 
     let stdout = out_reader.join().unwrap_or_default();
     let stderr = err_reader.join().unwrap_or_default();
-    if !status.success() {
-        let tail = String::from_utf8_lossy(&stderr);
-        let tail: String = tail.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
-        return Err(format!("采集脚本退出码 {:?}\n{tail}", status.code()));
-    }
-    String::from_utf8(stdout).map_err(|err| format!("采集输出不是 UTF-8：{err}"))
+    let stdout = String::from_utf8(stdout).map_err(|err| format!("采集输出不是 UTF-8：{err}"))?;
+    let metadata = std::fs::metadata(&runtime.script).ok();
+    Ok(RawOutput {
+        python: runtime.python.display().to_string(),
+        script: runtime.script.display().to_string(),
+        script_exists: metadata.is_some(),
+        script_size: metadata.map(|m| m.len()).unwrap_or(0),
+        exit_code: status.and_then(|status| status.code()),
+        timed_out,
+        elapsed,
+        stdout,
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
 }

@@ -1655,10 +1655,11 @@ struct PanelView: View {
         default: sourceLabel = L("额度数据")
         }
         let updated = quota.updated.map { Fmt.reset($0) } ?? L("更新时间未知")
+        let lead = quota.stale ? L("缓存可能已过期") : sourceLabel
         return HStack(spacing: 5) {
             Image(systemName: quota.stale ? "exclamationmark.triangle.fill" : "clock")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("\(quota.stale ? L("缓存可能已过期") : sourceLabel) · \(updated)")
+            Text("\(lead) · \(updated)")
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }

@@ -1,5 +1,5 @@
 // 卡片里复用的小部件，逐个对应 Mac 版 Design.swift 与 PanelView.swift 里的同名视图。
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useState, type CSSProperties, type ReactNode } from "react";
 import * as Fmt from "../lib/fmt";
 import { L } from "../lib/i18n";
 import type { PerfStat } from "../lib/types";
@@ -55,6 +55,9 @@ export function Tip({ text, children }: { text?: string | null; children: ReactN
 }
 
 /** 卡头：色点 + 名称 + 会话数徽标（+ 右侧的复制按钮由调用方给）。 */
+/** 卡片列表给每张卡的卡头右侧按钮（复制此工具用量图），卡片自己不用管。 */
+export const CardHeadTrailing = createContext<ReactNode>(null);
+
 export function CardHead({
   title,
   tint,
@@ -66,6 +69,7 @@ export function CardHead({
   sessions?: number;
   trailing?: ReactNode;
 }) {
+  const provided = useContext(CardHeadTrailing);
   return (
     <HStack gap={7}>
       <span
@@ -94,7 +98,7 @@ export function CardHead({
         </span>
       )}
       <Spacer />
-      {trailing}
+      {trailing ?? provided}
     </HStack>
   );
 }

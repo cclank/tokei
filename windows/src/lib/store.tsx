@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { call, collectJSON, inTauri } from "./collector";
 import { L } from "./i18n";
+import { trayQuotaTooltip } from "./trayQuota";
 import type { RangeKey, Usage } from "./types";
 
 const VISIBLE_INTERVAL = 10_000;
@@ -98,30 +99,19 @@ export function UsageProvider({ children, onUsage }: { children: ReactNode; onUs
   return <UsageContext.Provider value={{ usage, error, refreshing, lastUpdated, refresh }}>{children}</UsageContext.Provider>;
 }
 
-/** 托盘悬停提示：列出当前的额度剩余（Windows 托盘放不下 Mac 菜单栏那样的文字）。 */
-export function trayTooltip(usage: Usage): string {
-  const parts: string[] = [];
-  const c = usage.claude;
-  if (c?.q5 != null) parts.push(`Claude 5h ${Math.round(100 - c.q5)}%`);
-  if (c?.q7 != null) parts.push(`Claude ${L("周")} ${Math.round(100 - c.q7)}%`);
-  const x = usage.codex;
-  if (x?.p5 != null) parts.push(`Codex 5h ${Math.round(100 - x.p5)}%`);
-  if (x?.pw != null) parts.push(`Codex ${L("周")} ${Math.round(100 - x.pw)}%`);
-  return parts.length ? `Tokei · ${parts.join(" · ")}` : "Tokei";
-}
-
 export function pushTrayTooltip(usage: Usage) {
-  void call("set_tray_tooltip", { text: trayTooltip(usage) });
+  void call("set_tray_tooltip", { text: trayQuotaTooltip(usage) });
 }
 
-export const RANGE_LABEL_KEYS: Record<RangeKey, string> = {
-  today: "今日",
-  yesterday: "昨日",
-  week: "本周",
-  last_week: "上周",
-  month: "本月",
-  year: "本年",
-  all: "全部",
+// key 写成 L() 的字面量，文案检查才认得出。
+const RANGE_LABELS: Record<RangeKey, () => string> = {
+  today: () => L("今日"),
+  yesterday: () => L("昨日"),
+  week: () => L("本周"),
+  last_week: () => L("上周"),
+  month: () => L("本月"),
+  year: () => L("本年"),
+  all: () => L("全部"),
 };
 
-export const rangeLabel = (key: RangeKey) => L(RANGE_LABEL_KEYS[key]);
+export const rangeLabel = (key: RangeKey) => RANGE_LABELS[key]();

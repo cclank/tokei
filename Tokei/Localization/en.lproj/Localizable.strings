@@ -235,6 +235,7 @@
 "团队账号个人可用积分" = "Team account personal credits";
 "圆点" = "Dots";
 "在 Finder 中显示" = "Show in Finder";
+"在资源管理器中显示" = "Show in File Explorer";
 "在 Ghostty 打开" = "Open in Ghostty";
 "在 iTerm 打开" = "Open in iTerm";
 "在终端打开" = "Open in Terminal";
@@ -470,6 +471,7 @@
 "缓存写 %@" = "Cache Write %@";
 "缓存写" = "Cache Write";
 "缓存命中" = "Cache hits";
+"缓存可能已过期" = "Cache may be stale";
 "缓存数据 · 后台更新中" = "Cached data · updating in background";
 "缓存数据 · 等待刷新" = "Cached data · waiting to refresh";
 "缓存读 %@" = "Cache Read %@";

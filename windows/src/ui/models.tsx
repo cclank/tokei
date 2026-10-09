@@ -131,11 +131,14 @@ export function ModelDisclosure({
   tint,
   periodLabel,
   defaultOpen = false,
+  alwaysShowCost = false,
 }: {
   rows: ModelRow[];
   tint: RGB;
   periodLabel: string;
   defaultOpen?: boolean;
+  /** Mac 的 modelDisclosure（Claude、Gemini）总是写 $0.00；tokenModelDisclosure 为 0 时不写。 */
+  alwaysShowCost?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -180,7 +183,11 @@ export function ModelDisclosure({
                         {row.hit.toFixed(0)}%
                       </span>
                     )}
-                    {(row.cost > 0 || (row.costCny ?? 0) > 0) && (
+                    {alwaysShowCost ? (
+                      <span style={{ fontSize: fs(11.5), fontWeight: 600, fontFamily: MONO, color: T.primary }}>
+                        ${row.cost.toFixed(2)}
+                      </span>
+                    ) : (row.cost > 0 || (row.costCny ?? 0) > 0) && (
                       <span style={{ fontSize: fs(11.5), fontWeight: 600, fontFamily: MONO, color: T.primary }}>
                         {Fmt.nativeMoney(row.cost, row.costCny)}
                       </span>

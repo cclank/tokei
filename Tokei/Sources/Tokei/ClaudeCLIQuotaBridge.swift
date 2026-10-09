@@ -44,6 +44,9 @@ enum ClaudeCLIQuotaBridge {
 
     private static let lock = NSLock()
     private static let refreshInterval = 5 * 60
+    // 额度耗尽、还没到重置时刻时放慢到每小时查一次。不一直睡到重置：
+    // 提前重置和升级套餐要靠这次复查才看得到。
+    private static let exhaustedRefreshInterval = 60 * 60
     private static let staleInterval = 30 * 60
     private static let maxCredentialBytes = 1024 * 1024
     private static let maxResponseBytes = 1024 * 1024
@@ -77,11 +80,14 @@ enum ClaudeCLIQuotaBridge {
         requester: (String) -> RequestResult
     ) -> [String: Any]? {
         var state = loadState(from: cacheURL)
-        let fetchedAge = nowEpoch - state.fetchedAt
-        if let snapshot = state.snapshot,
-           -300...refreshInterval ~= fetchedAge,
-           !resetReached(snapshot, nowEpoch: nowEpoch) {
-            return dictionary(from: snapshot, nowEpoch: nowEpoch)
+        if let snapshot = state.snapshot {
+            let interval = isExhausted(snapshot, nowEpoch: nowEpoch)
+                ? exhaustedRefreshInterval : refreshInterval
+            let fetchedAge = nowEpoch - state.fetchedAt
+            if -300...interval ~= fetchedAge,
+               !resetReached(snapshot, nowEpoch: nowEpoch) {
+                return dictionary(from: snapshot, nowEpoch: nowEpoch)
+            }
         }
 
         if let blockedUntil = state.blockedUntil, blockedUntil > nowEpoch {
@@ -345,6 +351,15 @@ enum ClaudeCLIQuotaBridge {
         return formatter.date(from: raw).map { Int($0.timeIntervalSince1970) }
     }
 
+    // 只看 5h 和周额度：模型专属窗口用尽后其他模型还能用，读数还会变。
+    private static func isExhausted(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {
+        [(snapshot.q5, snapshot.q5Reset), (snapshot.q7, snapshot.q7Reset)]
+            .contains { used, reset in
+                guard let used, let reset else { return false }
+                return used >= 100.0 && reset > nowEpoch
+            }
+    }
+
     private static func resetReached(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {
         [snapshot.q5Reset, snapshot.q7Reset, snapshot.qfReset]
             .compactMap { $0 }
@@ -360,7 +375,10 @@ enum ClaudeCLIQuotaBridge {
         if let value = snapshot.qf { result["qf"] = value }
         if let value = snapshot.qfReset { result["qf_reset"] = value }
         let age = nowEpoch - snapshot.updated
-        let sourceStale = snapshot.updated <= 0 || age > staleInterval || age < -300
+        // 耗尽期间读数是故意放慢刷新的，过期线跟着放宽到两个复查间隔。
+        let staleAfter = isExhausted(snapshot, nowEpoch: nowEpoch)
+            ? 2 * exhaustedRefreshInterval : staleInterval
+        let sourceStale = snapshot.updated <= 0 || age > staleAfter || age < -300
         result["q5_stale"] = snapshot.q5 != nil &&
             (sourceStale || (snapshot.q5Reset.map { $0 <= nowEpoch } ?? false))
         result["q7_stale"] = snapshot.q7 != nil &&

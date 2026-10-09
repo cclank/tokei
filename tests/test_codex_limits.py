@@ -325,8 +325,8 @@ class CodexQuotaValuesTests(unittest.TestCase):
         self.assertEqual(plan, "plus")
         self.assertEqual(fetched_at, now - 600)
 
-    def test_exhausted_limits_sleep_however_old_the_cache_is(self):
-        """耗尽后一直睡到重置，缓存放了几天也不重新查。"""
+    def test_exhausted_limits_recheck_hourly(self):
+        """耗尽时放慢到每小时复查，不是一直睡到重置：提前重置、升级套餐要能看到。"""
         now = USAGE.datetime.now().timestamp()
         limits = {
             "primary": {"used_percent": 100.0, "window_minutes": 300,
@@ -335,14 +335,15 @@ class CodexQuotaValuesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "cache.json"
             cache_path.write_text(json.dumps({
-                "fetched_at": now - 3 * 86400,
+                "fetched_at": now,
                 "limits": limits,
             }))
+            recheck = USAGE._QUOTA_EXHAUSTED_RECHECK_TTL
             with mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)):
                 self.assertIsNotNone(USAGE._cached_codex_live_limits(
-                    USAGE._CODEX_QUOTA_TTL, now_epoch=now))
+                    USAGE._CODEX_QUOTA_TTL, now_epoch=now + recheck - 60))
                 self.assertIsNone(USAGE._cached_codex_live_limits(
-                    USAGE._CODEX_QUOTA_TTL, now_epoch=now + 86401))
+                    USAGE._CODEX_QUOTA_TTL, now_epoch=now + recheck + 60))
 
     def test_exhausted_limits_do_not_hide_another_windows_reset(self):
         """周额度耗尽时，5h 窗口过了重置时刻照样要刷新。"""

@@ -44,6 +44,9 @@ enum ClaudeCLIQuotaBridge {
 
     private static let lock = NSLock()
     private static let refreshInterval = 5 * 60
+    // 额度耗尽、还没到重置时刻时放慢到每小时查一次。不一直睡到重置：
+    // 提前重置和升级套餐要靠这次复查才看得到。
+    private static let exhaustedRefreshInterval = 60 * 60
     private static let staleInterval = 30 * 60
     private static let maxCredentialBytes = 1024 * 1024
     private static let maxResponseBytes = 1024 * 1024
@@ -78,11 +81,11 @@ enum ClaudeCLIQuotaBridge {
     ) -> [String: Any]? {
         var state = loadState(from: cacheURL)
         if let snapshot = state.snapshot {
-            // 额度耗尽后在重置前不会回血，一直睡到任一窗口的重置时刻再查。
+            let interval = isExhausted(snapshot, nowEpoch: nowEpoch)
+                ? exhaustedRefreshInterval : refreshInterval
             let fetchedAge = nowEpoch - state.fetchedAt
-            if isSleepingUntilReset(snapshot, nowEpoch: nowEpoch) ||
-                (-300...refreshInterval ~= fetchedAge &&
-                    !resetReached(snapshot, nowEpoch: nowEpoch)) {
+            if -300...interval ~= fetchedAge,
+               !resetReached(snapshot, nowEpoch: nowEpoch) {
                 return dictionary(from: snapshot, nowEpoch: nowEpoch)
             }
         }
@@ -357,10 +360,6 @@ enum ClaudeCLIQuotaBridge {
             }
     }
 
-    private static func isSleepingUntilReset(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {
-        isExhausted(snapshot, nowEpoch: nowEpoch) && !resetReached(snapshot, nowEpoch: nowEpoch)
-    }
-
     private static func resetReached(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {
         [snapshot.q5Reset, snapshot.q7Reset, snapshot.qfReset]
             .compactMap { $0 }
@@ -376,10 +375,10 @@ enum ClaudeCLIQuotaBridge {
         if let value = snapshot.qf { result["qf"] = value }
         if let value = snapshot.qfReset { result["qf_reset"] = value }
         let age = nowEpoch - snapshot.updated
-        // 睡到重置期间读数是故意不刷新的，不能因为放得久就标成过期。
-        let sleeping = isSleepingUntilReset(snapshot, nowEpoch: nowEpoch)
-        let sourceStale = snapshot.updated <= 0 || age < -300 ||
-            (age > staleInterval && !sleeping)
+        // 耗尽期间读数是故意放慢刷新的，过期线跟着放宽到两个复查间隔。
+        let staleAfter = isExhausted(snapshot, nowEpoch: nowEpoch)
+            ? 2 * exhaustedRefreshInterval : staleInterval
+        let sourceStale = snapshot.updated <= 0 || age > staleAfter || age < -300
         result["q5_stale"] = snapshot.q5 != nil &&
             (sourceStale || (snapshot.q5Reset.map { $0 <= nowEpoch } ?? false))
         result["q7_stale"] = snapshot.q7 != nil &&

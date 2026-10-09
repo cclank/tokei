@@ -130,7 +130,7 @@ struct ClaudeCLIQuotaBridgeCheck {
         )
         try expect(number(sleeping?["q5"]) == 100, "exhausted cache should be reused")
         try expect(sleeping?["q5_stale"] as? Bool == false, "reused exhausted cache must not look stale")
-        try expect(requests == 1, "exhausted quota must sleep until reset and avoid network requests")
+        try expect(requests == 1, "exhausted quota must slow down polling before reset")
 
         let stillSleeping = ClaudeCLIQuotaBridge.fetchQuota(
             nowEpoch: now + 3000,
@@ -144,6 +144,22 @@ struct ClaudeCLIQuotaBridgeCheck {
         try expect(requests == 1, "exhausted quota must keep sleeping past the stale interval")
         try expect(stillSleeping?["q5_stale"] as? Bool == false, "sleeping snapshot must not look stale")
         try expect(stillSleeping?["q7_stale"] as? Bool == false, "sleeping snapshot must not look stale")
+
+        let longCache = root.appendingPathComponent("exhausted-long.json")
+        let weekPayload = payload(now: now, q5: 40, q7: 100, qf: nil, resetOffset: 86400)
+        for (offset, expected) in [(0, 1), (3000, 1), (3700, 2), (7000, 2)] {
+            _ = ClaudeCLIQuotaBridge.fetchQuota(
+                nowEpoch: now + offset,
+                cacheURL: longCache,
+                credentialLoader: { validCredential(now: now + offset) },
+                requester: { _ in
+                    requests += 1
+                    return .success(weekPayload)
+                }
+            )
+            try expect(requests - 1 == expected, "exhausted quota must be rechecked hourly")
+        }
+        requests = 1
 
         let freshPayload = payload(now: now + 3601, q5: 10, q7: 50, qf: nil, resetOffset: 3600)
         let renewedCredential = validCredential(now: now + 3601)

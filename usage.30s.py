@@ -2710,6 +2710,9 @@ def _claude_usage(line, want_dt=False):
 # 接口(约 2880 次/天)。额度对应的是周窗口,变化很慢,拉长到 5 分钟没有感知差别。
 _CODEX_QUOTA_TTL = 300
 _CODEX_QUOTA_FALLBACK_TTL = 300
+# 额度耗尽、还没到重置时刻时放慢到每小时查一次。不直接睡到重置：
+# 官方提前重置、升级套餐、充值 Credits 都得靠这次复查才看得到。
+_QUOTA_EXHAUSTED_RECHECK_TTL = 3600
 _CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 _CODEX_USAGE_MAX_RESPONSE_BYTES = 256 * 1024
 _CODEX_RESET_CARDS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
@@ -2840,9 +2843,9 @@ def _cached_codex_live_limits(max_age, allow_active_window=False, account_key=No
         fetched_at = float(fetched_at)
     except (TypeError, ValueError, OverflowError):
         return None
-    if _codex_limits_exhausted_reset_at(limits, now_epoch=now) is not None:
-        return limits, cached.get("plan"), fetched_at
     age = now - fetched_at
+    if _codex_limits_exhausted_reset_at(limits, now_epoch=now) is not None:
+        max_age = max(max_age, _QUOTA_EXHAUSTED_RECHECK_TTL)
     if age > max_age and not (
             allow_active_window and _codex_limits_have_active_window(limits, now_epoch=now)):
         return None
@@ -5975,7 +5978,7 @@ def _scan_grok_billing_from_log(path=None, max_bytes=_GROK_QUOTA_LOG_SCAN_BYTES)
         latest["config"], plan=latest.get("plan"), source="log", updated=updated)
 
 
-def _cached_grok_quota(max_age, now_epoch=None, sleep_when_exhausted=False):
+def _cached_grok_quota(max_age, now_epoch=None, exhausted_max_age=None):
     cached = _load_json(GROK_QUOTA_CACHE, {})
     if not isinstance(cached, dict):
         return None
@@ -5991,10 +5994,10 @@ def _cached_grok_quota(max_age, now_epoch=None, sleep_when_exhausted=False):
     pct = quota.get("pct")
     reset = quota.get("reset")
     try:
-        # 只有实时查询的入口会睡到重置；本地兜底路径保持原来的时效。
-        if (sleep_when_exhausted and pct is not None
+        # 只有实时查询的入口传 exhausted_max_age；本地兜底路径保持原来的时效。
+        if (exhausted_max_age is not None and pct is not None
                 and float(pct) >= 100.0 and reset is not None and float(reset) > now):
-            max_age = float("inf")
+            max_age = max(max_age, exhausted_max_age)
     except (TypeError, ValueError, OverflowError):
         pass
     age = now - fetched_at
@@ -6027,7 +6030,8 @@ def fetch_grok_live_quota():
     """仅在用户开启时请求 Grok billing API;失败回退到短缓存。"""
     if not _grok_live_quota_enabled():
         return None
-    cached = _cached_grok_quota(_GROK_QUOTA_TTL, sleep_when_exhausted=True)
+    cached = _cached_grok_quota(
+        _GROK_QUOTA_TTL, exhausted_max_age=_QUOTA_EXHAUSTED_RECHECK_TTL)
     if cached and cached.get("source") == "live":
         return cached
     token, expired = _grok_auth_state()
@@ -13562,9 +13566,9 @@ def _cached_kimi_live_limits(max_age, auth_key, allow_active_window=False, now_e
         fetched_at = float(fetched_at)
     except (TypeError, ValueError, OverflowError):
         return None
-    if _kimi_limits_exhausted_reset_at(limits, now_epoch=now) is not None:
-        return limits, cached.get("plan"), fetched_at
     age = now - fetched_at
+    if _kimi_limits_exhausted_reset_at(limits, now_epoch=now) is not None:
+        max_age = max(max_age, _QUOTA_EXHAUSTED_RECHECK_TTL)
     if age > max_age and not (
             allow_active_window and _kimi_limits_have_active_window(limits, now_epoch=now)):
         return None

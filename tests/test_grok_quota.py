@@ -541,7 +541,7 @@ class GrokQuotaTests(unittest.TestCase):
             self.configure(Path(td))
             now = USAGE.datetime.now().timestamp()
             cache_data = {
-                "fetched_at": now - 600,
+                "fetched_at": now - 3 * 86400,
                 "quota": {
                     "pct": 100.0,
                     "reset": now + 3600,
@@ -552,20 +552,15 @@ class GrokQuotaTests(unittest.TestCase):
             }
             with open(USAGE.GROK_QUOTA_CACHE, "w") as fh:
                 json.dump(cache_data, fh)
-            recheck = USAGE._QUOTA_EXHAUSTED_RECHECK_TTL
             cached = USAGE._cached_grok_quota(
-                USAGE._GROK_QUOTA_TTL, exhausted_max_age=recheck)
+                USAGE._GROK_QUOTA_TTL, sleep_when_exhausted=True)
             self.assertIsNotNone(cached)
             self.assertEqual(cached["pct"], 100.0)
 
-            # 本地兜底路径不传 exhausted_max_age，时效不变
+            # 本地兜底路径不睡，时效不变
             self.assertIsNone(USAGE._cached_grok_quota(USAGE._GROK_QUOTA_TTL))
-            # 耗尽也只是放慢复查，超过复查间隔照样重新查
-            self.assertIsNone(USAGE._cached_grok_quota(
-                USAGE._GROK_QUOTA_TTL, now_epoch=now + recheck,
-                exhausted_max_age=recheck))
             expired = USAGE._cached_grok_quota(
-                USAGE._GROK_QUOTA_TTL, now_epoch=now + 3601, exhausted_max_age=recheck)
+                USAGE._GROK_QUOTA_TTL, now_epoch=now + 3601, sleep_when_exhausted=True)
             self.assertIsNone(expired)
 
 

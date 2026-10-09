@@ -627,7 +627,15 @@ final class DataLoader {
         let now = Int(Date().timeIntervalSince1970)
         let updated = intValue(claude["q_updated"]) ?? 0
         let age = now - updated
-        let sourceStale = updated <= 0 || age > claudeQuotaStaleTTL || age < -300
+        // 5h 或周额度用尽后，重置前读数不会变，CLI 额度桥也故意不再刷新，
+        // 这段时间不能因为读数放得久就标成过期。
+        let resets = ["q5_reset", "q7_reset", "qf_reset"].compactMap { intValue(claude[$0]) }
+        let exhausted = [("q5", "q5_reset"), ("q7", "q7_reset")].contains { valueKey, resetKey in
+            (numberValue(claude[valueKey]) ?? 0) >= 100 && (intValue(claude[resetKey]) ?? 0) > now
+        }
+        let sleeping = exhausted && !resets.contains { $0 <= now }
+        let sourceStale = updated <= 0 || age < -300 ||
+            (age > claudeQuotaStaleTTL && !sleeping)
         for (valueKey, resetKey, staleKey) in [
             ("q5", "q5_reset", "q5_stale"),
             ("q7", "q7_reset", "q7_stale"),

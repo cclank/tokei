@@ -130,20 +130,20 @@ struct ClaudeCLIQuotaBridgeCheck {
         )
         try expect(number(sleeping?["q5"]) == 100, "exhausted cache should be reused")
         try expect(sleeping?["q5_stale"] as? Bool == false, "reused exhausted cache must not look stale")
-        try expect(requests == 1, "exhausted quota must slow down polling before reset")
+        try expect(requests == 1, "exhausted quota must sleep until reset and avoid network requests")
 
-        let recheckPayload = payload(now: now + 1000, q5: 100, q7: 50, qf: nil, resetOffset: 2600)
-        let rechecked = ClaudeCLIQuotaBridge.fetchQuota(
-            nowEpoch: now + 1000,
+        let stillSleeping = ClaudeCLIQuotaBridge.fetchQuota(
+            nowEpoch: now + 3000,
             cacheURL: cache,
             credentialLoader: { credential },
             requester: { _ in
                 requests += 1
-                return .success(recheckPayload)
+                return .failure
             }
         )
-        try expect(requests == 2, "exhausted quota must still be rechecked periodically")
-        try expect(rechecked?["q5_stale"] as? Bool == false, "rechecked snapshot should stay fresh")
+        try expect(requests == 1, "exhausted quota must keep sleeping past the stale interval")
+        try expect(stillSleeping?["q5_stale"] as? Bool == false, "sleeping snapshot must not look stale")
+        try expect(stillSleeping?["q7_stale"] as? Bool == false, "sleeping snapshot must not look stale")
 
         let freshPayload = payload(now: now + 3601, q5: 10, q7: 50, qf: nil, resetOffset: 3600)
         let renewedCredential = validCredential(now: now + 3601)
@@ -157,7 +157,7 @@ struct ClaudeCLIQuotaBridgeCheck {
             }
         )
         try expect(number(resetRefreshed?["q5"]) == 10, "reset should trigger fresh request")
-        try expect(requests == 3, "must query once reset is reached")
+        try expect(requests == 2, "must query once reset is reached")
     }
 
     private static func testFailureKeepsSnapshotAndBacksOff(root: URL) throws {

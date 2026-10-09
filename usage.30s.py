@@ -51,6 +51,45 @@ from pathlib import Path
 HOME = os.path.expanduser("~")
 APPDATA = os.environ.get("APPDATA") or os.path.join(HOME, "AppData", "Roaming")
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA") or os.path.join(HOME, "AppData", "Local")
+_IS_WINDOWS = os.name == "nt"
+# 托盘应用（没有控制台）启动采集时，Windows 默认会给每个子进程弹一个命令行窗口。
+_NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if _IS_WINDOWS else {}
+_WINDOWS_ABS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def _is_abs_project_path(path):
+    r"""会话记下的工作目录是不是绝对路径：POSIX 的 /…，Windows 的 C:\… 和 \\server\share。"""
+    return isinstance(path, str) and (path.startswith("/") or bool(_WINDOWS_ABS_PATH.match(path)))
+
+
+def _lock_file(fd):
+    """独占锁住锁文件：macOS / Linux 用 flock，Windows 用 msvcrt.locking。
+
+    msvcrt 拿不到锁时自己每秒重试、10 次后报 OSError；这里再多等几轮，仍拿不到就抛给
+    调用方按「没加锁」处理，不至于把整轮采集卡死。
+    """
+    if _IS_WINDOWS:
+        import msvcrt
+        for _ in range(6):
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                continue
+        raise OSError("timed out waiting for lock")
+    import fcntl
+    fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def _unlock_file(fd):
+    if _IS_WINDOWS:
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+    fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def _expand_path(path):
@@ -226,7 +265,7 @@ def _writable_path(name):
         return user
     base = os.path.join(BASE_DIR, name)
     if os.path.isfile(base):
-        if ".app/" in BASE_DIR:
+        if ".app/" in BASE_DIR or _IS_WINDOWS:
             os.makedirs(_USER_DIR, exist_ok=True)
             import shutil; shutil.copy2(base, user)
             return user
@@ -1065,7 +1104,7 @@ def _read_scan_cache_file():
     except OSError:
         legacy_mtime = None
     if manifest_mtime is not None and (legacy_mtime is None or manifest_mtime >= legacy_mtime):
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
         cache = dict(manifest.get("meta") or {})
         damaged = False
@@ -1074,18 +1113,18 @@ def _read_scan_cache_file():
                 if isinstance(names, list):
                     items = []
                     for name in names:
-                        with open(os.path.join(directory, name), "r") as f:
+                        with open(os.path.join(directory, name), "r", encoding="utf-8") as f:
                             items.extend(json.load(f)["items"])
                     items.sort(key=lambda item: item[0])
                     value = {item_key: item for _, item_key, item in items}
                 else:
-                    with open(os.path.join(directory, names), "r") as f:
+                    with open(os.path.join(directory, names), "r", encoding="utf-8") as f:
                         value = json.load(f)
                 cache[key] = value
             except (OSError, ValueError, TypeError, KeyError, IndexError):
                 damaged = True  # 只丢这一个键（哪怕只坏了一个桶），下一轮重扫补上
         return cache, damaged
-    with open(_SCAN_CACHE_FILE, "r") as f:
+    with open(_SCAN_CACHE_FILE, "r", encoding="utf-8") as f:
         return json.load(f), True
 
 
@@ -1246,7 +1285,7 @@ def _load_ledger():
 
 def _load_ledger_from_disk():
     try:
-        with open(_LEDGER_FILE, "r") as f:
+        with open(_LEDGER_FILE, "r", encoding="utf-8") as f:
             ledger = json.load(f)
         if isinstance(ledger, dict) and ledger.get("v") == _LEDGER_VERSION:
             return ledger
@@ -1259,7 +1298,7 @@ def _load_ledger_from_disk():
         sync_dir = (cfg.get("sync_dir") or "").strip()
         if device and sync_dir:
             snap_path = os.path.join(os.path.expanduser(sync_dir), f"{device}.json")
-            with open(snap_path, "r") as f:
+            with open(snap_path, "r", encoding="utf-8") as f:
                 backup = json.load(f).get("_ledger")
             if (isinstance(backup, dict) and backup.get("v") == _LEDGER_VERSION
                     and backup.get("tools")):
@@ -1283,11 +1322,12 @@ def ledger_flush():
             pass
     lock_fd = None
     try:
-        import fcntl
         os.makedirs(os.path.dirname(_LEDGER_FILE), mode=0o700, exist_ok=True)
         lock_fd = os.open(f"{_LEDGER_FILE}.lock", os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        _lock_file(lock_fd)
     except OSError:
+        if lock_fd is not None:
+            os.close(lock_fd)
         lock_fd = None
     try:
         fresh = _load_ledger_from_disk()
@@ -1331,8 +1371,7 @@ def ledger_flush():
     finally:
         if lock_fd is not None:
             try:
-                import fcntl
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _unlock_file(lock_fd)
             except OSError:
                 pass
             os.close(lock_fd)
@@ -1373,7 +1412,7 @@ def _save_ledger(ledger):
         directory = os.path.dirname(_LEDGER_FILE)
         os.makedirs(directory, mode=0o700, exist_ok=True)
         fd, tmp = _tempfile.mkstemp(prefix=".ledger-", suffix=".json", dir=directory)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(ledger, f, separators=(',', ':'))
         os.chmod(tmp, 0o600)
         os.replace(tmp, _LEDGER_FILE)
@@ -1753,24 +1792,22 @@ def ledger_touch(tool):
 
 def _with_scan_cache_lock(fn):
     def locked(*args, **kwargs):
-        try:
-            import fcntl
-        except ImportError:
-            return fn(*args, **kwargs)
-
         lock_path = f"{_SCAN_CACHE_FILE}.lock"
         lock_dir = os.path.dirname(lock_path)
         if lock_dir:
             os.makedirs(lock_dir, exist_ok=True)
         lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            return fn(*args, **kwargs)
-        finally:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _lock_file(lock_fd)
+            except OSError:
+                return fn(*args, **kwargs)  # 拿不到锁也照常执行，与没有平台锁时一致
+            try:
+                return fn(*args, **kwargs)
             finally:
-                os.close(lock_fd)
+                _unlock_file(lock_fd)
+        finally:
+            os.close(lock_fd)
     return locked
 
 
@@ -4230,7 +4267,7 @@ def _codex_session_cwd(path, max_lines=8, max_line_bytes=128 * 1024):
                     continue
                 payload = record.get("payload")
                 cwd = payload.get("cwd") if isinstance(payload, dict) else record.get("cwd")
-                if isinstance(cwd, str) and cwd.startswith("/"):
+                if isinstance(cwd, str) and _is_abs_project_path(cwd):
                     return cwd
     except OSError:
         return None
@@ -6052,7 +6089,8 @@ def _read_qwenwork_mcp_config(path=None):
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             return None
         # x-api-key 可调用适配器的其他工具；只信任当前用户私有的 0600 风格文件。
-        if stat.S_IMODE(info.st_mode) & 0o077:
+        # Windows 没有这套权限位（总报 0o666），用户目录本身由 ACL 隔离。
+        if not _IS_WINDOWS and stat.S_IMODE(info.st_mode) & 0o077:
             return None
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             fd = None
@@ -6103,7 +6141,7 @@ def _qwenwork_private_file_marker(path):
         return "missing"
     if (not stat.S_ISREG(info.st_mode)
             or (hasattr(os, "getuid") and info.st_uid != os.getuid())
-            or stat.S_IMODE(info.st_mode) & 0o077):
+            or (not _IS_WINDOWS and stat.S_IMODE(info.st_mode) & 0o077)):
         return "untrusted"
     mtime_ns = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
     return f"{info.st_dev}:{info.st_ino}:{mtime_ns}:{info.st_size}"
@@ -6765,7 +6803,8 @@ def _cursor_app_auth_paths():
         os.path.join(HOME, "Library", "Application Support", "Cursor",
                      "User", "globalStorage", "state.vscdb"),
         os.path.join(HOME, ".config", "Cursor", "User",
-                     "globalStorage", "state.vscdb"))
+                     "globalStorage", "state.vscdb"),
+        os.path.join(APPDATA, "Cursor", "User", "globalStorage", "state.vscdb"))
 
 
 def _cursor_app_session(path=None, now_epoch=None):
@@ -7099,6 +7138,8 @@ def _grok_bot_authorization_generation(path=None):
 
 
 def _grok_bot_helper_path():
+    if _IS_WINDOWS:
+        return None  # 原生助手只有 macOS 版
     configured = os.environ.get("TOKEI_GROK_BOT_HELPER")
     candidates = [configured] if isinstance(configured, str) and configured.strip() else []
     if sys.platform == "darwin":
@@ -7139,6 +7180,8 @@ def _grok_bot_helper_running(state):
         return False
     if _time.time() - started > _GROK_BOT_HELPER_MAX_RUNTIME:
         return False
+    if _IS_WINDOWS:
+        return False  # Windows 上 os.kill(pid, 0) 会直接结束进程，而且这里不会有助手
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -7659,7 +7702,8 @@ def _zed_connection_settings(settings):
 def _load_zed_connection_settings(path=None):
     path = path or _provider_config_string(
         "TOKEI_ZED_SETTINGS", "zed_settings_path") \
-        or os.path.join(HOME, ".config", "zed", "settings.json")
+        or (os.path.join(APPDATA, "Zed", "settings.json") if _IS_WINDOWS
+            else os.path.join(HOME, ".config", "zed", "settings.json"))
     settings = _load_json(path, {}) if os.path.isfile(path) else {}
     return _zed_connection_settings(settings)
 
@@ -7797,6 +7841,14 @@ def _local_timezone_name():
     configured = os.environ.get("TZ")
     if configured and configured.strip():
         return configured.strip()
+    if _IS_WINDOWS:
+        # Windows 只给得出「China Standard Time」这种名字，不是 IANA 时区；按当前偏移给
+        # Etc/GMT±N（IANA 里的符号与直觉相反：UTC+8 是 Etc/GMT-8）。
+        offset = datetime.now().astimezone().utcoffset()
+        minutes = int(offset.total_seconds() // 60) if offset is not None else 0
+        if minutes % 60 == 0 and minutes != 0:
+            return f"Etc/GMT{-minutes // 60:+d}"
+        return "UTC"
     try:
         target = os.path.realpath("/etc/localtime")
         marker = "/zoneinfo/"
@@ -8213,14 +8265,15 @@ def _antigravity_extract_flag(command, flag):
 
 def _antigravity_process_kind(command):
     lower = command.lower()
+    # Windows 的命令行常带引号："C:\…\language_server_windows_x64.exe" --csrf_token …
     language_server = re.search(
-        r"(^|[/\\])language(?:_|-)server(?:[_-][a-z0-9]+)*(?:\.exe)?(?:\s|$)", lower)
+        r"(^|[/\\])language(?:_|-)server(?:[_-][a-z0-9]+)*(?:\.exe)?\"?(?:\s|$)", lower)
     app_match = ("--app_data_dir" in lower and "antigravity" in lower) or any(
         marker in lower for marker in ("antigravity.app/", "/gemini.app/",
                                        "antigravity ide.app/"))
     if language_server and app_match:
         return "ide"
-    if re.search(r"(^|[/\\])(antigravity-cli|antigravity_cli|agy)(?:\s|[/\\]|$)", lower):
+    if re.search(r"(^|[/\\])(antigravity-cli|antigravity_cli|agy)(?:\.exe)?\"?(?:\s|[/\\]|$)", lower):
         return "cli"
     return None
 
@@ -8276,21 +8329,44 @@ def _record_antigravity_scan(found, now_epoch=None):
         pass
 
 
+def _windows_powershell(script, timeout=10):
+    """跑一段 PowerShell，按 UTF-8 取回输出；没装、超时或出错都返回空串。"""
+    command = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + script
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, timeout=timeout, check=False, **_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.decode("utf-8", errors="replace")
+
+
 def _antigravity_running_processes(now_epoch=None):
     if _antigravity_scan_recently_empty(now_epoch):
         return []
-    try:
-        result = subprocess.run(
-            ["/bin/ps", "-ax", "-o", "pid=,command="],
-            capture_output=True, text=True, timeout=2, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    processes = _antigravity_process_infos(result.stdout)
+    if _IS_WINDOWS:
+        # Windows 上的 `ps -ax -o pid=,command=`：每行「pid 命令行」。
+        output = _windows_powershell(
+            "Get-CimInstance Win32_Process | Where-Object CommandLine | "
+            "ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.CommandLine }")
+    else:
+        try:
+            output = subprocess.run(
+                ["/bin/ps", "-ax", "-o", "pid=,command="],
+                capture_output=True, text=True, timeout=2, check=False).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+    processes = _antigravity_process_infos(output)
     _record_antigravity_scan(bool(processes), now_epoch)
     return processes
 
 
 def _antigravity_listening_ports(pid):
+    if _IS_WINDOWS:
+        output = _windows_powershell(
+            f"Get-NetTCPConnection -State Listen -OwningProcess {int(pid)} "
+            "-ErrorAction SilentlyContinue | ForEach-Object { $_.LocalPort }")
+        return sorted({int(value) for value in re.findall(r"^\s*(\d+)\s*$", output, re.M)})
     lsof = next((path for path in ("/usr/sbin/lsof", "/usr/bin/lsof")
                  if os.path.isfile(path) and os.access(path, os.X_OK)), None)
     if not lsof:
@@ -9156,7 +9232,7 @@ def scan_qoder_ide(bounds, cache):
 
     # 默认关闭，需在 config.json 中显式启用
     try:
-        with open(os.path.join(_USER_DIR, "config.json"), "r") as f:
+        with open(os.path.join(_USER_DIR, "config.json"), "r", encoding="utf-8") as f:
             cfg = json.load(f)
         if not cfg.get("qoder_ide_enabled"):
             if fc:
@@ -9535,7 +9611,7 @@ def _scan_hermes_db(db_path, _sq):
             if session_id in sessions:
                 day_sessions.setdefault(dk, set()).add(session_id)
             workdir = (sessions.get(session_id) or {}).get("cwd")
-            if isinstance(workdir, str) and workdir.startswith("/"):
+            if isinstance(workdir, str) and _is_abs_project_path(workdir):
                 bucket = day.setdefault("projects", {}).setdefault(
                     workdir, {"tokens": 0, "cost": 0.0, "models": {}, "sessions": []})
                 total = inp + out + cr + cw + reason
@@ -9670,7 +9746,7 @@ def _parse_qodercli_file(path):
     model = None
     prev_ts = None
     trigger = None   # 最近一条用户消息 / 工具结果的时刻：下一次回复从这里开始
-    with open(path, "r", errors="replace") as f:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line_number, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -11972,7 +12048,7 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
             try:
                 for session_id, directory in connection.execute(
                         f"SELECT id, directory FROM {table}"):
-                    if isinstance(directory, str) and directory.startswith("/"):
+                    if isinstance(directory, str) and _is_abs_project_path(directory):
                         session_projects.setdefault(session_id, directory)
             except sqlite3.Error:
                 pass
@@ -12299,7 +12375,7 @@ def _scan_devin_cli_database(path):
                             f"SELECT id, {model_col}, {directory} FROM sessions"):
                         if isinstance(model, str) and model.strip():
                             session_models[session_id] = model.strip()
-                        if isinstance(workdir, str) and workdir.startswith("/"):
+                        if isinstance(workdir, str) and _is_abs_project_path(workdir):
                             session_projects[session_id] = workdir
                 except sqlite3.Error:
                     pass
@@ -15108,7 +15184,7 @@ _TOKEI_CONFIG = os.path.join(HOME, ".tokei", "config.json")
 
 def _load_tokei_config():
     try:
-        with open(_TOKEI_CONFIG) as f:
+        with open(_TOKEI_CONFIG, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -17608,6 +17684,8 @@ def projects():
 def _detect_local_servers(project_paths):
     """检测哪些项目目录下有进程正在监听 TCP 端口。返回 {path: [port, ...]}。"""
     import subprocess
+    if _IS_WINDOWS:
+        return {}  # Windows 读不到其他进程的工作目录，无法对应到项目
     try:
         # 1) pid → ports (LISTEN)
         out1 = subprocess.check_output(
@@ -17663,6 +17741,12 @@ def _detect_local_servers(project_paths):
 
 
 if __name__ == "__main__":
+    if _IS_WINDOWS:
+        # Windows 管道按系统代码页（GBK / cp1252）编码，中文和 ⚡ 这类符号会直接报错；
+        # 宿主一律按 UTF-8 读。
+        for _stream in (sys.stdout, sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
     if "--update-prices" in sys.argv:
         sys.exit(update_prices())
     if "--update-unknown" in sys.argv:

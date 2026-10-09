@@ -1,0 +1,40 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "usage.30s.py"
+      - "pricing.json"
+      - "tests/**"
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    paths:
+      - "usage.30s.py"
+      - "tests/**"
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+jobs:
+  collector:
+    name: Collector (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 采集脚本在干净的临时 HOME 里跑一遍所有入口：这是 Windows 版能用的底线。
+      - name: Cross-platform smoke test
+        run: python -m unittest tests.test_cross_platform_smoke -v
+      # 现有测试大多是在 macOS 上写的（不少要编译 Swift），这里只看结果、不拦合并。
+      - name: Full test suite (informational)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: python -m unittest discover -s tests

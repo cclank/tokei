@@ -13,6 +13,7 @@ swiftc -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   Sources/Tokei/Model.swift \
   Sources/Tokei/SyncManager.swift \
+  Sources/Tokei/L10n.swift \
   Tests/SyncManagerIntegrationCheck.swift \
   -o "$OUTPUT"
 "$OUTPUT" "$@"

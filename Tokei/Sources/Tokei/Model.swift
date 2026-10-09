@@ -31,6 +31,115 @@ struct ClaudeModelStat: Codable, Identifiable {
     var total: Int { `in` + out + cr + cw }
 }
 
+/// 平均输出速度（token/秒）与 TTFT 中位数（秒）。采集器按请求计时后汇总；没有样本时整个字段缺省。
+/// o/g/th 是算出它们的累加值（输出 token、生成秒数、TTFT 细分桶直方图），合并多台设备时据此重算。
+/// 用不可变的引用类型：Usage 里有一百多处 perf，做成值类型会把本来就很大的 Usage 再撑大。
+final class PerfStat: Codable, Equatable {
+    let tps: Double
+    let ttft: Double?
+    let n: Int
+    let o: Int?
+    let g: Double?
+    let tn: Int?
+    let th: [String: Int]?
+    let models: [String: PerfModelStat]?
+
+    init(tps: Double, ttft: Double?, n: Int, o: Int? = nil, g: Double? = nil, tn: Int? = nil,
+         th: [String: Int]? = nil, models: [String: PerfModelStat]? = nil) {
+        self.tps = tps; self.ttft = ttft; self.n = n
+        self.o = o; self.g = g; self.tn = tn; self.th = th; self.models = models
+    }
+
+    static func == (lhs: PerfStat, rhs: PerfStat) -> Bool {
+        lhs.overall == rhs.overall && lhs.models == rhs.models
+    }
+
+    var overall: PerfModelStat { .init(tps: tps, ttft: ttft, n: n, o: o, g: g, tn: tn, th: th) }
+
+    /// 按模型行的显示名找这一行的速度。两边名字出自同一套归并规则，但同一模型的大小写、
+    /// 标点写法可能不完全一样（GLM-5.3 / glm 5.3），对不上时只比字母和数字。
+    func model(named name: String) -> PerfModelStat? {
+        if let exact = models?[name] { return exact }
+        let key = Self.matchKey(name)
+        return models?.first { Self.matchKey($0.key) == key }?.value
+    }
+
+    static func matchKey(_ name: String) -> String {
+        String(String.UnicodeScalarView(
+            name.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }))
+    }
+
+    /// 跨设备合并：速度 = 输出 token 合计 ÷ 生成秒数合计，TTFT 按合并后的直方图重新取中位数。
+    static func merged(_ lhs: PerfStat?, _ rhs: PerfStat?) -> PerfStat? {
+        guard let lhs else { return rhs }
+        guard let rhs else { return lhs }
+        let total = lhs.overall.merged(with: rhs.overall)
+        var models = lhs.models ?? [:]
+        for (name, stat) in rhs.models ?? [:] {
+            models[name] = models[name].map { $0.merged(with: stat) } ?? stat
+        }
+        return PerfStat(tps: total.tps, ttft: total.ttft, n: total.n, o: total.o, g: total.g,
+                        tn: total.tn, th: total.th, models: models.isEmpty ? nil : models)
+    }
+}
+
+struct PerfModelStat: Codable, Equatable {
+    var tps: Double
+    var ttft: Double?
+    var n: Int
+    var o: Int? = nil
+    var g: Double? = nil
+    var tn: Int? = nil
+    var th: [String: Int]? = nil
+
+    func merged(with other: PerfModelStat) -> PerfModelStat {
+        let n = n + other.n
+        var result = PerfModelStat(tps: 0, ttft: nil, n: n)
+        if let o, let g, let otherO = other.o, let otherG = other.g, g + otherG > 0 {
+            result.o = o + otherO
+            result.g = g + otherG
+            result.tps = (Double(o + otherO) / (g + otherG) * 10).rounded() / 10
+        } else if n > 0 {
+            // 没带累加值的旧数据只能按请求数加权
+            result.tps = ((tps * Double(self.n) + other.tps * Double(other.n)) / Double(n) * 10).rounded() / 10
+        }
+        if let th, let otherTh = other.th {
+            let hist = th.merging(otherTh, uniquingKeysWith: +)
+            result.th = hist
+            result.tn = hist.values.reduce(0, +)
+            result.ttft = PerfModelStat.median(hist)
+        } else {
+            // 没有直方图时只能按样本数加权两边的中位数
+            let left = tn ?? (ttft == nil ? 0 : self.n), right = other.tn ?? (other.ttft == nil ? 0 : other.n)
+            if left + right > 0 {
+                result.tn = left + right
+                let value = ((ttft ?? 0) * Double(left) + (other.ttft ?? 0) * Double(right)) / Double(left + right)
+                result.ttft = (value * 100).rounded() / 100
+            }
+        }
+        return result
+    }
+
+    /// 和采集器同一套分桶：第 0 桶 [0, 0.05)，第 k 桶 [0.05×1.05^(k-1), 0.05×1.05^k)，桶内线性插值。
+    static func median(_ hist: [String: Int]) -> Double? {
+        let buckets = hist.compactMap { key, count in Int(key).map { ($0, count) } }
+            .filter { $0.1 > 0 }.sorted { $0.0 < $1.0 }
+        let total = buckets.reduce(0) { $0 + $1.1 }
+        guard total > 0 else { return nil }
+        let half = Double(total) / 2
+        var seen = 0.0
+        for (bucket, count) in buckets {
+            if seen + Double(count) >= half {
+                let low = bucket <= 0 ? 0 : 0.05 * pow(1.05, Double(bucket - 1))
+                let high = 0.05 * pow(1.05, Double(max(bucket, 0)))
+                return ((low + (high - low) * ((half - seen) / Double(count))) * 100).rounded() / 100
+            }
+            seen += Double(count)
+        }
+        return nil
+    }
+}
+
 struct ClaudeRange: Codable {
     var hit: Double
     var `in`: Int
@@ -40,6 +149,7 @@ struct ClaudeRange: Codable {
     var cost: Double
     var models: [ClaudeModelStat] = []
     var sessions: Int = 0
+    var perf: PerfStat? = nil
 
     var tokens: Int { `in` + out + cr + cw }
 }
@@ -95,6 +205,7 @@ struct CodexRange: Codable {
     var cost: Double
     var sessions: Int = 0
     var models: [TokenModelStat] = []
+    var perf: PerfStat? = nil
 
     var tokens: Int { `in` + cached + out }
 
@@ -120,6 +231,7 @@ struct CodexRange: Codable {
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 
@@ -215,6 +327,7 @@ struct GeminiRange: Codable {
     var cost: Double
     var models: [GeminiModelStat] = []
     var sessions: Int = 0
+    var perf: PerfStat? = nil
 
     var totalTokens: Int { self.in + out + cached + thoughts }
     var hasUsage: Bool { sessions > 0 || totalTokens > 0 }
@@ -274,6 +387,7 @@ struct GrokRange: Codable {
     var cancellations: Int?
     var ttft: Int?
     var response: Int?
+    var perf: PerfStat? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -285,6 +399,7 @@ struct GrokRange: Codable {
         reason = try c.decodeIfPresent(Int.self, forKey: .reason) ?? 0
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
         usage_available = try c.decodeIfPresent(Bool.self, forKey: .usage_available) ?? false
         usage_calls = try c.decodeIfPresent(Int.self, forKey: .usage_calls) ?? 0
         usage_sessions = try c.decodeIfPresent(Int.self, forKey: .usage_sessions) ?? 0
@@ -388,12 +503,13 @@ struct QoderRange: Codable {
     var ctx: Double = 0
     var tools: Int = 0
     var est: Int = 0
+    var perf: PerfStat? = nil
 
     var totalTokens: Int { self.in + out + cr + cw }
 
     enum CodingKeys: String, CodingKey {
         case `in`, out, cr, cw, credits, usage_calls, usage_available, hit, models
-        case sessions, calls, sub_agents, turns, duration, ctx, tools, est
+        case sessions, calls, sub_agents, turns, duration, ctx, tools, est, perf
     }
 
     init(`in` input: Int = 0, out: Int = 0, cr: Int = 0, cw: Int = 0,
@@ -440,6 +556,7 @@ struct QoderRange: Codable {
         self.ctx = try c.decodeIfPresent(Double.self, forKey: .ctx) ?? 0
         self.tools = try c.decodeIfPresent(Int.self, forKey: .tools) ?? 0
         self.est = try c.decodeIfPresent(Int.self, forKey: .est) ?? 0
+        self.perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 
@@ -566,6 +683,7 @@ struct HermesRange: Codable {
     var cost: Double
     var sessions: Int = 0
     var models: [TokenModelStat] = []
+    var perf: PerfStat? = nil
 }
 struct TokenModelStat: Codable, Identifiable {
     var modelId: String?
@@ -646,6 +764,7 @@ struct OpenClawRange: Codable {
     var cost: Double
     var sessions: Int
     var models: [TokenModelStat]
+    var perf: PerfStat? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -661,6 +780,7 @@ struct OpenClawRange: Codable {
         cost = try c.decodeIfPresent(Double.self, forKey: .cost) ?? 0
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 struct OpenClawRanges: Codable {
@@ -700,6 +820,7 @@ struct TokenUsageRange: Codable {
     var sessions: Int = 0
     var models: [TokenModelStat] = []
     var coverage: String?
+    var perf: PerfStat? = nil
 
     var totalTokens: Int {
         tokens > 0 ? tokens : `in` + out + cr + cw + reason
@@ -744,6 +865,7 @@ struct TokenUsageRange: Codable {
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions) ?? 0
         models = try c.decodeIfPresent([TokenModelStat].self, forKey: .models) ?? []
         coverage = try c.decodeIfPresent(String.self, forKey: .coverage)
+        perf = try? c.decodeIfPresent(PerfStat.self, forKey: .perf)
     }
 }
 struct TokenUsageRanges: Codable {
@@ -980,40 +1102,92 @@ struct DevinStat: Codable {
 /// `quota` 来自用户自愿填写 Token Plan Key 后的联网查询，形状与 Devin 相同。
 typealias MiniMaxStat = DevinStat
 
+/// 写时复制的堆上存储。Usage 有三十多个工具字段，全部内联时超过 30 KB：每复制一次、每多一个
+/// 临时值都要在栈上放一整份，编译器展开后的函数栈帧动辄上百 KB，后台线程 512 KB 的栈会被撑爆。
+/// 字段放到堆上后 Usage 只剩一排指针，改哪个字段才复制哪个，值语义不变。
+@propertyWrapper
+struct Boxed<Value> {
+    private final class Storage {
+        var value: Value
+        init(_ value: Value) { self.value = value }
+    }
+    private var storage: Storage
+
+    init(wrappedValue: Value) { storage = Storage(wrappedValue) }
+
+    var wrappedValue: Value {
+        get { storage.value }
+        set {
+            if isKnownUniquelyReferenced(&storage) { storage.value = newValue }
+            else { storage = Storage(newValue) }
+        }
+        _modify {
+            if !isKnownUniquelyReferenced(&storage) { storage = Storage(storage.value) }
+            yield &storage.value
+        }
+    }
+}
+
+extension Boxed: Decodable where Value: Decodable {
+    init(from decoder: Decoder) throws { storage = Storage(try Value(from: decoder)) }
+}
+
+extension Boxed: Encodable where Value: Encodable {
+    func encode(to encoder: Encoder) throws { try storage.value.encode(to: encoder) }
+}
+
+/// 解码时编译器会把三十多个工具的解码全部展开在一个函数里，栈帧仍有上百 KB；
+/// 所有解码统一走这里，放到 16 MB 栈的专用线程上做，不占调用方线程的栈。
+extension Usage {
+    static func decode(from data: Data) throws -> Usage {
+        final class Box: @unchecked Sendable { var result: Result<Usage, Error>? }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            box.result = Result { try JSONDecoder().decode(Usage.self, from: data) }
+            done.signal()
+        }
+        thread.stackSize = 16 << 20
+        thread.start()
+        done.wait()
+        return try box.result!.get()
+    }
+}
+
 struct Usage: Codable {
-    var claude: ClaudeStat
-    var codex: CodexStat
-    var gemini: GeminiStat
-    var grok: GrokStat
-    var grokBot: GrokBotStat
-    var qoderwork: QoderStat
-    var qoder: QoderIdeStat
-    var qodercli: QoderStat
+    @Boxed var claude: ClaudeStat
+    @Boxed var codex: CodexStat
+    @Boxed var gemini: GeminiStat
+    @Boxed var grok: GrokStat
+    @Boxed var grokBot: GrokBotStat
+    @Boxed var qoderwork: QoderStat
+    @Boxed var qoder: QoderIdeStat
+    @Boxed var qodercli: QoderStat
     /// Qoder 国内版（~/.qoder-cn），与 Qoder CLI 同格式、单独统计。
-    var qodercliCN: QoderStat
-    var hermes: HermesStat
-    var zcode: TokenUsageStat
-    var mimocode: TokenUsageStat
-    var openclaw: OpenClawStat
-    var pi: TokenUsageStat
-    var prime_agent: TokenUsageStat
-    var workbuddy: TokenUsageStat
-    var workbuddyAI: TokenUsageStat
-    var codebuddy: TokenUsageStat
-    var deepseekHarness: TokenUsageStat
-    var opencode: TokenUsageStat
-    var qwencode: TokenUsageStat
-    var qwenwork: QwenWorkQuota
-    var kimicode: KimiCodeStat
-    var musecode: TokenUsageStat
-    var cmdcode: TokenUsageStat
-    var devin: DevinStat
-    var minimax: MiniMaxStat
-    var antigravity: ProviderQuotaStat
-    var cursor: ProviderQuotaStat
-    var zed: ProviderQuotaStat
-    var sub2api: ProviderQuotaStat
-    var zai: ProviderQuotaStat
+    @Boxed var qodercliCN: QoderStat
+    @Boxed var hermes: HermesStat
+    @Boxed var zcode: TokenUsageStat
+    @Boxed var mimocode: TokenUsageStat
+    @Boxed var openclaw: OpenClawStat
+    @Boxed var pi: TokenUsageStat
+    @Boxed var prime_agent: TokenUsageStat
+    @Boxed var workbuddy: TokenUsageStat
+    @Boxed var workbuddyAI: TokenUsageStat
+    @Boxed var codebuddy: TokenUsageStat
+    @Boxed var deepseekHarness: TokenUsageStat
+    @Boxed var opencode: TokenUsageStat
+    @Boxed var qwencode: TokenUsageStat
+    @Boxed var qwenwork: QwenWorkQuota
+    @Boxed var kimicode: KimiCodeStat
+    @Boxed var musecode: TokenUsageStat
+    @Boxed var cmdcode: TokenUsageStat
+    @Boxed var devin: DevinStat
+    @Boxed var minimax: MiniMaxStat
+    @Boxed var antigravity: ProviderQuotaStat
+    @Boxed var cursor: ProviderQuotaStat
+    @Boxed var zed: ProviderQuotaStat
+    @Boxed var sub2api: ProviderQuotaStat
+    @Boxed var zai: ProviderQuotaStat
 
     enum CodingKeys: String, CodingKey {
         case claude, codex, gemini, grok, grokBot = "grok_bot"
@@ -1112,13 +1286,31 @@ enum Fmt {
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(e)))
     }
 
-    static func beijingTime(_ epoch: Int, full: Bool = false) -> String {
-        let d = Date(timeIntervalSince1970: TimeInterval(epoch))
+    /// 按系统时区显示时刻（Codex 重置卡到期时间等），和额度行的重置时间一致。
+    static func localTime(_ epoch: Int) -> String {
         let f = DateFormatter()
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = full ? "yyyy-MM-dd HH:mm:ss" : "MM-dd HH:mm"
-        return f.string(from: d)
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
+    }
+
+    /// 重置卡到期列表上的时区说明，如「本地 · GMT+8」。
+    static func localTimeZoneCaption() -> String {
+        let zone = TimeZone.current
+        let locale = Locale(identifier: AppLanguage.current.rawValue)
+        let name = zone.localizedName(for: .shortStandard, locale: locale)
+            ?? zone.localizedName(for: .generic, locale: locale)
+            ?? zone.identifier
+        return L("本地 · %@", name)
+    }
+
+    /// 离到期还有多久。重置卡往往十几天后才到期，两天以上按天显示（16d6h），
+    /// 两天以内同 countdown；已经过了就是「已到期」。
+    static func remaining(_ epoch: Int, now: Date = Date()) -> String {
+        let seconds = Int(TimeInterval(epoch) - now.timeIntervalSince1970)
+        if seconds <= 0 { return L("已到期") }
+        if seconds >= 2 * 86400 { return "\(seconds / 86400)d\((seconds % 86400) / 3600)h" }
+        let h = seconds / 3600, m = (seconds % 3600) / 60
+        return h > 0 ? "\(h)h\(m)m" : "\(max(m, 1))m"
     }
 
     static func countdown(_ epoch: Int?) -> String {
@@ -1127,6 +1319,16 @@ enum Fmt {
         if s <= 0 { return L("即将重置") }
         let h = Int(s) / 3600, m = (Int(s) % 3600) / 60
         return h > 0 ? "\(h)h\(m)m" : "\(m)m"
+    }
+
+    /// 输出速度：两位数以上取整（98 tok/s），以下留一位小数（6.2 tok/s）。
+    static func tps(_ value: Double) -> String {
+        value >= 10 ? String(format: "%.0f tok/s", value) : String(format: "%.1f tok/s", value)
+    }
+
+    /// 首字延迟这类秒级时长：1.4s、12s。
+    static func seconds(_ value: Double) -> String {
+        value >= 10 ? String(format: "%.0fs", value) : String(format: "%.1fs", value)
     }
 
     static func duration(_ ms: Int) -> String {

@@ -30,7 +30,8 @@ public enum GrokBotQuotaBridge {
     private static let maxResponseBytes = 2 * 1024 * 1024
     private static let maxUsageResponseBytes = 16 * 1024 * 1024
     private static let usagePageSize = 1_000
-    private static let maxUsagePages = 20
+    // 平时只拉最近两天（--since），这里是首次从年初全量拉取时的上限：十万条。
+    private static let maxUsagePages = 100
 
     private struct Credential {
         let token: String
@@ -49,8 +50,9 @@ public enum GrokBotQuotaBridge {
     }
 
     public static func runIfRequested() -> Bool {
+        // 2：--grok-bot-data-json 支持 --since <毫秒>，只拉这之后的用量事件。
         if CommandLine.arguments.contains("--grok-bot-helper-version") {
-            print("1")
+            print("2")
             exit(0)
         }
         if CommandLine.arguments.contains("--grok-bot-authorize") {
@@ -114,7 +116,7 @@ public enum GrokBotQuotaBridge {
         ) else { return nil }
 
         let quota = fetchQuotaObject(credential: credential)
-        let usage = fetchUsageEvents(credential: credential)
+        let usage = fetchUsageEvents(credential: credential, since: requestedSince())
         guard quota != nil || usage != nil else { return nil }
 
         var output: [String: Any] = [
@@ -181,15 +183,28 @@ public enum GrokBotQuotaBridge {
         )
     }
 
-    private static func fetchUsageEvents(credential: Credential) -> UsageResult? {
+    /// `--since <毫秒>`：采集器按天存了事件，只需要补最近的；没给就从年初拉。
+    private static func requestedSince() -> Int64? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--since"), index + 1 < arguments.count else {
+            return nil
+        }
+        return Int64(arguments[index + 1])
+    }
+
+    private static func fetchUsageEvents(credential: Credential, since: Int64? = nil) -> UsageResult? {
         let now = Date()
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         let year = calendar.component(.year, from: now)
         guard let start = calendar.date(from: DateComponents(year: year, month: 1, day: 1))
         else { return nil }
-        let startMilliseconds = Int64(start.timeIntervalSince1970 * 1_000)
+        let yearStartMilliseconds = Int64(start.timeIntervalSince1970 * 1_000)
         let endMilliseconds = Int64(now.timeIntervalSince1970 * 1_000)
+        // 只认今年之内、不晚于现在的起点；越界就退回从年初拉
+        let startMilliseconds = since.flatMap {
+            $0 >= yearStartMilliseconds && $0 <= endMilliseconds ? $0 : nil
+        } ?? yearStartMilliseconds
         var collected: [[String: Any]] = []
         var expectedCount: Int?
         var completed = false

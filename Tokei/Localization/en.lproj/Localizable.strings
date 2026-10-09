@@ -169,7 +169,10 @@
 "加载中…" = "Loading…";
 "加载中…(%@)" = "Loading… (%@)";
 "加载失败" = "Load failed";
-"北京时间 UTC+8" = "Beijing time (UTC+8)";
+"本地 · %@" = "Local · %@";
+"%@ · %@后" = "%@ · in %@";
+"最近一张 %@ 后到期" = "Next one expires in %@";
+"已到期" = "Expired";
 "区域" = "Region";
 "十万刀" = "$100K Club";
 "十亿先生" = "Billion Club";
@@ -232,6 +235,7 @@
 "团队账号个人可用积分" = "Team account personal credits";
 "圆点" = "Dots";
 "在 Finder 中显示" = "Show in Finder";
+"在资源管理器中显示" = "Show in File Explorer";
 "在 Ghostty 打开" = "Open in Ghostty";
 "在 iTerm 打开" = "Open in iTerm";
 "在终端打开" = "Open in Terminal";
@@ -318,6 +322,9 @@
 "按模型 · %@" = "By model · %@";
 "按量预算" = "Pay-as-you-go budget";
 "授权 Grok Bot" = "Authorize Grok Bot";
+"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Helper updated: re-authorize once for faster reads with no event limit";
+"重新授权" = "Re-authorize";
+"重新授权 Grok Bot" = "Re-authorize Grok Bot";
 "授权 Zed" = "Authorize Zed";
 "授权助手不可用，请重新安装 Tokei" = "Auth helper unavailable; please reinstall Tokei";
 "授权成功，可在 Grok Bot 卡片查看" = "Authorized; see the Grok Bot card";
@@ -360,7 +367,6 @@
 "更新时间未知" = "Update time unknown";
 "更早" = "Earlier";
 "最大区间下降" = "Largest range drop";
-"最近 %@ · 北京时间" = "Latest %@ · Beijing time";
 "最近一次 · %@" = "Latest · %@";
 "最近额度变化" = "Recent quota changes";
 "月" = "Month";
@@ -382,8 +388,7 @@
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Local activity · official tokens, models and cost after authorization";
 "本地缓存" = "Local cache";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Local log · %@ messages · %@ responses";
-"本地验证版" = "Local dev build";
-"本地验证版不检查线上更新" = "Local dev builds do not check for online updates";
+"本地验证版不自动检查，可手动检查" = "Local dev builds don't check automatically; you can check manually";
 "本年" = "This Year";
 "本月" = "This Month";
 "本机 QwenWork 接口" = "Local QwenWork endpoint";
@@ -410,7 +415,6 @@
 "正在开始记录额度轨迹" = "Starting quota history recording";
 "正在检查" = "Checking";
 "正在读取周额度…" = "Reading weekly quota…";
-"此版本包含尚未发布的改动，不检查线上更新" = "This build contains unreleased changes; online updates are not checked";
 "每天用了多少额度" = "Daily quota usage";
 "每百万 token 的输入 / 输出单价，读 = 缓存读" = "Input / output price per 1M tokens; cache = cache read";
 "永动机" = "Perpetual Motion";
@@ -467,6 +471,7 @@
 "缓存写 %@" = "Cache Write %@";
 "缓存写" = "Cache Write";
 "缓存命中" = "Cache hits";
+"缓存可能已过期" = "Cache may be stale";
 "缓存数据 · 后台更新中" = "Cached data · updating in background";
 "缓存数据 · 等待刷新" = "Cached data · waiting to refresh";
 "缓存读 %@" = "Cache Read %@";
@@ -563,7 +568,16 @@
 "额度比例未知" = "Quota share unknown";
 "额度窗口" = "Quota window";
 "额度轨迹" = "Quota History";
-"首字" = "First letter";
+"首字延迟：从发出请求到收到第一个 token 的时间" = "Time to first token: from sending the request to receiving the first token";
+"平均输出速度" = "Avg output speed";
+"平均速度" = "Avg speed";
+"平均 TTFT" = "Avg TTFT";
+"TTFT 中位数" = "Median TTFT";
+"平均响应" = "Avg response";
+"输出 token 总数 ÷ 生成总时长，来自 %@ 个请求；拿不到首字时间的请求按整个请求的耗时算" = "Total output tokens ÷ total generation time over %@ requests; requests without a first-token time use their full duration";
+"首字延迟：从发出请求到收到第一个 token 的时间，%@ 个请求的中位数" = "Time to first token: from sending the request to receiving the first token, median over %@ requests";
+"平均输出速度来自 %@ 个请求" = "Average output speed over %@ requests";
+"平均输出速度来自 %@ 个请求，TTFT 中位数来自其中 %@ 个" = "Average output speed over %@ requests; median TTFT over %@ of them";
 "高峰 %@" = "Peak %@";
 "默认关闭。开启后仅在 Claude Desktop 缓存不可用时，使用 Claude Code CLI 已有登录态向 Anthropic 查询 5h、周及模型额度，并缓存 5 分钟。登录 Token 只在内存中使用，不写入 Tokei 文件。" = "Off by default. When on, only if Claude Desktop cache is unavailable, Tokei uses Claude Code CLI's existing login session to query Anthropic for 5h, weekly and model quotas, cached for 5 min. Login tokens stay in memory and are never written to Tokei files.";
 "默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。" = "Off by default. When on, Tokei only connects to the guarded endpoint the QwenWork desktop app exposes on local 127.0.0.1; QwenWork may refresh quota from official services as a result. Tokei never reads or stores login credentials; keep QwenWork signed in and running.";

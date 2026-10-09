@@ -6,7 +6,9 @@ struct PanelView: View {
     @ObservedObject var store: Store
     @ObservedObject var layout: PanelLayoutContext = PanelLayoutContext()
     var scrollable = true
-    @State private var sel: RangeKey = .today
+    /// 一次性量尺寸的 probe 从哪个页签画起；平时的面板总是从「今日」开始。
+    static var initialRange: RangeKey = .today
+    @State private var sel: RangeKey = PanelView.initialRange
     @State private var claudeModelsOpen = false
     @State private var codexModelsOpen = false
     @State private var codexReserveModelsOpen = false
@@ -186,7 +188,12 @@ struct PanelView: View {
                         .id(appLanguage)
                 } else {
                     // 换语言时整棵内容树重建：各页面是独立视图，输入不变时不会自己重算文案。
-                    ScrollView(.vertical, showsIndicators: false) { panelContent.id(appLanguage) }
+                    // 至少撑满画布：面板按最长的页签定高，内容短的页签里页脚贴到底边。
+                    ScrollView(.vertical, showsIndicators: false) {
+                        panelContent
+                            .frame(minHeight: maxPanelHeight, alignment: .top)
+                            .id(appLanguage)
+                    }
                         .frame(width: w)
                         .frame(maxHeight: maxPanelHeight)
                         .background(Theme.bg)
@@ -260,7 +267,12 @@ struct PanelView: View {
                 }
                 .frame(height: 90)
             }
-            footer
+            // 内容比面板短时由上面撑满画布，空出来的高度都给这个 Spacer，页脚贴到底边；
+            // 内容长时它高度为 0，页脚照旧跟在内容末尾。量尺寸时不撑，不影响自然高度。
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                footer
+            }
         }
         .padding(Theme.outerPad)
     }
@@ -620,13 +632,14 @@ struct PanelView: View {
                     .init("arrow.up", L("输出"), Fmt.human(r.out)),
                     .init("bolt.fill", L("缓存读"), Fmt.human(r.cr)),
                     .init("square.stack.3d.up.fill", L("缓存写"), Fmt.human(r.cw)),
-                ], tint: Theme.claude)
+                ] + perfMetrics(r.perf), tint: Theme.claude)
                 let claudeRows = r.models.filter { $0.name != "合成" }.map { m in // l10n-ignore
                     let denom = m.cr + m.cw + m.in
                     let hit = denom > 0 ? Double(m.cr) / Double(denom) * 100 : 0
                     return ModelRow(name: m.name, pin: m.pin, pout: m.pout, pcr: m.pcr ?? 0,
                                    cost: m.cost, total: m.total, hit: hit,
-                                   tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw)
+                                   tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw,
+                                   perf: r.perf?.model(named: m.name))
                 }
                 if !claudeRows.isEmpty {
                     modelDisclosure(claudeRows, open: $claudeModelsOpen, tint: Theme.claude)
@@ -685,11 +698,11 @@ struct PanelView: View {
                         .init("arrow.up", L("输出"), Fmt.human(r.out)),
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.codex)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: $codexModelsOpen, tint: Theme.codex,
-                                         reasonIncludedInOutput: true)
+                                         reasonIncludedInOutput: true, perf: r.perf)
                 }
             } else if hasQuotaData {
                 usageEmptyHint(recent: recentUsageHint { key in
@@ -830,11 +843,14 @@ struct PanelView: View {
                 Text(L("%@ 张", cards.count))
                     .font(.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
-                Spacer(minLength: 6)
+                Spacer(minLength: 4)
                 if let nearest = expirations.first {
-                    Text(L("最近 %@ · 北京时间", Fmt.beijingTime(nearest)))
+                    // 按系统时区显示，再带上还剩多久；单行放不下时略缩小，不折行
+                    Text(L("%@ · %@后", Fmt.localTime(nearest), Fmt.remaining(nearest)))
                         .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Image(systemName: codexResetCardsOpen ? "chevron.down" : "chevron.right")
                     .font(.system(size: Theme.fontSize(8), weight: .bold))
@@ -843,7 +859,8 @@ struct PanelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(L("查看重置卡到期时间"))
+        .help(expirations.first.map { L("最近一张 %@ 后到期", Fmt.remaining($0)) }
+              ?? L("查看重置卡到期时间"))
 
         if codexResetCardsOpen {
             VStack(alignment: .leading, spacing: 7) {
@@ -852,9 +869,10 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(9.5), weight: .medium))
                         .foregroundStyle(Theme.tTertiary)
                     Spacer()
-                    Text(L("北京时间 UTC+8"))
+                    Text(Fmt.localTimeZoneCaption())
                         .font(.system(size: Theme.fontSize(9), design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
+                        .lineLimit(1)
                 }
                 ForEach(Array(expirations.enumerated()), id: \.offset) { index, expiry in
                     HStack(spacing: 7) {
@@ -867,9 +885,11 @@ struct PanelView: View {
                             .font(.system(size: Theme.fontSize(10.5), weight: .medium))
                             .foregroundStyle(Theme.tSecondary)
                         Spacer()
-                        Text(Fmt.beijingTime(expiry, full: true))
+                        Text(L("%@ · %@后", Fmt.localTime(expiry), Fmt.remaining(expiry)))
                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
                             .foregroundStyle(Theme.tPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
             }
@@ -912,7 +932,7 @@ struct PanelView: View {
                         .init("bolt.fill", L("缓存"), Fmt.human(r.cached)),
                     ]
                     if r.thoughts > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.thoughts))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.gemini)
                 if !r.models.isEmpty {
                     let geminiRows = r.models.map { m in
@@ -965,10 +985,10 @@ struct PanelView: View {
                 CostHeadline(value: Fmt.human(r.totalTokens),
                              caption: L("%@ 总量", sel.label), tint: tint)
                 metricGrid([.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))],
-                           hit: r.hit, extra: tokenUsageMetrics(r), tint: tint)
+                           hit: r.hit, extra: tokenUsageMetrics(r) + perfMetrics(r.perf), tint: tint)
                 unpricedModelsNote(r.models)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint, perf: r.perf)
                 }
             }
             if quota.available {
@@ -1229,7 +1249,36 @@ struct PanelView: View {
                     .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
             }
+            if grokBotQuotaEnabled && GrokBotHelperManager.needsReauthorization {
+                grokBotReauthorizePrompt
+            }
         }
+    }
+
+    /// 授权助手有新版时直接在卡片上提示：换新版要重新授权一次，不能指望用户自己去设置里找。
+    /// 不重新授权也照常可用，旧版助手每次从年初全量读取，慢一些。
+    private var grokBotReauthorizePrompt: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "key.fill")
+                .font(.system(size: Theme.fontSize(9)))
+                .foregroundStyle(Theme.grokBot)
+            Text(grokBotAuthorizationResult.isEmpty
+                 ? L("授权助手已更新：重新授权一次，读取更快、不受条数上限")
+                 : grokBotAuthorizationResult)
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button(grokBotAuthorizing ? L("等待授权…") : L("重新授权")) {
+                authorizeGrokBotQuota()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: Theme.fontSize(9), weight: .semibold))
+            .foregroundStyle(Theme.grokBot)
+            .disabled(grokBotAuthorizing)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.grokBot.opacity(0.08)))
     }
 
     // MARK: - Grok 卡片
@@ -1270,11 +1319,14 @@ struct PanelView: View {
                         items.append(.init("chart.bar.fill", L("窗口"), String(format: "%.0f%%", ctx)))
                     }
                     if let ttft = r.ttft, ttft > 0 {
-                        items.append(.init("timer", L("首字"), String(format: "%.1fs", Double(ttft) / 1000)))
+                        items.append(.init("timer", L("平均 TTFT"), String(format: "%.1fs", Double(ttft) / 1000),
+                                           help: L("首字延迟：从发出请求到收到第一个 token 的时间")))
                     }
                     if let response = r.response, response > 0 {
-                        items.append(.init("speedometer", L("响应"), String(format: "%.1fs", Double(response) / 1000)))
+                        items.append(.init("speedometer", L("平均响应"), String(format: "%.1fs", Double(response) / 1000)))
                     }
+                    // TTFT 已经有 Grok 自己的统计，这里只补输出速度
+                    items += perfMetrics(r.perf, includeTTFT: false)
                     if (r.errors ?? 0) > 0 {
                         items.append(.init("exclamationmark.triangle", L("错误"), "\(r.errors ?? 0)"))
                     }
@@ -1286,7 +1338,7 @@ struct PanelView: View {
                 metricGrid([], hit: r.usage_available ? r.hit : 0,
                            extra: grokMetrics, tint: Theme.grok)
                 if r.usage_available && !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: $grokModelsOpen, tint: Theme.grok)
+                    tokenModelDisclosure(r.models, open: $grokModelsOpen, tint: Theme.grok, perf: r.perf)
                 } else if let model = g.model, !model.isEmpty {
                     modelBadge(model, tint: Theme.grok)
                 }
@@ -1603,10 +1655,11 @@ struct PanelView: View {
         default: sourceLabel = L("额度数据")
         }
         let updated = quota.updated.map { Fmt.reset($0) } ?? L("更新时间未知")
+        let lead = quota.stale ? L("缓存可能已过期") : sourceLabel
         return HStack(spacing: 5) {
             Image(systemName: quota.stale ? "exclamationmark.triangle.fill" : "clock")
                 .font(.system(size: Theme.fontSize(9)))
-            Text("\(quota.stale ? L("缓存可能已过期") : sourceLabel) · \(updated)")
+            Text("\(lead) · \(updated)")
                 .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
             Spacer()
         }
@@ -1749,10 +1802,10 @@ struct PanelView: View {
                     if r.sub_agents > 0 {
                         items.append(.init("point.3.connected.trianglepath.dotted", L("子agent"), "\(r.sub_agents)"))
                     }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: tint)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: tint, perf: r.perf)
                 } else if let model = q.model, !model.isEmpty {
                     modelBadge(model, tint: tint)
                 }
@@ -1777,10 +1830,10 @@ struct PanelView: View {
                         .init("bolt.fill", L("缓存读"), Fmt.human(r.cr)),
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.hermes)
                 if !r.models.isEmpty {
-                    tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.hermes)
+                    tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.hermes, perf: r.perf)
                 }
             } else {
                 emptyHint
@@ -1804,11 +1857,11 @@ struct PanelView: View {
                     ]
                     if r.reason > 0 { items.append(.init("brain", L("推理"), Fmt.human(r.reason))) }
                     if r.tasks > 0 { items.append(.init("checklist", L("任务"), "\(r.tasks)")) }
-                    return items
+                    return items + perfMetrics(r.perf)
                 }(), tint: Theme.openclaw)
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: Theme.openclaw,
-                                         reasonIncludedInOutput: true)
+                                         reasonIncludedInOutput: true, perf: r.perf)
                 }
             } else if r.tasks > 0 {
                 HStack(spacing: 16) {
@@ -1858,12 +1911,13 @@ struct PanelView: View {
                     ? [.init("circle.hexagongrid.fill", "Credits", Fmt.credits(r.credits))]
                     : []
                 metricGrid(showsCost ? [.init("dollarsign.circle", L("≈成本"), estimatedCostLabel(r))] : [],
-                    hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO), tint: tint)
+                    hit: r.hit, extra: creditMetrics + tokenUsageMetrics(r, inclusiveIO: inclusiveIO)
+                        + perfMetrics(r.perf), tint: tint)
                 if showsCost { unpricedModelsNote(r.models) }
                 if !r.models.isEmpty {
                     tokenModelDisclosure(r.models, open: modelsOpen, tint: tint,
                                          reasonIncludedInOutput: reasonIncludedInOutput,
-                                         inclusiveIO: inclusiveIO)
+                                         inclusiveIO: inclusiveIO, perf: r.perf)
                 }
             } else {
                 emptyHint
@@ -1900,6 +1954,19 @@ struct PanelView: View {
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// 平均输出速度、TTFT 中位数两格，只在有样本时出现。速度 = 输出 token 总数 ÷ 生成总时长，
+    /// 拿不到首字时间的请求速度含等待（端到端）；TTFT 有长尾，取中位数。
+    func perfMetrics(_ perf: PerfStat?, includeTTFT: Bool = true) -> [Metric] {
+        guard let perf, perf.n > 0 else { return [] }
+        var items: [Metric] = [.init("gauge.medium", L("平均输出速度"), Fmt.tps(perf.tps),
+                                     help: L("输出 token 总数 ÷ 生成总时长，来自 %@ 个请求；拿不到首字时间的请求按整个请求的耗时算", perf.n))]
+        if includeTTFT, let ttft = perf.ttft {
+            items.append(.init("timer", L("TTFT 中位数"), Fmt.seconds(ttft),
+                               help: L("首字延迟：从发出请求到收到第一个 token 的时间，%@ 个请求的中位数", perf.tn ?? perf.n)))
+        }
+        return items
     }
 
     func tokenUsageMetrics(_ r: TokenUsageRange, inclusiveIO: Bool = false) -> [Metric] {
@@ -2021,8 +2088,10 @@ struct PanelView: View {
     }
 
     // MARK: - 复用片段
-    struct Metric { var icon, label, value: String
-        init(_ i: String, _ l: String, _ v: String) { icon = i; label = l; value = v } }
+    struct Metric { var icon, label, value: String; var help: String?
+        init(_ i: String, _ l: String, _ v: String, help: String? = nil) {
+            icon = i; label = l; value = v; self.help = help
+        } }
 
     // 模型明细行(Claude / Gemini 共用)。
     struct ModelRow: Identifiable {
@@ -2037,6 +2106,7 @@ struct PanelView: View {
         var tokOut: Int = 0
         var tokCR: Int = 0
         var tokCW: Int = 0
+        var perf: PerfModelStat? = nil
         var id: String { name }
     }
 
@@ -2106,7 +2176,7 @@ struct PanelView: View {
                   alignment: .leading, spacing: 9) {
             ForEach(top.indices, id: \.self) { i in
                 MetricCell(icon: top[i].icon, label: top[i].label,
-                           value: top[i].value, tint: tint)
+                           value: top[i].value, tint: tint, help: top[i].help)
             }
             if hit > 0 {
                 RingMetricCell(value: hit, label: "Cache Hit", tint: tint)
@@ -2114,7 +2184,7 @@ struct PanelView: View {
             let offset = top.count + (hit > 0 ? 1 : 0)
             ForEach(extra.indices, id: \.self) { i in
                 MetricCell(icon: extra[i].icon, label: extra[i].label,
-                           value: extra[i].value, tint: tint)
+                           value: extra[i].value, tint: tint, help: extra[i].help)
                     .id(offset + i)
             }
         }
@@ -2146,7 +2216,8 @@ struct PanelView: View {
     func tokenModelDisclosure(_ models: [TokenModelStat], open: Binding<Bool>, tint: Color,
                               reasonIncludedInOutput: Bool = false,
                               inclusiveIO: Bool = false,
-                              periodLabel: String? = nil) -> some View {
+                              periodLabel: String? = nil,
+                              perf: PerfStat? = nil) -> some View {
         Button {
             open.wrappedValue.toggle()
         } label: {
@@ -2203,12 +2274,12 @@ struct PanelView: View {
                                     if total > 0 {
                                         Text(Fmt.human(total))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                     }
                                     if hit > 0 {
                                         Text(String(format: "%.0f%%", hit))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                             .padding(.horizontal, 4).padding(.vertical, 1)
                                             .background(Capsule().fill(Color.primary.opacity(0.06)))
                                     }
@@ -2234,7 +2305,8 @@ struct PanelView: View {
                                            tokCR: m.cr, tokCW: m.cw,
                                            tokReason: m.reason,
                                            pin: m.pin, pout: m.pout, pcr: m.pcr, hit: hit, tint: tint,
-                                           componentsAreSubtotals: inclusiveIO, priceRef: m.pref)
+                                           componentsAreSubtotals: inclusiveIO, priceRef: m.pref,
+                                           perf: perf?.model(named: m.name))
                         }
                     }
                 }
@@ -2299,12 +2371,12 @@ struct PanelView: View {
                                     if m.total > 0 {
                                         Text(Fmt.human(m.total))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                     }
                                     if m.hit > 0 {
                                         Text(String(format: "%.0f%%", m.hit))
                                             .font(.system(size: Theme.fontSize(9.5), design: .monospaced))
-                                            .foregroundStyle(Theme.tTertiary)
+                                            .foregroundStyle(Theme.tSecondary)
                                             .padding(.horizontal, 4).padding(.vertical, 1)
                                             .background(Capsule().fill(Color.primary.opacity(0.06)))
                                     }
@@ -2319,7 +2391,8 @@ struct PanelView: View {
                         .buttonStyle(.plain)
                         if isExpanded {
                             modelDetailRow(tokIn: m.tokIn, tokOut: m.tokOut, tokCR: m.tokCR, tokCW: m.tokCW,
-                                           pin: m.pin, pout: m.pout, pcr: m.pcr, hit: m.hit, tint: tint)
+                                           pin: m.pin, pout: m.pout, pcr: m.pcr, hit: m.hit, tint: tint,
+                                           perf: m.perf)
                         }
                     }
                 }
@@ -2333,9 +2406,12 @@ struct PanelView: View {
     @ViewBuilder
     func modelDetailRow(tokIn: Int, tokOut: Int, tokCR: Int, tokCW: Int, tokReason: Int = 0,
                          pin: Double, pout: Double, pcr: Double = 0, hit: Double = 0, tint: Color,
-                         componentsAreSubtotals: Bool = false, priceRef: String? = nil) -> some View {
-        let tagFont = Font.system(size: 9, weight: .medium, design: .monospaced)
-        let labelFont = Font.system(size: 8.5)
+                         componentsAreSubtotals: Bool = false, priceRef: String? = nil,
+                         perf: PerfModelStat? = nil) -> some View {
+        // 跟卡片上的指标一个规格：字号随面板字号设置，数值用主色，标签用次级色。
+        // 以前固定 8.5 / 9 号加三级灰，叠在半透明底色上看着发虚。
+        let tagFont = Font.system(size: Theme.fontSize(10), weight: .semibold, design: .monospaced)
+        let labelFont = Font.system(size: Theme.fontSize(9.5))
         let bg = tint.opacity(0.08)
         let border = tint.opacity(0.18)
         HStack(spacing: 0) {
@@ -2355,9 +2431,26 @@ struct PanelView: View {
                     detailTag("◉ \(Fmt.human(tokReason))", label: componentsAreSubtotals ? L("其中推理") : L("推理"),
                               tagFont: tagFont, labelFont: labelFont, bg: bg, border: border)
                 }
+                if let perf {
+                    HStack(spacing: 2) {
+                        Text(L("平均速度")).font(labelFont).foregroundStyle(Theme.tSecondary)
+                        Text(Fmt.tps(perf.tps)).font(tagFont).foregroundStyle(tint)
+                        if let ttft = perf.ttft {
+                            Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
+                            Text(L("TTFT 中位数")).font(labelFont).foregroundStyle(Theme.tSecondary)
+                            Text(Fmt.seconds(ttft)).font(tagFont).foregroundStyle(tint)
+                        }
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 2.5)
+                    .background(Capsule().fill(bg))
+                    .overlay(Capsule().strokeBorder(border, lineWidth: 0.5))
+                    .help(perf.ttft == nil
+                          ? L("平均输出速度来自 %@ 个请求", perf.n)
+                          : L("平均输出速度来自 %@ 个请求，TTFT 中位数来自其中 %@ 个", perf.n, perf.tn ?? perf.n))
+                }
                 if hit > 0 {
                     HStack(spacing: 2) {
-                        Text(L("命中")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                        Text(L("命中")).font(labelFont).foregroundStyle(Theme.tSecondary)
                         Text(String(format: "%.0f%%", hit)).font(tagFont).foregroundStyle(tint)
                     }
                     .padding(.horizontal, 6).padding(.vertical, 2.5)
@@ -2374,7 +2467,7 @@ struct PanelView: View {
                         // 比较两个模型会得出反直觉的结论（例如 Opus 5.5 与 Sonnet 5.5 同为 0.2）。
                         if pcr > 0 {
                             Text("·").font(tagFont).foregroundStyle(tint.opacity(0.6))
-                            Text(L("读")).font(labelFont).foregroundStyle(Theme.tTertiary)
+                            Text(L("读")).font(labelFont).foregroundStyle(Theme.tSecondary)
                             Text(String(format: "%.2g", pcr)).font(tagFont).foregroundStyle(tint)
                         }
                     }
@@ -2393,8 +2486,8 @@ struct PanelView: View {
     func detailTag(_ value: String, label: String, tagFont: Font, labelFont: Font,
                     bg: Color, border: Color) -> some View {
         HStack(spacing: 3) {
-            Text(label).font(labelFont).foregroundStyle(Theme.tTertiary)
-            Text(value).font(tagFont).foregroundStyle(Theme.tSecondary)
+            Text(label).font(labelFont).foregroundStyle(Theme.tSecondary)
+            Text(value).font(tagFont).foregroundStyle(Theme.tPrimary)
         }
         .padding(.horizontal, 6).padding(.vertical, 2.5)
         .background(Capsule().fill(bg))
@@ -2648,7 +2741,7 @@ struct PanelView: View {
                     .foregroundStyle(Theme.claude)
             }
         case .failed:
-            Button { updater.checkForUpdate() } label: {
+            Button { updater.checkForUpdate(userInitiated: true) } label: {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: Theme.fontSize(11), weight: .medium))
                     .foregroundStyle(.red)
@@ -2909,20 +3002,16 @@ struct PanelView: View {
                     Text(L("当前版本 %@", Updater.releaseTag))
                         .font(.system(size: Theme.fontSize(10), weight: .medium))
                         .foregroundStyle(Theme.tPrimary)
-                    Text(Updater.isLocalBuild ? L("本地验证版不检查线上更新") : L("启动时自动检查，也可在这里手动检查"))
+                    Text(Updater.isLocalBuild ? L("本地验证版不自动检查，可手动检查") : L("启动时自动检查，也可在这里手动检查"))
                         .font(.system(size: Theme.fontSize(8.5)))
                         .foregroundStyle(Theme.tTertiary)
                 }
                 Spacer()
-                if Updater.isLocalBuild {
-                    Text(L("本地验证版"))
-                        .font(.system(size: Theme.fontSize(9), weight: .medium))
-                        .foregroundStyle(Theme.tTertiary)
-                } else {
+                Group {
                     switch updater.state {
                     case .idle:
                         settingsActionButton(icon: "arrow.triangle.2.circlepath", title: L("检查更新")) {
-                            updater.checkForUpdate()
+                            updater.checkForUpdate(userInitiated: true)
                         }
                     case .checking:
                         HStack(spacing: 5) {
@@ -2953,7 +3042,7 @@ struct PanelView: View {
                     case .failed(let message):
                         VStack(alignment: .trailing, spacing: 3) {
                             settingsActionButton(icon: "arrow.clockwise", title: L("重试")) {
-                                updater.checkForUpdate()
+                                updater.checkForUpdate(userInitiated: true)
                             }
                             Text(message)
                                 .font(.system(size: Theme.fontSize(8)))
@@ -3354,7 +3443,9 @@ struct PanelView: View {
                 HStack(spacing: 8) {
                     settingsActionButton(
                         icon: "key.fill",
-                        title: grokBotAuthorizing ? L("等待授权…") : L("授权 Grok Bot")
+                        title: grokBotAuthorizing ? L("等待授权…")
+                            : GrokBotHelperManager.needsReauthorization ? L("重新授权 Grok Bot")
+                            : L("授权 Grok Bot")
                     ) {
                         authorizeGrokBotQuota()
                     }
@@ -3839,8 +3930,9 @@ struct PanelView: View {
                         .font(.system(size: Theme.fontSize(15), weight: .bold, design: .rounded))
                         .foregroundStyle(Theme.tPrimary)
                     Text("\(Updater.releaseTag) · \(Self.buildVersion)")
-                        .font(.system(size: Theme.fontSize(8), design: .monospaced))
-                        .foregroundStyle(Theme.tTertiary.opacity(0.6))
+                        .font(.system(size: Theme.fontSize(9), design: .monospaced))
+                        .foregroundStyle(Theme.tTertiary)
+                    headerUpdateControl
                 }
                 Text(L("显示、同步和诊断"))
                     .font(.system(size: Theme.fontSize(9.5)))
@@ -3857,32 +3949,6 @@ struct PanelView: View {
             }
             .buttonStyle(.plain)
             .tip("GitHub")
-            if Updater.isLocalBuild {
-                Text(L("本地验证版"))
-                    .font(.system(size: Theme.fontSize(9)))
-                    .foregroundStyle(Theme.tTertiary)
-                    .tip(L("此版本包含尚未发布的改动，不检查线上更新"))
-            } else if case .idle = updater.state {
-                Button { updater.checkForUpdate() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: Theme.fontSize(10), weight: .semibold))
-                        .foregroundStyle(Theme.tTertiary)
-                        .frame(width: 24, height: 24)
-                        .background(Circle().fill(Color.primary.opacity(0.06)))
-                }
-                .buttonStyle(.plain)
-                .tip(L("检查更新"))
-            } else if case .checking = updater.state {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 24, height: 24)
-            } else if case .upToDate = updater.state {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: Theme.fontSize(12)))
-                    .foregroundStyle(.green)
-                    .frame(width: 24, height: 24)
-            }
-            updatePill
             Button {
                 withAnimation(.easeInOut(duration: 0.25)) { mode = .cards }
             } label: {
@@ -3896,6 +3962,70 @@ struct PanelView: View {
             .tip(L("关闭设置"))
         }
         .padding(.bottom, 2)
+    }
+
+    /// 版本号旁边的「检查更新」：检查、升级、下载进度都在这一个按钮上，不用翻到页面底部。
+    /// 本地验证版不会自动检查，但用户手动点了照样查、照样能升级。
+    @ViewBuilder
+    private var headerUpdateControl: some View {
+        let font = Font.system(size: Theme.fontSize(9), weight: .semibold)
+        switch updater.state {
+        case .idle:
+            headerUpdateButton(L("检查更新"), icon: "arrow.triangle.2.circlepath", tint: Theme.tSecondary) {
+                updater.checkForUpdate(userInitiated: true)
+            }
+            .tip(Updater.isLocalBuild ? L("本地验证版不自动检查，可手动检查") : L("启动时自动检查，也可在这里手动检查"))
+        case .checking:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L("正在检查"))
+            }
+            .font(font)
+            .foregroundStyle(Theme.tTertiary)
+        case .upToDate:
+            Label(L("已是最新版本"), systemImage: "checkmark.circle.fill")
+                .font(font)
+                .foregroundStyle(.green)
+        case .available(let tag, _, _):
+            headerUpdateButton(L("升级到 %@", tag), icon: "arrow.down.circle.fill", tint: .cyan) {
+                updater.performUpdate()
+            }
+        case .downloading(let progress):
+            Text(L("下载中 %@%%", Int(progress * 100)))
+                .font(.system(size: Theme.fontSize(9), weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.tSecondary)
+        case .installing:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L("正在安装"))
+            }
+            .font(font)
+            .foregroundStyle(Theme.tSecondary)
+        case .failed(let message):
+            headerUpdateButton(L("重试"), icon: "exclamationmark.triangle.fill", tint: .orange) {
+                updater.checkForUpdate(userInitiated: true)
+            }
+            .tip(message)
+        }
+    }
+
+    private func headerUpdateButton(_ title: String, icon: String, tint: Color,
+                                    action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: Theme.fontSize(8), weight: .bold))
+                Text(title)
+                    .font(.system(size: Theme.fontSize(9), weight: .semibold))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Capsule().fill(Color.primary.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     func settingsSection<C: View>(_ icon: String, _ title: String, @ViewBuilder content: () -> C) -> some View {

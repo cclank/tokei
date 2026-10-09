@@ -1,0 +1,181 @@
+/* Tokei Windows 版：深色托盘面板。字号、颜色与 Mac 版一致，字体换成 Windows 自带的。 */
+:root {
+  --sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", -apple-system, system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: #1f2128;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--sans);
+  color: rgba(255, 255, 255, 0.97);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+.panel {
+  height: 100%;
+  background: linear-gradient(180deg, #333640, #1f2128) !important;
+}
+
+.panel-scroll {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.panel-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.panel-content {
+  min-height: 100%;
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+/* 两列等高网格（EqualHeightGrid）：同一行的卡片一样高。 */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px;
+  align-items: stretch;
+}
+
+.grid.one {
+  grid-template-columns: 1fr;
+}
+
+.card {
+  padding: 13px;
+  min-width: 0;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+  transition:
+    transform 0.18s ease-out,
+    box-shadow 0.18s ease-out;
+}
+
+.card:hover {
+  transform: scale(1.012);
+  box-shadow: 0 9px 16px rgba(0, 0, 0, 0.42);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+button.plain {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.circle-button {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+
+.circle-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.footer-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.footer-button:hover {
+  color: rgba(255, 255, 255, 0.97);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+}
+
+.segment {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 5px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.segment.on {
+  color: rgba(255, 255, 255, 0.97);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2.5px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(255, 255, 255, 0.8);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+}

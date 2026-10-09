@@ -244,6 +244,8 @@ struct MetricCell: View {
     var label: String
     var value: String
     var tint: Color
+    /// 有说明时标签后面带个提示图标，悬停整格显示说明。
+    var help: String? = nil
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
@@ -252,15 +254,23 @@ struct MetricCell: View {
                 .frame(width: 21, height: 21)
                 .background(Circle().fill(tint.opacity(0.10)))
             VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.system(size: Theme.fontSize(9.5)))
-                    .foregroundStyle(Theme.tTertiary)
+                HStack(spacing: 3) {
+                    Text(label)
+                        .font(.system(size: Theme.fontSize(9.5)))
+                    if help != nil {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: Theme.fontSize(8)))
+                    }
+                }
+                .foregroundStyle(Theme.tTertiary)
                 Text(value)
                     .font(.system(size: Theme.fontSize(12.5), weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.tPrimary)
             }
             Spacer(minLength: 0)
         }
+        .contentShape(Rectangle())
+        .help(help ?? "")
     }
 }
 

@@ -372,7 +372,7 @@ final class SyncManager {
             let usage: Usage
             do {
                 let cleanData = try JSONSerialization.data(withJSONObject: cleaned)
-                usage = try JSONDecoder().decode(Usage.self, from: cleanData)
+                usage = try Usage.decode(from: cleanData)
             } catch {
                 issues.append(PeerLoadIssue(file: file, stage: .usage, detail: error.localizedDescription))
                 continue
@@ -424,11 +424,16 @@ final class SyncManager {
 
     // MARK: - Merge
 
-    static func merge(local: Usage, peers: [PeerDevice]) -> Usage {
+    static func merge(local: Usage, peers: [PeerDevice], now: Date = Date()) -> Usage {
         var u = local
         for peer in peers {
-            let pairs = rangePairs(for: peer)
+            let pairs = rangePairs(for: peer, now: now)
             mergeRanges(&u.claude.ranges, peer.usage.claude.ranges, pairs)
+            // Claude 额度只在登录了 Claude 的那台机器上读得到，token 合并之后再决定采用谁的。
+            let peerClaude = refreshingClaudeQuotaStaleness(peer.usage.claude, now: now)
+            if shouldReplaceClaudeQuota(current: u.claude, candidate: peerClaude) {
+                adoptClaudeQuota(&u.claude, from: peerClaude)
+            }
             mergeRanges(&u.codex.ranges, peer.usage.codex.ranges, pairs)
             if let localReserve = u.codex.reserveRanges,
                let peerReserve = peer.usage.codex.reserveRanges {
@@ -496,6 +501,58 @@ final class SyncManager {
         return candidateUpdated > currentUpdated
     }
 
+    /// Claude 额度 10 个字段是一组，只能整组取自同一个来源。
+    private static func claudeQuotaHasData(_ claude: ClaudeStat) -> Bool {
+        claude.q5 != nil || claude.q7 != nil || claude.qf != nil
+    }
+
+    private static func claudeQuotaIsStale(_ claude: ClaudeStat) -> Bool {
+        claude.q5_stale == true || claude.q7_stale == true || claude.qf_stale == true
+    }
+
+    private static func shouldReplaceClaudeQuota(
+        current: ClaudeStat,
+        candidate: ClaudeStat
+    ) -> Bool {
+        guard claudeQuotaHasData(candidate) else { return false }
+        guard claudeQuotaHasData(current) else { return true }
+
+        let currentUpdated = current.q_updated ?? 0
+        let candidateUpdated = candidate.q_updated ?? 0
+        if candidateUpdated == currentUpdated {
+            return claudeQuotaIsStale(current) && !claudeQuotaIsStale(candidate)
+        }
+        return candidateUpdated > currentUpdated
+    }
+
+    private static func adoptClaudeQuota(_ dst: inout ClaudeStat, from src: ClaudeStat) {
+        dst.q5 = src.q5; dst.q5_reset = src.q5_reset; dst.q5_stale = src.q5_stale
+        dst.q7 = src.q7; dst.q7_reset = src.q7_reset; dst.q7_stale = src.q7_stale
+        dst.qf = src.qf; dst.qf_reset = src.qf_reset; dst.qf_stale = src.qf_stale
+        dst.q_updated = src.q_updated
+    }
+
+    /// 与 usage.30s.py 的 `_CLAUDE_QUOTA_STALE_TTL` 保持一致。
+    static let claudeQuotaStaleTTL: TimeInterval = 1800
+
+    /// 同 usage.30s.py 的 `_claude_quota_with_freshness`：peer 快照里的过期标记是写入时算的，
+    /// 快照可能是几小时前写的，所以按「现在」重算。
+    /// 有值的窗口，数据超过 30 分钟、时间戳缺失或超前（时钟漂移）、或重置时刻已过，都算过期。
+    static func refreshingClaudeQuotaStaleness(_ claude: ClaudeStat, now: Date) -> ClaudeStat {
+        var out = claude
+        let nowSeconds = Int(now.timeIntervalSince1970)
+        let updated = claude.q_updated ?? 0
+        let age = nowSeconds - updated
+        let sourceStale = updated <= 0 || Double(age) > claudeQuotaStaleTTL || age < -300
+        func stale(_ value: Double?, _ reset: Int?) -> Bool {
+            value != nil && (sourceStale || (reset.map { $0 <= nowSeconds } ?? false))
+        }
+        out.q5_stale = stale(claude.q5, claude.q5_reset)
+        out.q7_stale = stale(claude.q7, claude.q7_reset)
+        out.qf_stale = stale(claude.qf, claude.qf_reset)
+        return out
+    }
+
     private static func rangePairs(for peer: PeerDevice, now: Date = Date()) -> [(src: RangeKey, dst: RangeKey)] {
         let local = currentRangeBounds(now: now)
         var pairs: [(src: RangeKey, dst: RangeKey)] = []
@@ -555,6 +612,7 @@ final class SyncManager {
             d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeClaudeModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -566,6 +624,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cached, input: d.in)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -577,6 +636,7 @@ final class SyncManager {
             d.thoughts += s.thoughts; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cached, input: d.in)
             mergeGeminiModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -611,6 +671,7 @@ final class SyncManager {
             let ctxUsed = d.ctx_used ?? 0
             let ctxWindow = d.ctx_window ?? 0
             d.ctx = ctxWindow > 0 ? Double(ctxUsed) / Double(ctxWindow) * 100 : 0
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -630,6 +691,7 @@ final class SyncManager {
             d.hit = inputTotal > 0 ? Double(d.cr) / Double(inputTotal) * 100 : 0
             mergeTokenModels(&d.models, s.models)
             d.ctx = weightedAverage(d.ctx, originalSessions, s.ctx, s.sessions)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -654,6 +716,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -666,6 +729,7 @@ final class SyncManager {
             d.reason += s.reason; d.cost += s.cost; d.sessions += s.sessions
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }
@@ -678,6 +742,7 @@ final class SyncManager {
             d.cost_cny = (d.cost_cny ?? 0) + (s.cost_cny ?? 0)
             d.hit = hitRate(cached: d.cr, input: d.in, cacheWrite: d.cw)
             mergeTokenModels(&d.models, s.models)
+            d.perf = PerfStat.merged(d.perf, s.perf)
             dst.set(pair.dst, d)
         }
     }

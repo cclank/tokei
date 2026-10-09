@@ -2,8 +2,14 @@ import Darwin
 import Foundation
 
 enum GrokBotHelperManager {
-    static let requiredProtocolVersion = 1
+    /// 安装包里辅助程序的协议版本。2：--grok-bot-data-json 支持 --since 增量拉取。
+    static let requiredProtocolVersion = 2
+    /// 已安装的辅助程序不低于这个版本就照常用来采集。换新版会让钥匙串重新弹授权框，
+    /// 不能因为 App 升级就把用户授权过的旧版停掉——只在用户主动（重新）授权时换。
+    static let minimumProtocolVersion = 1
     private static let helperName = "TokeiGrokBotHelper"
+    /// 解析时顺手记下已安装辅助程序的版本，界面据此提示重新授权，不在主线程起进程。
+    private static var installedVersion: Int?
     private static let resolutionLock = NSLock()
     private static var cachedHelperURL: URL?
     private static var resolvedOnce = false
@@ -18,7 +24,8 @@ enum GrokBotHelperManager {
         } else {
             resolvedOnce = true
             let installed = installedHelperURL
-            if isUsableHelper(installed, requireCurrentUserOwner: true) {
+            installedVersion = usableVersion(installed, requireCurrentUserOwner: true)
+            if (installedVersion ?? 0) >= minimumProtocolVersion {
                 cachedHelperURL = installed
             } else {
                 cachedHelperURL = bundledHelperURLs.first {
@@ -32,6 +39,13 @@ enum GrokBotHelperManager {
             repairAuthorizationMarkerIfNeeded(using: resolved)
         }
         return resolved
+    }
+
+    /// 已安装的是能用、但不是最新的辅助程序：提示用户重新授权一次换上新版。
+    static var needsReauthorization: Bool {
+        resolutionLock.lock()
+        defer { resolutionLock.unlock() }
+        return installedVersion.map { $0 < requiredProtocolVersion } ?? false
     }
 
     static func installIfNeeded() -> URL? {
@@ -74,6 +88,9 @@ enum GrokBotHelperManager {
         }
         guard isUsableHelper(destination, requireCurrentUserOwner: true) else { return nil }
         cache(destination)
+        resolutionLock.lock()
+        installedVersion = requiredProtocolVersion
+        resolutionLock.unlock()
         repairAuthorizationMarkerIfNeeded(using: destination)
         return destination
     }
@@ -155,13 +172,18 @@ enum GrokBotHelperManager {
         _ url: URL,
         requireCurrentUserOwner: Bool
     ) -> Bool {
+        usableVersion(url, requireCurrentUserOwner: requireCurrentUserOwner) == requiredProtocolVersion
+    }
+
+    /// 文件本身可信（普通文件、属主对、别人写不了、可执行）时它报告的协议版本。
+    private static func usableVersion(_ url: URL, requireCurrentUserOwner: Bool) -> Int? {
         var info = stat()
         guard lstat(url.path, &info) == 0,
               (info.st_mode & S_IFMT) == S_IFREG,
               (info.st_mode & (S_IWGRP | S_IWOTH)) == 0,
               (!requireCurrentUserOwner || info.st_uid == geteuid()),
-              access(url.path, X_OK) == 0 else { return false }
-        return protocolVersion(at: url) == requiredProtocolVersion
+              access(url.path, X_OK) == 0 else { return nil }
+        return protocolVersion(at: url)
     }
 
     private static func protocolVersion(at url: URL) -> Int? {

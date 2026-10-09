@@ -282,6 +282,48 @@ class PricingCacheTests(unittest.TestCase):
             self.assertEqual((rows[0]["pin"], rows[0]["pout"]), (0.3, 1.2))
             self.assertEqual(rows[0]["pref"], "MiniMax M3", "借来的单价要标出参照")
 
+    def test_new_claude_generation_does_not_borrow_previous_generation_price(self):
+        """OpenRouter 还没收录时，Haiku 5.5 用内置官方价，不会按 Haiku 4.5 计成 10 倍。"""
+        with mock.patch.object(USAGE, "_PRICING_DB", {}), \
+             mock.patch.object(USAGE, "_CATALOG_INDEX", None):
+            for model in ("claude-haiku-5-5", "claude-haiku-5-5-20261007"):
+                with self.subTest(model=model):
+                    self.assertEqual(USAGE._resolve_id(model), "anthropic/claude-haiku-5.5")
+            price = USAGE.price_for("claude-haiku-5-5")
+            self.assertEqual(
+                (price["in"], price["out"], price["cache_read"], price["write5m"], price["write1h"]),
+                (0.1, 0.5, 0.01, 0.125, 0.2),
+            )
+            self.assertEqual(USAGE._resolve_id("claude-opus-5-5"), "anthropic/claude-opus-5.5")
+            self.assertEqual(USAGE.price_for("claude-opus-5-5")["in"], 4.0)
+
+    def test_haiku_55_long_prompts_bill_the_whole_request_at_the_higher_tier(self):
+        """提示（输入 + 缓存读 + 缓存写）超过 100K 时，这次请求整体按 5 倍计。"""
+        at_limit = {"model": "claude-haiku-5-5", "in": 0, "out": 1_000_000, "cr": 100_000, "cw": 0}
+        self.assertAlmostEqual(USAGE._claude_event_cost(at_limit), 0.5 + 0.001)
+        over = dict(at_limit, cr=100_001)
+        self.assertAlmostEqual(USAGE._claude_event_cost(over), (0.5 + 100_001 * 0.01 / 1e6) * 5)
+        opus = dict(at_limit, model="claude-opus-5-5", cr=500_000)
+        self.assertAlmostEqual(USAGE._claude_event_cost(opus), 20.0 + 0.1)
+
+    def test_long_prompt_rule_change_reprices_cached_haiku_events(self):
+        """分档规则算进价格指纹：规则一变，缓存里的 Haiku 5.5 成本跟着重算。"""
+        previous = json.loads(json.dumps(USAGE._PRICING_EFFECTIVE))
+        previous["anthropic/claude-haiku-5.5"].pop("long_prompt")
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_cache = Path(tmp) / "scan-cache.json"
+            scan_cache.write_text(json.dumps({
+                "v": USAGE._SCAN_CACHE_VERSION,
+                "_pricing_fingerprint": "old",
+                "_pricing_effective": previous,
+                "_pricing_aliases": USAGE._OV_ALIASES,
+            }), encoding="utf-8")
+            with mock.patch.object(USAGE, "_SCAN_CACHE_FILE", str(scan_cache)):
+                loaded = USAGE._load_scan_cache()
+
+        self.assertIn("anthropic/claude-haiku-5.5", loaded["_pricing_changed_models"])
+        self.assertNotIn("anthropic/claude-opus-5.5", loaded["_pricing_changed_models"])
+
     def test_current_official_and_snapshot_prices_resolve_exactly(self):
         self.assertEqual(USAGE._resolve_id("gpt-5.6"), "openai/gpt-5.6-sol")
         self.assertEqual(USAGE._raw_price("gpt-5.6"), {

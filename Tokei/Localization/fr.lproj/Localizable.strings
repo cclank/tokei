@@ -136,7 +136,10 @@
 "加载中…" = "Chargement…";
 "加载中…(%@)" = "Chargement en cours… (%@)";
 "加载失败" = "Échec du chargement";
-"北京时间 UTC+8" = "Heure de Pékin (UTC+8)";
+"本地 · %@" = "Local · %@";
+"%@ · %@后" = "%@ · dans %@";
+"最近一张 %@ 后到期" = "La prochaine expire dans %@";
+"已到期" = "Expiré";
 "区域" = "Région";
 "千问办公" = "QwenWork";
 "千问办公额度查询" = "Consultation du quota QwenWork";
@@ -185,6 +188,7 @@
 "团队账号个人可用积分" = "Crédits personnels du compte d'équipe";
 "圆点" = "Points";
 "在 Finder 中显示" = "Afficher dans le Finder";
+"在资源管理器中显示" = "Afficher dans l’Explorateur de fichiers";
 "在 Ghostty 打开" = "Ouvrir dans Ghostty";
 "在 iTerm 打开" = "Ouvrir dans iTerm";
 "在终端打开" = "Ouvrir dans Terminal";
@@ -261,6 +265,9 @@
 "按模型 · %@" = "Par modèle · %@";
 "按量预算" = "Budget à l'usage";
 "授权 Grok Bot" = "Autoriser Grok Bot";
+"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Assistant mis à jour : réautorisez une fois pour une lecture plus rapide et sans limite";
+"重新授权" = "Réautoriser";
+"重新授权 Grok Bot" = "Réautoriser Grok Bot";
 "授权 Zed" = "Autoriser Zed";
 "授权助手不可用，请重新安装 Tokei" = "Assistant d'autorisation indisponible ; veuillez réinstaller Tokei";
 "授权成功，可在 Grok Bot 卡片查看" = "Semaine restante";
@@ -298,7 +305,6 @@
 "更新时间未知" = "Heure de mise à jour inconnue";
 "更早" = "Plus tôt";
 "最大区间下降" = "Plus grande baisse sur la plage";
-"最近 %@ · 北京时间" = "Dernier %@ · Heure de Pékin";
 "最近一次 · %@" = "Dernier · %@";
 "最近额度变化" = "Changements récents de quota";
 "月" = "Mois";
@@ -317,8 +323,7 @@
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Activité locale · tokens, modèles et coûts officiels après autorisation";
 "本地缓存" = "Cache local";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Journal local · %@ messages · %@ réponses";
-"本地验证版" = "Version de développement local";
-"本地验证版不检查线上更新" = "Les versions de dév local ne recherchent pas de mises à jour";
+"本地验证版不自动检查，可手动检查" = "Les versions de dév local ne vérifient pas automatiquement ; vérification manuelle possible";
 "本年" = "Cette année";
 "本月" = "Ce mois";
 "本机" = "Ce Mac";
@@ -345,7 +350,6 @@
 "正在开始记录额度轨迹" = "Début de l'enregistrement de l'historique des quotas";
 "正在检查" = "Vérification en cours";
 "正在读取周额度…" = "Lecture du quota hebdomadaire…";
-"此版本包含尚未发布的改动，不检查线上更新" = "Cette version contient des modifications non publiées ; les mises à jour en ligne ne sont pas vérifiées";
 "每天用了多少额度" = "Quota utilisé par jour";
 "每百万 token 的输入 / 输出单价，读 = 缓存读" = "Prix entrée / sortie par million de tokens ; cache = lecture du cache";
 "沉睡" = "En veille";
@@ -393,6 +397,7 @@
 "缓存写" = "Écriture cache";
 "缓存写 %@" = "Écriture cache %@";
 "缓存命中" = "Succès de cache";
+"缓存可能已过期" = "Le cache est peut-être obsolète";
 "缓存数据 · 后台更新中" = "Données en cache · mise à jour en arrière-plan";
 "缓存数据 · 等待刷新" = "Données en cache · en attente de rafraîchissement";
 "缓存读" = "Lecture cache";
@@ -480,7 +485,16 @@
 "额度比例未知" = "Part de quota inconnue";
 "额度窗口" = "Fenêtre de quota";
 "额度轨迹" = "Historique des quotas";
-"首字" = "Première lettre";
+"首字延迟：从发出请求到收到第一个 token 的时间" = "Délai du premier token : de l'envoi de la requête à la réception du premier token";
+"平均输出速度" = "Vitesse de sortie moy.";
+"平均速度" = "Vitesse moy.";
+"平均 TTFT" = "TTFT moy.";
+"TTFT 中位数" = "TTFT médian";
+"平均响应" = "Réponse moy.";
+"输出 token 总数 ÷ 生成总时长，来自 %@ 个请求；拿不到首字时间的请求按整个请求的耗时算" = "Total des tokens de sortie ÷ durée totale de génération sur %@ requêtes ; les requêtes sans heure du premier token comptent leur durée complète";
+"首字延迟：从发出请求到收到第一个 token 的时间，%@ 个请求的中位数" = "Délai du premier token : de l'envoi de la requête à la réception du premier token, médiane sur %@ requêtes";
+"平均输出速度来自 %@ 个请求" = "Vitesse de sortie moyenne sur %@ requêtes";
+"平均输出速度来自 %@ 个请求，TTFT 中位数来自其中 %@ 个" = "Vitesse de sortie moyenne sur %@ requêtes ; TTFT médian sur %@ d'entre elles";
 "默认关闭。开启后仅在 Claude Desktop 缓存不可用时，使用 Claude Code CLI 已有登录态向 Anthropic 查询 5h、周及模型额度，并缓存 5 分钟。登录 Token 只在内存中使用，不写入 Tokei 文件。" = "Désactivé par défaut. Si activé, seulement si le cache Claude Desktop est indisponible, Tokei utilise la session Claude Code CLI pour interroger Anthropic pour 5h, hebdo et modèles (en cache 5 min). Les identifiants restent en mémoire.";
 "默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。" = "Désactivé par défaut. Si activé, Tokei se connecte uniquement au point d'accès local 127.0.0.1 de l'app QwenWork. Tokei ne stocke aucun identifiant.";
 "默认只读 ~/.grok 本地日志，不访问网络" = "Par défaut, lit uniquement les journaux locaux ~/.grok, aucun accès réseau";

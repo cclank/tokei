@@ -245,24 +245,30 @@ struct QuotaHistoryProjection {
                 previous[window] = (remaining, point.timestamp)
             }
         }
-        return days.flatMap { window, byDay in
+        var consumptions: [QuotaDailyConsumption] = []
+        for (window, byDay) in days {
             let oldest = byDay.keys.min()
-            return byDay.map { start, day in
+            for (start, day) in byDay {
                 let missingHistory = start == oldest
                     && TimeInterval(day.first) - start.timeIntervalSince1970 > edgeTolerance
-                return QuotaDailyConsumption(
-                    dayStart: start,
-                    window: window,
-                    consumed: day.consumed,
-                    refills: day.refills,
-                    isComplete: !day.uncertain && !missingHistory
+                consumptions.append(
+                    QuotaDailyConsumption(
+                        dayStart: start,
+                        window: window,
+                        consumed: day.consumed,
+                        refills: day.refills,
+                        isComplete: !day.uncertain && !missingHistory
+                    )
                 )
             }
-        }.sorted {
-            $0.dayStart == $1.dayStart
-                ? (tool.windowNames.firstIndex(of: $0.window) ?? 0)
-                    < (tool.windowNames.firstIndex(of: $1.window) ?? 0)
-                : $0.dayStart > $1.dayStart
+        }
+        return consumptions.sorted { lhs, rhs in
+            if lhs.dayStart != rhs.dayStart {
+                return lhs.dayStart > rhs.dayStart
+            }
+            let lhsIndex = tool.windowNames.firstIndex(of: lhs.window) ?? 0
+            let rhsIndex = tool.windowNames.firstIndex(of: rhs.window) ?? 0
+            return lhsIndex < rhsIndex
         }
     }
 

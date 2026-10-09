@@ -77,11 +77,16 @@ enum ClaudeCLIQuotaBridge {
         requester: (String) -> RequestResult
     ) -> [String: Any]? {
         var state = loadState(from: cacheURL)
-        let fetchedAge = nowEpoch - state.fetchedAt
-        if let snapshot = state.snapshot,
-           -300...refreshInterval ~= fetchedAge,
-           !resetReached(snapshot, nowEpoch: nowEpoch) {
-            return dictionary(from: snapshot, nowEpoch: nowEpoch)
+        if let snapshot = state.snapshot {
+            if let exhaustedUntil = exhaustedResetAt(snapshot, nowEpoch: nowEpoch),
+               nowEpoch < exhaustedUntil {
+                return dictionary(from: snapshot, nowEpoch: nowEpoch)
+            }
+            let fetchedAge = nowEpoch - state.fetchedAt
+            if -300...refreshInterval ~= fetchedAge,
+               !resetReached(snapshot, nowEpoch: nowEpoch) {
+                return dictionary(from: snapshot, nowEpoch: nowEpoch)
+            }
         }
 
         if let blockedUntil = state.blockedUntil, blockedUntil > nowEpoch {
@@ -343,6 +348,20 @@ enum ClaudeCLIQuotaBridge {
         if let date = formatter.date(from: raw) { return Int(date.timeIntervalSince1970) }
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: raw).map { Int($0.timeIntervalSince1970) }
+    }
+
+    private static func exhaustedResetAt(_ snapshot: Snapshot, nowEpoch: Int) -> Int? {
+        var resets: [Int] = []
+        if let q5 = snapshot.q5, q5 >= 100.0, let r5 = snapshot.q5Reset, r5 > nowEpoch {
+            resets.append(r5)
+        }
+        if let q7 = snapshot.q7, q7 >= 100.0, let r7 = snapshot.q7Reset, r7 > nowEpoch {
+            resets.append(r7)
+        }
+        if let qf = snapshot.qf, qf >= 100.0, let rf = snapshot.qfReset, rf > nowEpoch {
+            resets.append(rf)
+        }
+        return resets.min()
     }
 
     private static func resetReached(_ snapshot: Snapshot, nowEpoch: Int) -> Bool {

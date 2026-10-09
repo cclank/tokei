@@ -14,6 +14,7 @@ struct ClaudeCLIQuotaBridgeCheck {
 
         try testSuccessAndCache(root: root)
         try testResetForcesRefresh(root: root)
+        try testExhaustedQuotaSleepsUntilReset(root: root)
         try testFailureKeepsSnapshotAndBacksOff(root: root)
         try testRateLimitHonorsRetryAfter(root: root)
         try testExpiredCredentialIsRejected(root: root)
@@ -99,6 +100,50 @@ struct ClaudeCLIQuotaBridgeCheck {
         )
         try expect(number(refreshed?["q5"]) == 2, "a reached reset must bypass the TTL")
         try expect(requests == 2, "reset should trigger one immediate refresh")
+    }
+
+    private static func testExhaustedQuotaSleepsUntilReset(root: URL) throws {
+        let cache = root.appendingPathComponent("exhausted.json")
+        let now = 1_800_150_000
+        let credential = validCredential(now: now)
+        var requests = 0
+        let exhaustedPayload = payload(now: now, q5: 100, q7: 50, qf: nil, resetOffset: 3600)
+        _ = ClaudeCLIQuotaBridge.fetchQuota(
+            nowEpoch: now,
+            cacheURL: cache,
+            credentialLoader: { credential },
+            requester: { _ in
+                requests += 1
+                return .success(exhaustedPayload)
+            }
+        )
+        try expect(requests == 1, "initial fetch should make request")
+
+        let sleeping = ClaudeCLIQuotaBridge.fetchQuota(
+            nowEpoch: now + 600,
+            cacheURL: cache,
+            credentialLoader: { credential },
+            requester: { _ in
+                requests += 1
+                return .failure
+            }
+        )
+        try expect(number(sleeping?["q5"]) == 100, "exhausted cache should be reused")
+        try expect(requests == 1, "exhausted quota must sleep until reset and avoid network requests")
+
+        let freshPayload = payload(now: now + 3601, q5: 10, q7: 50, qf: nil, resetOffset: 3600)
+        let renewedCredential = validCredential(now: now + 3601)
+        let resetRefreshed = ClaudeCLIQuotaBridge.fetchQuota(
+            nowEpoch: now + 3601,
+            cacheURL: cache,
+            credentialLoader: { renewedCredential },
+            requester: { _ in
+                requests += 1
+                return .success(freshPayload)
+            }
+        )
+        try expect(number(resetRefreshed?["q5"]) == 10, "reset should trigger fresh request")
+        try expect(requests == 2, "must query once reset is reached")
     }
 
     private static func testFailureKeepsSnapshotAndBacksOff(root: URL) throws {

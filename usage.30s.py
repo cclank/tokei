@@ -2313,7 +2313,49 @@ def _codex_limits_have_active_window(limits, now_epoch=None):
     return False
 
 
-def _cached_codex_live_limits(max_age, allow_active_window=False, account_key=None):
+def _codex_limits_exhausted_reset_at(limits, now_epoch=None):
+    """额度耗尽且有未来的重置时刻时返回最早重置时间戳；未耗尽返回 None。
+
+    当 5h 窗口或周配额已用满 (used_percent >= 100) 时，在重置之前官方接口
+    并不会提前释放额度，期间每 5 分钟重复请求既毫无意义又容易招致 429。
+    有正额度 Credits 垫底时不视为耗尽。
+    """
+    if not isinstance(limits, dict):
+        return None
+    credits = limits.get("credits")
+    if isinstance(credits, dict) and credits.get("has_credits"):
+        try:
+            if float(credits.get("balance") or 0) > 0:
+                return None
+        except (TypeError, ValueError):
+            pass
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
+    exhausted_resets = []
+    for slot_name in ("primary", "secondary"):
+        slot = limits.get(slot_name) or {}
+        used = slot.get("used_percent")
+        reset = slot.get("resets_at")
+        try:
+            if used is not None and float(used) >= 100.0 and reset is not None:
+                reset_epoch = float(reset)
+                if reset_epoch > now:
+                    exhausted_resets.append(reset_epoch)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    if not exhausted_resets and limits.get("rate_limit_reached_type"):
+        for slot_name in ("primary", "secondary"):
+            slot = limits.get(slot_name) or {}
+            reset = slot.get("resets_at")
+            try:
+                if reset is not None and float(reset) > now:
+                    exhausted_resets.append(float(reset))
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return min(exhausted_resets) if exhausted_resets else None
+
+
+def _cached_codex_live_limits(max_age, allow_active_window=False, account_key=None,
+                              auth_key=None, now_epoch=None):
     cached = _load_json(CODEX_QUOTA_CACHE, {})
     fetched_at = cached.get("fetched_at")
     limits = cached.get("limits")
@@ -2322,13 +2364,20 @@ def _cached_codex_live_limits(max_age, allow_active_window=False, account_key=No
     cached_account_key = cached.get("account_key")
     if account_key and cached_account_key and cached_account_key != account_key:
         return None
+    cached_auth_key = cached.get("auth_key")
+    if auth_key and cached_auth_key and cached_auth_key != auth_key:
+        return None
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
     try:
         fetched_at = float(fetched_at)
     except (TypeError, ValueError, OverflowError):
         return None
-    age = datetime.now().timestamp() - fetched_at
+    exhausted_until = _codex_limits_exhausted_reset_at(limits, now_epoch=now)
+    if exhausted_until is not None and now < exhausted_until:
+        return limits, cached.get("plan"), fetched_at
+    age = now - fetched_at
     if age > max_age and not (
-            allow_active_window and _codex_limits_have_active_window(limits)):
+            allow_active_window and _codex_limits_have_active_window(limits, now_epoch=now)):
         return None
     return limits, cached.get("plan"), fetched_at
 
@@ -2451,9 +2500,6 @@ def fetch_codex_live_limits():
         except Exception:
             pass
         return None
-    cached = _cached_codex_live_limits(_CODEX_QUOTA_TTL)
-    if cached:
-        return cached
     auth = _load_json(CODEX_AUTH, {})
     auth_context = _codex_auth_context(auth)
     access_token = auth_context.get("access_token")
@@ -2461,10 +2507,11 @@ def fetch_codex_live_limits():
     auth_key = auth_context.get("auth_key")
     if not access_token or not account_key:
         return None
-    cache_state = _load_json(CODEX_QUOTA_CACHE, {})
-    cached = _cached_codex_live_limits(_CODEX_QUOTA_TTL, account_key=account_key)
+    cached = _cached_codex_live_limits(
+        _CODEX_QUOTA_TTL, account_key=account_key, auth_key=auth_key)
     if cached:
         return cached
+    cache_state = _load_json(CODEX_QUOTA_CACHE, {})
     # 失败退避:网络不可达(如公司代理拦截)时 5 分钟内不再联网重试,
     # 否则每轮 30s 刷新都会白等约 6s 超时
     last_failure = cache_state.get("last_failure_at", 0)
@@ -5260,7 +5307,7 @@ def _scan_grok_billing_from_log(path=None, max_bytes=_GROK_QUOTA_LOG_SCAN_BYTES)
         latest["config"], plan=latest.get("plan"), source="log", updated=updated)
 
 
-def _cached_grok_quota(max_age):
+def _cached_grok_quota(max_age, now_epoch=None):
     cached = _load_json(GROK_QUOTA_CACHE, {})
     if not isinstance(cached, dict):
         return None
@@ -5268,10 +5315,21 @@ def _cached_grok_quota(max_age):
     fetched_at = cached.get("fetched_at")
     if not isinstance(quota, dict) or fetched_at is None:
         return None
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
     try:
-        age = datetime.now().timestamp() - float(fetched_at)
+        fetched_at = float(fetched_at)
     except (TypeError, ValueError):
         return None
+    pct = quota.get("pct")
+    reset = quota.get("reset")
+    try:
+        if pct is not None and float(pct) >= 100.0 and reset is not None and float(reset) > now:
+            out = dict(quota)
+            out.setdefault("source", cached.get("source") or out.get("source") or "cache")
+            return out
+    except (TypeError, ValueError, OverflowError):
+        pass
+    age = now - fetched_at
     if age > max_age:
         return None
     out = dict(quota)
@@ -12104,7 +12162,27 @@ def _kimi_limits_have_active_window(limits, now_epoch=None):
     return False
 
 
-def _cached_kimi_live_limits(max_age, auth_key, allow_active_window=False):
+def _kimi_limits_exhausted_reset_at(limits, now_epoch=None):
+    """Kimi 额度耗尽且有未来的重置时刻时返回最早重置时间戳；未耗尽返回 None。"""
+    if not isinstance(limits, dict):
+        return None
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
+    exhausted_resets = []
+    for slot_key in ("five_hour", "subscription"):
+        slot = (limits or {}).get(slot_key) or {}
+        used = slot.get("used_percent")
+        reset = slot.get("resets_at")
+        try:
+            if used is not None and float(used) >= 100.0 and reset is not None:
+                reset_epoch = float(reset)
+                if reset_epoch > now:
+                    exhausted_resets.append(reset_epoch)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return min(exhausted_resets) if exhausted_resets else None
+
+
+def _cached_kimi_live_limits(max_age, auth_key, allow_active_window=False, now_epoch=None):
     cached = _load_json(KIMI_QUOTA_CACHE, {})
     if not auth_key or cached.get("auth_key") != auth_key:
         return None
@@ -12112,13 +12190,17 @@ def _cached_kimi_live_limits(max_age, auth_key, allow_active_window=False):
     limits = cached.get("limits")
     if not fetched_at or not limits:
         return None
+    now = float(now_epoch if now_epoch is not None else datetime.now().timestamp())
     try:
         fetched_at = float(fetched_at)
     except (TypeError, ValueError, OverflowError):
         return None
-    age = datetime.now().timestamp() - fetched_at
+    exhausted_until = _kimi_limits_exhausted_reset_at(limits, now_epoch=now)
+    if exhausted_until is not None and now < exhausted_until:
+        return limits, cached.get("plan"), fetched_at
+    age = now - fetched_at
     if age > max_age and not (
-            allow_active_window and _kimi_limits_have_active_window(limits)):
+            allow_active_window and _kimi_limits_have_active_window(limits, now_epoch=now)):
         return None
     return limits, cached.get("plan"), fetched_at
 

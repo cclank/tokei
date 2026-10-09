@@ -10,3 +10,4 @@ __pycache__/
 tokei-article.md
 Tokei-feature/
 .qoder/
+.commandcode/

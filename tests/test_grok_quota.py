@@ -535,6 +535,30 @@ class GrokQuotaTests(unittest.TestCase):
         self.assertEqual(grok["products"][1]["pct"], 2.5)
         self.assertEqual(grok["model"], "grok-4.5")
 
+    def test_cached_quota_sleeps_when_exhausted_until_reset(self):
+        """用量达到 100% 且 reset 还在未来时，即使超过 TTL 也复用缓存，不重新轮询。"""
+        with tempfile.TemporaryDirectory() as td:
+            self.configure(Path(td))
+            now = USAGE.datetime.now().timestamp()
+            cache_data = {
+                "fetched_at": now - 1000,
+                "quota": {
+                    "pct": 100.0,
+                    "reset": now + 3600,
+                    "plan": "SuperGrok",
+                    "window": "week",
+                },
+                "source": "live",
+            }
+            with open(USAGE.GROK_QUOTA_CACHE, "w") as fh:
+                json.dump(cache_data, fh)
+            cached = USAGE._cached_grok_quota(USAGE._GROK_QUOTA_TTL)
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached["pct"], 100.0)
+
+            expired = USAGE._cached_grok_quota(USAGE._GROK_QUOTA_TTL, now_epoch=now + 3601)
+            self.assertIsNone(expired)
+
 
 if __name__ == "__main__":
     unittest.main()

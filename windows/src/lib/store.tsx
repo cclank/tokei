@@ -5,15 +5,19 @@ import { L } from "./i18n";
 import { trayQuotaTooltip } from "./trayQuota";
 import { usePrefsVersion } from "./prefs";
 import { newerSnapshot, type SharedUsageState, type UsageSnapshot } from "./usageSnapshot";
+import { readTokeiFile, writeTokeiFile } from "./native";
+import { decodeUsagePreview, encodeUsagePreview, initialUsage, USAGE_PREVIEW_FILE } from "./usagePreview";
 import type { RangeKey, Usage } from "./types";
 
 const VISIBLE_INTERVAL = 10_000;
 const IDLE_INTERVAL = 30_000;
+const READY = Promise.resolve();
 
 export interface UsageStore {
   usage: Usage | null;
   error: string | null;
   refreshing: boolean;
+  previewing: boolean;
   lastUpdated: string;
   refresh: () => void;
 }
@@ -28,18 +32,22 @@ export function useUsageStore(): UsageStore {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-export function UsageProvider({ children, onUsage, shared = false }: { children: ReactNode; onUsage?: (usage: Usage) => void; shared?: boolean }) {
+export function UsageProvider({ children, onUsage, shared = false, collectorReady = READY }: { children: ReactNode; onUsage?: (usage: Usage) => void; shared?: boolean; collectorReady?: Promise<void> }) {
   const follower = shared && inTauri;
   const [usage, setUsage] = useState<Usage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [source, setSource] = useState<SharedUsageState["source"]>("live");
   usePrefsVersion();
   const date = updatedAt != null ? new Date(updatedAt) : null;
-  const lastUpdated = error ? L("加载失败") : date ? L("更新 %@", `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`) : L("加载中…");
+  const stamp = date ? `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` : "";
+  const timeLabel = date ? (source === "cache" ? L("上次数据 %@", stamp) : L("更新 %@", stamp)) : L("加载中…");
+  const lastUpdated = error ? `${L("加载失败")} · ${timeLabel}` : source === "local" && refreshing ? `${timeLabel} · ${L("额度更新中…")}` : timeLabel;
   const snapshot = useRef<UsageSnapshot | null>(null);
   const inFlight = useRef(false);
   const pending = useRef(false);
+  const firstRefresh = useRef(true);
   const onUsageRef = useRef(onUsage);
   onUsageRef.current = onUsage;
 
@@ -58,11 +66,27 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
     }
     inFlight.current = true;
     setRefreshing(true);
-    collectJSON<Usage>(["--json", "--no-sync-snapshot"])
+    const first = firstRefresh.current;
+    firstRefresh.current = false;
+    const operation = first ? initialUsage(
+      collectorReady,
+      async () => decodeUsagePreview(await readTokeiFile(USAGE_PREVIEW_FILE)),
+      collectJSON<Usage>,
+      (value, nextSource) => {
+        setUsage(value.usage);
+        setUpdatedAt(value.updatedAt);
+        setSource(nextSource);
+      },
+    ) : collectorReady.then(() => collectJSON<Usage>(["--json", "--no-sync-snapshot"]));
+    operation
       .then((next) => {
         setUsage(next);
         setError(null);
-        setUpdatedAt(Date.now());
+        const now = Date.now();
+        setUpdatedAt(now);
+        setSource("live");
+        const preview = encodeUsagePreview(next, now);
+        if (preview) void writeTokeiFile(USAGE_PREVIEW_FILE, preview).catch((err) => console.error("Tokei usage preview save failed", err));
         onUsageRef.current?.(next);
       })
       .catch((err) => {
@@ -76,13 +100,13 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
           refresh();
         }
       });
-  }, [follower]);
+  }, [follower, collectorReady]);
 
   useEffect(() => {
     if (!inTauri || follower) return;
-    const state: SharedUsageState = { usage, error, updated_at: updatedAt, refreshing };
+    const state: SharedUsageState = { usage, error, updated_at: updatedAt, refreshing, source };
     void call("publish_usage_snapshot", { snapshot: state }).catch((err) => console.error("Tokei usage snapshot publish failed", err));
-  }, [usage, error, updatedAt, refreshing, follower]);
+  }, [usage, error, updatedAt, refreshing, source, follower]);
 
   useEffect(() => {
     let disposed = false;
@@ -97,6 +121,7 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
         setError(selected.state.error);
         setUpdatedAt(selected.state.updated_at);
         setRefreshing(selected.state.refreshing);
+        setSource(selected.state.source ?? "live");
       };
       void import("@tauri-apps/api/event").then(async ({ listen }) => {
         const off = await listen<UsageSnapshot>("tokei://usage-state", (event) => apply(event.payload));
@@ -107,20 +132,20 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
       }).catch((err) => { if (!disposed) setError(String(err)); });
       return () => { disposed = true; unlisten?.(); };
     }
-    refresh();
+    if (!inFlight.current) refresh();
     let timer: number | undefined;
     let quickVisible = false;
     const schedule = () => {
       window.clearTimeout(timer);
       const interval = document.visibilityState === "visible" || quickVisible ? VISIBLE_INTERVAL : IDLE_INTERVAL;
       timer = window.setTimeout(() => {
-        refresh();
+        if (!inFlight.current) refresh();
         schedule();
       }, interval);
     };
     schedule();
     const onVisibility = () => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible" && !inFlight.current) refresh();
       schedule();
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -128,11 +153,11 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
       void import("@tauri-apps/api/event").then(async ({ listen }) => {
         const offs = await Promise.all([
           listen("tokei://refresh", () => refresh()),
-          listen("tokei://panel-shown", () => refresh()),
+          listen("tokei://panel-shown", () => { if (!inFlight.current) refresh(); }),
           listen<boolean>("tokei://quick-visible", (event) => {
             quickVisible = event.payload;
             schedule();
-            if (quickVisible) refresh();
+            if (quickVisible && !inFlight.current) refresh();
           }),
         ]);
         if (disposed) { offs.forEach((off) => off()); return; }
@@ -149,7 +174,7 @@ export function UsageProvider({ children, onUsage, shared = false }: { children:
     };
   }, [refresh, follower]);
 
-  return <UsageContext.Provider value={{ usage, error, refreshing, lastUpdated, refresh }}>{children}</UsageContext.Provider>;
+  return <UsageContext.Provider value={{ usage, error, refreshing, previewing: source !== "live" && refreshing, lastUpdated, refresh }}>{children}</UsageContext.Provider>;
 }
 
 export function pushTrayTooltip(usage: Usage) {

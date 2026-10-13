@@ -123,12 +123,14 @@ fn secret_entry(provider: &str) -> Result<keyring::Entry, String> {
 
 /// 只回答有没有存，不把 Key 本身交给前端。
 #[tauri::command]
-pub fn has_secret(provider: String) -> Result<bool, String> {
-    match secret_entry(&provider)?.get_password() {
-        Ok(value) => Ok(!value.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(err) => Err(err.to_string()),
-    }
+pub async fn has_secret(provider: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        match secret_entry(&provider)?.get_password() {
+            Ok(value) => Ok(!value.is_empty()),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(err) => Err(err.to_string()),
+        }
+    }).await.map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

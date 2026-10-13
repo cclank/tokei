@@ -5,6 +5,7 @@ export interface SharedUsageState {
   error: string | null;
   updated_at: number | null;
   refreshing: boolean;
+  source?: "cache" | "local" | "live";
 }
 
 export interface UsageSnapshot {

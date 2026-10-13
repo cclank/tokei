@@ -443,3 +443,6 @@ export function useToggle(initial = false): [boolean, () => void] {
   const [value, setValue] = useState(initial);
   return [value, () => setValue((v) => !v)];
 }
+export function QuotaLoading() {
+  return <HStack gap={8}><span className="spinner" /><span style={{ fontSize: fs(10), color: T.secondary }}>{L("额度更新中…")}</span></HStack>;
+}

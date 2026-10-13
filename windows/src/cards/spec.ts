@@ -12,6 +12,7 @@ export interface CardContext {
   rangeLabel: string;
   /** 正在刷新：空态要能分辨「刷新中」和「真的没有」。 */
   refreshing: boolean;
+  previewing?: boolean;
   /** 读界面偏好（与 Mac 版 @AppStorage 同名的键）。 */
   pref: <T>(key: string, fallback: T) => T;
 }

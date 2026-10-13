@@ -35,6 +35,7 @@
       },
       {
         "label": "quick",
+        "create": false,
         "title": "Tokei Quick",
         "url": "index.html?surface=quick",
         "width": 520,

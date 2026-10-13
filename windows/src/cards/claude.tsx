@@ -11,6 +11,7 @@ import {
   MetricGrid,
   perfMetrics,
   QuotaRow,
+  QuotaLoading,
   QuotaStateNotice,
   StaleQuotaFootnote,
   ThinDivider,
@@ -124,14 +125,16 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
         sessions > 0 && (
           <>
             <ThinDivider />
-            <QuotaStateNotice
+            {ctx.previewing ? <QuotaLoading /> : (
+              <QuotaStateNotice
               title={L("暂未获取到额度数据")}
               detail={cliQuota ? L("用量统计不受影响；登录态或网络恢复后会自动重试。")
                 : L("仅使用 CLI 时，可在「隐私与额度」开启 Claude Code CLI 额度查询。")}
               source={L("Claude Code 额度缓存")}
               updated={c.q_updated}
               tint={Theme.claude}
-            />
+              />
+            )}
           </>
         )
       )}

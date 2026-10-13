@@ -4414,7 +4414,7 @@ def _codex_perf_backfill_targets(file_cache, paths, now=None):
     return targets
 
 
-def scan_codex(bounds, cache):
+def scan_codex(bounds, cache, local_only=False):
     ledger_touch("codex")
     fc = cache.setdefault("codex", {})
     if _codex_migrate_event_cache(fc):
@@ -4895,7 +4895,7 @@ def scan_codex(bounds, cache):
     # 读数时间:live 真正胜出时用抓取时刻,否则用日志里那条记录的时间。
     # live_updated 只在 if live 分支内有定义,先在外面兜底。
     limits_updated = _iso_to_epoch(selected_limits_ts)
-    live = fetch_codex_live_limits()
+    live = None if local_only else fetch_codex_live_limits()
     if live:
         live_limits, live_plan, live_updated = live
         if _codex_live_snapshot_is_current(live_updated, selected_limits_ts):
@@ -14782,12 +14782,12 @@ def scan_claude_plan():
 
 
 @_with_scan_cache_lock
-def compute():
+def compute(local_only=False):
     bounds = range_bounds()
     cache = _load_scan_cache()
     errors = {}
     cc = _safe_scan("claude", lambda: scan_claude(bounds, cache), _empty_claude, errors)
-    cx = _safe_scan("codex", lambda: scan_codex(bounds, cache), _empty_codex, errors)
+    cx = _safe_scan("codex", lambda: scan_codex(bounds, cache, local_only=local_only), _empty_codex, errors)
     gm = _safe_scan("gemini", lambda: scan_gemini(bounds, cache), _empty_gemini, errors)
     gk = _safe_scan("grok", lambda: scan_grok(bounds, cache), _empty_grok, errors)
     qd = _safe_scan("qoderwork", lambda: scan_qoder(bounds, cache), _empty_qoder, errors)
@@ -15000,37 +15000,46 @@ def compute():
     p5, pw = quota["p5"], quota["pw"]
     r5, rw = quota["r5"], quota["rw"]
 
-    plan = _safe_scan("claude_plan", scan_claude_plan, lambda: {}, errors) or {}
-    grok_quota = _safe_scan("grok_quota", scan_grok_quota, lambda: {}, errors) or {}
-    qwenwork_quota = _safe_scan(
-        "qwenwork_quota", scan_qwenwork_quota, lambda: {}, errors) or {}
-    kimi_live = _safe_scan("kimi_quota", fetch_kimi_live_limits, lambda: None, errors)
-    kimi_limits, kimi_plan, kimi_updated = kimi_live if kimi_live else (None, None, None)
-    kimi_quota = _kimi_quota_values(kimi_limits, updated_at=kimi_updated)
-    provider_quotas = scan_provider_quotas(errors)
-    _cache_dashboard_days(
-        cache, _CURSOR_PROVIDER_DAYS_CACHE_KEY,
-        ((provider_quotas.get("cursor") or {}).get("usage") or {}).get("days", {}))
-    _cache_dashboard_days(
-        cache, _ZAI_PROVIDER_DAYS_CACHE_KEY,
-        ((provider_quotas.get("zai") or {}).get("usage") or {}).get("days", {}))
-    _merge_dashboard_days(
-        cache, _GROK_BOT_PROVIDER_DAYS_CACHE_KEY,
-        ((provider_quotas.get("grok_bot") or {}).get("usage") or {}).get("days", {}))
-    grok_bot_days = cache.get(_GROK_BOT_PROVIDER_DAYS_CACHE_KEY)
-    if isinstance(grok_bot_days, dict) and grok_bot_days:
-        grok_bot_quota = dict(provider_quotas.get("grok_bot") or {})
-        if not grok_bot_quota:
-            grok_bot_quota = {
-                "available": False, "plan": None, "account": None,
-                "windows": [], "details": [], "source": "cache",
-                "updated": None, "stale": True,
-            }
-        grok_bot_quota["usage"] = _provider_usage_from_days(grok_bot_days)
-        provider_quotas["grok_bot"] = grok_bot_quota
-    _save_scan_cache(cache)
-    codex_reset_cards = _safe_scan(
-        "codex_reset_cards", fetch_codex_reset_cards, lambda: {}, errors) or {}
+    # Windows 首屏先读本地用量；网络额度、登录凭据和授权助手留给完整刷新。
+    if local_only:
+        plan, grok_quota, qwenwork_quota = {}, {}, {}
+        kimi_plan = kimi_updated = None
+        kimi_quota = _kimi_quota_values(None)
+        provider_quotas = {name: {} for name in (
+            "zed", "sub2api", "zai", "antigravity", "devin", "minimax", "cursor", "grok_bot")}
+        codex_reset_cards = {}
+    else:
+        plan = _safe_scan("claude_plan", scan_claude_plan, lambda: {}, errors) or {}
+        grok_quota = _safe_scan("grok_quota", scan_grok_quota, lambda: {}, errors) or {}
+        qwenwork_quota = _safe_scan(
+            "qwenwork_quota", scan_qwenwork_quota, lambda: {}, errors) or {}
+        kimi_live = _safe_scan("kimi_quota", fetch_kimi_live_limits, lambda: None, errors)
+        kimi_limits, kimi_plan, kimi_updated = kimi_live if kimi_live else (None, None, None)
+        kimi_quota = _kimi_quota_values(kimi_limits, updated_at=kimi_updated)
+        provider_quotas = scan_provider_quotas(errors)
+        _cache_dashboard_days(
+            cache, _CURSOR_PROVIDER_DAYS_CACHE_KEY,
+            ((provider_quotas.get("cursor") or {}).get("usage") or {}).get("days", {}))
+        _cache_dashboard_days(
+            cache, _ZAI_PROVIDER_DAYS_CACHE_KEY,
+            ((provider_quotas.get("zai") or {}).get("usage") or {}).get("days", {}))
+        _merge_dashboard_days(
+            cache, _GROK_BOT_PROVIDER_DAYS_CACHE_KEY,
+            ((provider_quotas.get("grok_bot") or {}).get("usage") or {}).get("days", {}))
+        grok_bot_days = cache.get(_GROK_BOT_PROVIDER_DAYS_CACHE_KEY)
+        if isinstance(grok_bot_days, dict) and grok_bot_days:
+            grok_bot_quota = dict(provider_quotas.get("grok_bot") or {})
+            if not grok_bot_quota:
+                grok_bot_quota = {
+                    "available": False, "plan": None, "account": None,
+                    "windows": [], "details": [], "source": "cache",
+                    "updated": None, "stale": True,
+                }
+            grok_bot_quota["usage"] = _provider_usage_from_days(grok_bot_days)
+            provider_quotas["grok_bot"] = grok_bot_quota
+        _save_scan_cache(cache)
+        codex_reset_cards = _safe_scan(
+            "codex_reset_cards", fetch_codex_reset_cards, lambda: {}, errors) or {}
 
     result = {
         "claude": {
@@ -15368,7 +15377,7 @@ def _write_configured_sync_snapshot(d):
 
 
 def main_json():
-    d = compute()
+    d = compute(local_only="--local-only" in sys.argv)
     meta = _load_json(PRICING_FILE, {}).get("_meta", {})
     d["_pricing"] = {"updated_at": meta.get("updated_at", ""), "count": meta.get("count", 0)}
     print(json.dumps(d, ensure_ascii=False))

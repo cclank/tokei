@@ -56,7 +56,7 @@ function cardShown(visibleKey: string): boolean {
  */
 export async function syncCollectorConfigOnLaunch(): Promise<void> {
   if (inTauri) {
-    const saved = await call<Record<string, unknown>>("read_tokei_config").catch(() => undefined);
+    const saved = await call<Record<string, unknown>>("read_tokei_config");
     for (const [prefKey, configKey] of Object.entries(PRIVACY_CONFIG_KEYS)) {
       if (typeof saved?.[configKey] === "boolean") setPref(prefKey, saved[configKey]);
     }
@@ -70,9 +70,5 @@ export async function syncCollectorConfigOnLaunch(): Promise<void> {
     patch[configKey] = getPref(prefKey, prefKey === "shareBasicActivity");
   }
   patch.minimax_quota_enabled = cardShown("showMiniMax") && (await minimaxKeyStored());
-  try {
-    await updateTokeiConfig(patch);
-  } catch (err) {
-    console.error(err);
-  }
+  await updateTokeiConfig(patch);
 }

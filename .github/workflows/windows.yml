@@ -36,7 +36,7 @@ jobs:
       - name: Windows privacy and credentials tests
         run: |
           python -m pip install cryptography==50.0.1
-          python -m unittest tests.test_windows_native_bridge tests.test_windows_native_collector -v
+          python -m unittest tests.test_windows_native_bridge tests.test_windows_native_collector tests.test_windows_startup.StartupCollectorTests -v
 
   # 现有测试大多是在 macOS 上写的（不少要编译 Swift），这里只看结果、不拦合并，也不挡安装包构建。
   full-suite:
@@ -100,6 +100,8 @@ jobs:
         run: |
           windows\src-tauri\python\python.exe usage.30s.py --json --no-sync-snapshot > collector.json || exit /b 1
           python -c "import json; d = json.load(open('collector.json', encoding='utf-8')); print(sorted(d)[:6], len(d))"
+          windows\src-tauri\python\python.exe usage.30s.py --json --no-sync-snapshot --local-only > preview.json || exit /b 1
+          python -c "import json; d = json.load(open('preview.json', encoding='utf-8')); assert 'ranges' in d['codex']; print('local-first preview ok')"
 
       - name: Install frontend dependencies
         working-directory: windows
@@ -108,6 +110,9 @@ jobs:
       - name: Native window and privacy tests
         working-directory: windows/src-tauri
         run: cargo test --locked --lib
+
+      - name: Startup and shared usage regression tests
+        run: python -m unittest tests.test_windows_startup tests.test_windows_usage_snapshot -v
 
       - name: Build installer
         working-directory: windows

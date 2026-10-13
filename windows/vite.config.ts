@@ -58,8 +58,7 @@ function devCollector(): Plugin {
 export default defineConfig(() => ({
   plugins: [react(), devCollector()],
   clearScreen: false,
-  // 打进安装包从本地读，不走网络，单个大包没关系。
-  build: { chunkSizeWarningLimit: 2000 },
+  build: { manifest: true },
   server: {
     port: 1420,
     strictPort: true,

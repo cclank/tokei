@@ -1,25 +1,27 @@
 // Windows 桌面窗口：导航、页签、卡片网格、页脚，以及设置等其他页面。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CARDS } from "./cards/registry";
 import type { CardContext, CardSpec } from "./cards/spec";
 import { sortedUsageCards } from "./lib/cardOrder";
 import { call, inTauri } from "./lib/collector";
 import { currentLanguage, L } from "./lib/i18n";
-import { recordQuotaHistory } from "./lib/quotaHistory";
-import { copySingleToolImage, copyUsageImage, currentShareVisibility } from "./lib/share";
 import { pushTrayMenu } from "./lib/native";
 import { getPref, usePrefsVersion } from "./lib/prefs";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
 import { hideQuickPanel, isQuickSurface, openMainWindow } from "./lib/surface";
-import DashboardPage from "./pages/Dashboard";
-import { prewarmDashboard } from "./pages/dashboard/repository";
-import ProjectsPage from "./pages/Projects";
-import QuotaHistoryPage from "./pages/QuotaHistory";
-import SettingsPage from "./pages/Settings";
 import { Icon } from "./ui/Icon";
 import { Card, CardHeadTrailing } from "./ui/kit";
 import { fill, fs, rgba, T, Theme } from "./ui/theme";
+
+const DashboardPage = lazy(() => import("./pages/Dashboard"));
+const ProjectsPage = lazy(() => import("./pages/Projects"));
+const QuotaHistoryPage = lazy(() => import("./pages/QuotaHistory"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
+
+function Loading() {
+  return <div className="page-loading" role="status"><span className="spinner" /><span>{L("加载中…")}</span></div>;
+}
 
 export type PanelMode = "cards" | "quotaHistory" | "dashboard" | "projects" | "settings";
 
@@ -133,6 +135,7 @@ function CardCopyButton({ spec, range, copy }: { spec: CardSpec; range: RangeKey
   const { usage, lastUpdated } = useUsageStore();
   const done = copy.state.tool === spec.id;
   const onClick = async () => {
+    const { copySingleToolImage, currentShareVisibility } = await import("./lib/share");
     if (usage && (await copySingleToolImage(spec.id, usage, range, currentShareVisibility(), lastUpdated))) copy.markTool(spec.id);
   };
   return (
@@ -161,7 +164,7 @@ function cardName(spec: CardSpec) {
 }
 
 function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: RangeKey) => void; copy: Copy }) {
-  const { usage, error, refreshing } = useUsageStore();
+  const { usage, error, refreshing, previewing } = useUsageStore();
   usePrefsVersion();
   if (!usage) {
     return (
@@ -172,12 +175,12 @@ function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: R
             <span style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{error}</span>
           </span>
         ) : (
-          <span className="spinner" />
+          <Loading />
         )}
       </div>
     );
   }
-  const ctx: CardContext = { usage, range, rangeLabel: rangeLabel(range), refreshing, pref: getPref };
+  const ctx: CardContext = { usage, range, rangeLabel: rangeLabel(range), refreshing, previewing, pref: getPref };
   const visible = CARDS.filter((spec) => getPref(spec.visibleKey, spec.visibleDefault));
   const shown = visible.filter((spec) => safe(() => spec.active(ctx), false));
   const ordered = sortedUsageCards(shown, usage, range);
@@ -195,7 +198,7 @@ function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: R
     <>
       <SegmentedTabs value={range} onChange={setRange} />
       <div className={ordered.length === 1 ? "grid one" : "grid"}>{ordered.map(render)}</div>
-      {inactive.length > 0 && (
+      {inactive.length > 0 && !refreshing && (
         <div style={{ fontSize: fs(9), color: T.tertiary, textAlign: "center" }}>{L("未检测到本地数据: %@", inactive.join(" · "))}</div>
       )}
     </>
@@ -245,6 +248,7 @@ function Footer({ mode, range, copy, quick = false }: { mode: PanelMode; range: 
         icon={copy.state.footer ? "checkmark" : "photo.on.rectangle"}
         label={copy.state.footer ? L("已复制") : L("复制")}
         onClick={async () => {
+          const { copyUsageImage, currentShareVisibility } = await import("./lib/share");
           if (usage && (await copyUsageImage(usage, range, currentShareVisibility(), lastUpdated))) copy.markFooter();
         }}
       />
@@ -255,7 +259,7 @@ function Footer({ mode, range, copy, quick = false }: { mode: PanelMode; range: 
   );
 }
 
-function Panel() {
+function Panel({ ready }: { ready: boolean }) {
   const [mode, setMode] = useState<PanelMode>("cards");
   const [range, setRange] = useState<RangeKey>(() => {
     const value = new URLSearchParams(window.location.search).get("range") as RangeKey;
@@ -302,6 +306,7 @@ function Panel() {
   }, []);
   const content = useMemo(() => {
     if (isQuickSurface) return <CardsPage range={range} setRange={setRange} copy={copy} />;
+    if (!ready && mode !== "cards") return <Loading />;
     switch (mode) {
       case "settings":
         return <SettingsPage onClose={() => setMode("cards")} />;
@@ -314,13 +319,13 @@ function Panel() {
       default:
         return <CardsPage range={range} setRange={setRange} copy={copy} />;
     }
-  }, [mode, range, copy]);
+  }, [mode, range, copy, ready]);
   return (
     <div className={`panel${isQuickSurface ? " quick-window" : ""}`}>
       {isQuickSurface ? <QuickHeader range={range} /> : <Header mode={mode} setMode={setMode} />}
       <main className="panel-scroll" ref={scroll}>
         <div className="panel-content">
-          {content}
+        <Suspense fallback={<Loading />}>{content}</Suspense>
         </div>
       </main>
       <Footer mode={mode} range={range} copy={copy} quick={isQuickSurface} />
@@ -328,27 +333,26 @@ function Panel() {
   );
 }
 
-let dashboardPrewarmed = false;
-
-/** 每次刷新成功：更新托盘提示、记一笔额度曲线；第一次刷新完顺带预热数据面板的「全部」（同 Mac）。 */
+/** 完整刷新后才更新托盘和历史；预览数据不当作新的额度观测。 */
 function onUsage(usage: Usage) {
   pushTrayTooltip(usage);
-  void recordQuotaHistory(usage);
-  if (!dashboardPrewarmed) {
-    dashboardPrewarmed = true;
-    prewarmDashboard();
-  }
+  void import("./lib/quotaHistory").then(({ recordQuotaHistory }) => recordQuotaHistory(usage)).catch(console.error);
 }
 
-export default function App() {
+export default function App({ collectorReady }: { collectorReady: Promise<void> }) {
+  const [ready, setReady] = useState(isQuickSurface);
   useEffect(() => {
-    if (inTauri && !isQuickSurface) {
-      void call("start_activity_reporter", { enabled: getPref("shareBasicActivity", true) }).catch(() => {});
-    }
-  }, []);
+    let disposed = false;
+    void collectorReady.then(() => {
+      if (disposed) return;
+      setReady(true);
+      if (inTauri && !isQuickSurface) void call("start_activity_reporter", { enabled: getPref("shareBasicActivity", true) }).catch(() => {});
+    }).catch(console.error);
+    return () => { disposed = true; };
+  }, [collectorReady]);
   return (
-    <UsageProvider onUsage={isQuickSurface ? undefined : onUsage} shared={isQuickSurface}>
-      <Panel />
+    <UsageProvider onUsage={isQuickSurface ? undefined : onUsage} shared={isQuickSurface} collectorReady={collectorReady}>
+      <Panel ready={ready} />
     </UsageProvider>
   );
 }

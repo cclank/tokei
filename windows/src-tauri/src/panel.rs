@@ -7,7 +7,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Rect};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindowBuilder,
+    WindowEvent,
+};
 
 // 沿用原窗口标签，保留现有 WebView 偏好和权限配置。
 pub const LABEL: &str = "panel";
@@ -32,6 +35,9 @@ pub struct SurfaceState {
 struct QuickState {
     tray: Option<Bounds>,
     blurred_at: Option<Instant>,
+    creating: bool,
+    requested: bool,
+    pending_rect: Option<Rect>,
 }
 
 impl SurfaceState {
@@ -129,6 +135,11 @@ pub fn quick_panel_visible(app: AppHandle) -> bool {
 }
 
 pub fn hide_quick(app: &AppHandle) {
+    app.state::<SurfaceState>()
+        .quick
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .requested = false;
     if let Some(window) = app.get_webview_window(QUICK_LABEL) {
         let _ = window.hide();
         let _ = app.emit_to(LABEL, "tokei://quick-visible", false);
@@ -150,13 +161,13 @@ pub fn quick_blurred(app: &AppHandle) {
 
 fn toggle_quick(app: &AppHandle, rect: Rect) {
     let state = app.state::<SurfaceState>();
-    let just_blurred = state
-        .quick
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    let quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+    let just_blurred = quick
         .blurred_at
         .is_some_and(|time| time.elapsed() < Duration::from_millis(300));
-    if quick_panel_visible(app.clone()) || just_blurred {
+    let requested = quick.requested;
+    drop(quick);
+    if requested || quick_panel_visible(app.clone()) || just_blurred {
         hide_quick(app);
         return;
     }
@@ -164,12 +175,78 @@ fn toggle_quick(app: &AppHandle, rect: Rect) {
 }
 
 pub fn show_quick(app: &AppHandle, rect: Option<Rect>) {
+    {
+        let state = app.state::<SurfaceState>();
+        let mut quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+        quick.requested = true;
+        if rect.is_some() {
+            quick.pending_rect = rect;
+        }
+        if app.get_webview_window(QUICK_LABEL).is_none() {
+            if quick.creating {
+                return;
+            }
+            quick.creating = true;
+            drop(quick);
+            let handle = app.clone();
+            // WebView2 creation must run outside synchronous command/event handlers.
+            std::thread::spawn(move || {
+                let result = create_quick(&handle);
+                let state = handle.state::<SurfaceState>();
+                state
+                    .quick
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .creating = false;
+                let ready = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let state = ready.state::<SurfaceState>();
+                    let quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+                    if !quick.requested {
+                        return;
+                    }
+                    drop(quick);
+                    if result.is_ok() {
+                        show_ready_quick(&ready);
+                    } else {
+                        show(&ready);
+                    }
+                });
+            });
+            return;
+        }
+    }
+    show_ready_quick(app);
+}
+
+fn create_quick(app: &AppHandle) -> tauri::Result<()> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == QUICK_LABEL)
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    let window = WebviewWindowBuilder::from_config(app, config)?.build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(false) => quick_blurred(&handle),
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            hide_quick(&handle);
+        }
+        _ => {}
+    });
+    Ok(())
+}
+
+fn show_ready_quick(app: &AppHandle) {
     let Some(window) = app.get_webview_window(QUICK_LABEL) else {
         return;
     };
     let state = app.state::<SurfaceState>();
     let mut quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(rect) = rect {
+    if let Some(rect) = quick.pending_rect.take() {
         let scale = window.scale_factor().unwrap_or(1.0);
         let position = rect.position.to_physical::<f64>(scale);
         let size = rect.size.to_physical::<f64>(scale);

@@ -56,3 +56,10 @@ Windows 安装包由 GitHub Actions 构建（`.github/workflows/windows.yml`）�
 从 Mac 版移植界面的约定见 [PORTING.md](PORTING.md)。
 
 原生窗口的本机测试可使用 debug 构建的 `TOKEI_TEST_STATE_DIR` 指向独立绝对路径，并用 `TOKEI_SCRIPT` 指向固定采集样本；release 构建始终使用正常用户目录。托盘点击偏好保存在 `~/.tokei/windows-ui.json`。
+### 启动加载
+
+界面先显示导航和加载状态，配置同步完成后才开始采集和处理活跃统计开关。首次启动先用 `--local-only` 读取本地用量，再进行完整额度刷新；快捷面板首次打开时创建，并订阅主窗口的数据。
+
+再次启动会先显示当天的用量预览，并标注原采集时间。预览文件 `~/.tokei/windows-usage-preview.json` 只保留用量区间，不保存账号、登录凭据或旧额度；损坏、过期和跨日的预览会被忽略。预览不写入额度历史。
+
+设置、项目、数据面板、分享和语言词表按需加载。`pnpm build` 会检查首屏全部依赖的 JS 体积：中文 400 KiB、英文 450 KiB、其他支持语言 500 KiB。运行 `python -m unittest tests.test_windows_startup tests.test_windows_usage_snapshot -v` 可验证配置顺序、网络隔离和缓存覆盖顺序。Windows 实机的冷启动耗时仍需单独测量。

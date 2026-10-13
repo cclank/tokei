@@ -32,7 +32,12 @@ async fn run_collector(
         return Err("Usage collection belongs to the main window".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        collector::run(&app, &args, &store::secret_environment())
+        let env = if args.iter().any(|arg| arg == "--local-only") {
+            Vec::new()
+        } else {
+            store::secret_environment()
+        };
+        collector::run(&app, &args, &env)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -190,17 +195,6 @@ pub fn run() {
                         api.prevent_close();
                         panel::hide(&handle);
                     }
-                });
-            }
-            if let Some(window) = app.get_webview_window(panel::QUICK_LABEL) {
-                let handle = app.handle().clone();
-                window.on_window_event(move |event| match event {
-                    WindowEvent::Focused(false) => panel::quick_blurred(&handle),
-                    WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        panel::hide_quick(&handle);
-                    }
-                    _ => {}
                 });
             }
             Ok(())

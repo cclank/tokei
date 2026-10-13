@@ -11,6 +11,8 @@ pub struct UsageState {
     pub error: Option<String>,
     pub updated_at: Option<u64>,
     pub refreshing: bool,
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -93,6 +95,7 @@ mod tests {
             updated_at: Some(1234),
             error: Some("offline".into()),
             refreshing: false,
+            ..Default::default()
         });
         assert!(first.revision < next.revision && next.revision < failed.revision);
         assert_eq!(store.read().state.usage, Some(usage));

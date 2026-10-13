@@ -66,9 +66,10 @@ export const fill = (alpha: number) => `rgba(255, 255, 255, ${alpha})`;
 
 export const FONT_SIZE_KEY = "panelFontSize";
 
-/** 字号设置（小 / 大），对应 Theme.fontSize(points)。 */
+/** Windows 字体按 CSS 像素适配，并保留原来的小 / 大字号偏好。 */
 export function fs(points: number): number {
-  return getPref<string>(FONT_SIZE_KEY, "small") === "large" ? points * 1.12 : points;
+  const scale = getPref<string>(FONT_SIZE_KEY, "small") === "large" ? 1.12 : 1;
+  return Math.max(10, points * 1.1 * scale);
 }
 
 export const CARD_RADIUS = 16;

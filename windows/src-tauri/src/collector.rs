@@ -22,8 +22,23 @@ pub struct Runtime {
     pub script: PathBuf,
 }
 
+fn authorization_marker(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("TOKEI_TEST_STATE_DIR").is_some() {
+        return Ok(crate::store::tokei_dir()?.join("Grants/grok-bot.json"));
+    }
+    app.path()
+        .app_local_data_dir()
+        .map(|path| path.join("Grants/grok-bot.json"))
+        .map_err(|_| "Authorization directory unavailable".into())
+}
+
 pub fn resolve(app: &AppHandle) -> Result<Runtime, String> {
-    let env_path = |key: &str| std::env::var_os(key).map(PathBuf::from).filter(|p| p.exists());
+    let env_path = |key: &str| {
+        std::env::var_os(key)
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+    };
 
     let mut script = env_path("TOKEI_SCRIPT");
     let mut python = env_path("TOKEI_PYTHON");
@@ -56,7 +71,8 @@ pub fn resolve(app: &AppHandle) -> Result<Runtime, String> {
     }
 
     let script = script.ok_or_else(|| "找不到采集脚本 usage.30s.py".to_string())?;
-    let python = python.unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
+    let python =
+        python.unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
     Ok(Runtime { python, script })
 }
 
@@ -82,15 +98,103 @@ pub fn run(app: &AppHandle, args: &[String], env: &[(String, String)]) -> Result
         return Err("采集超时".to_string());
     }
     if raw.exit_code != Some(0) {
-        let tail: String = raw.stderr.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = raw
+            .stderr
+            .chars()
+            .rev()
+            .take(1500)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         return Err(format!("采集脚本退出码 {:?}\n{tail}", raw.exit_code));
     }
     Ok(raw.stdout)
 }
 
 /// 跑一次采集脚本，不管成败都把退出状态和两路输出交回来。
-pub fn run_raw(app: &AppHandle, args: &[String], env: &[(String, String)], timeout: Duration) -> Result<RawOutput, String> {
+pub fn run_raw(
+    app: &AppHandle,
+    args: &[String],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<RawOutput, String> {
     let runtime = resolve(app)?;
+    run_runtime(app, runtime, args, env, timeout)
+}
+
+pub fn bridge_command(app: &AppHandle) -> Result<Command, String> {
+    let mut runtime = resolve(app)?;
+    let bundled = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("collector/windows_native.py"));
+    runtime.script = bundled
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../native_bridge.py"));
+    if !runtime.script.is_file() {
+        return Err("Windows integration helper is missing".into());
+    }
+    let mut command = Command::new(&runtime.python);
+    command
+        .arg(&runtime.script)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("TOKEI_WINDOWS_STATE_DIR", crate::store::tokei_dir()?)
+        .env("TOKEI_GROK_BOT_AUTH_MARKER", authorization_marker(app)?)
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    Ok(command)
+}
+
+pub fn run_bridge(app: &AppHandle, mode: &str) -> Result<String, String> {
+    let mut command = bridge_command(app)?;
+    command
+        .arg(mode)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Windows integration helper failed to start".to_string())?;
+    let mut stdout = child.stdout.take().ok_or("Windows helper has no output")?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = stdout.by_ref().take(4097).read_to_end(&mut output);
+        output
+    });
+    let started = Instant::now();
+    let ok = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if started.elapsed() < Duration::from_secs(8) => {
+                std::thread::sleep(Duration::from_millis(25))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    let output = reader.join().unwrap_or_default();
+    if !ok || output.len() > 4096 {
+        return Err("Windows integration helper unavailable".into());
+    }
+    String::from_utf8(output).map_err(|_| "Invalid Windows helper response".into())
+}
+
+fn run_runtime(
+    app: &AppHandle,
+    runtime: Runtime,
+    args: &[String],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<RawOutput, String> {
     let mut command = Command::new(&runtime.python);
     command
         .arg(&runtime.script)
@@ -98,6 +202,8 @@ pub fn run_raw(app: &AppHandle, args: &[String], env: &[(String, String)], timeo
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("TOKEI_HOST", "tauri")
+        .env("TOKEI_WINDOWS_STATE_DIR", crate::store::tokei_dir()?)
+        .env("TOKEI_GROK_BOT_AUTH_MARKER", authorization_marker(app)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

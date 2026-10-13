@@ -584,3 +584,13 @@
 "默认只读 ~/.grok 本地日志，不访问网络" = "By default only reads local ~/.grok logs, no network access";
 "默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。" = "By default only reads quota snapshots from local Grok logs, no network access. When enabled, requests the Grok billing API with local credentials for the latest remaining quota.";
 "（当前范围无可复制的用量）" = "(No copyable usage in this range)";
+
+// Windows 界面与授权
+"打开主窗口" = "Open main window";
+"快捷面板" = "Quick panel";
+"主窗口" = "Main window";
+"点击托盘图标" = "Tray icon click";
+"关闭快捷面板" = "Close quick panel";
+"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用请点击“授权 Grok Bot”；授权在重启和升级后保留。登录 Token 仅在辅助进程内存中使用。" = "When enabled, queries official quota and tokens using Grok Bot’s own login session, cached for 5 minutes. Click “Authorize Grok Bot” on first use; authorization survives restarts and upgrades. Login tokens stay in helper-process memory only.";
+"此授权功能仅在 Windows 应用中可用。" = "This authorization feature is only available in the Windows app.";
+"Grok Bot 的登录凭据格式暂不支持，请更新 Tokei。" = "This Grok Bot credential format is not supported yet. Please update Tokei.";

@@ -27,7 +27,7 @@ export interface CardSpec {
   tint: RGB;
   /** 有数据才画卡片；没数据的进「未检测到本地数据」。 */
   active: (ctx: CardContext) => boolean;
-  /** compact：只有额度状态、没有 token 用量的小卡，排在前面。 */
+  /** compact：只有额度状态、没有 token 用量的小卡。 */
   presentation?: (ctx: CardContext) => "standard" | "compact";
   /** 卡头有没有「复制此工具用量图」按钮（Mac 版 cardHead 的 toolID），默认有。 */
   copyable?: (ctx: CardContext) => boolean;

@@ -47,6 +47,7 @@ function ClaudeQuotaStatus({ stat }: { stat: ClaudeStat }) {
 
 function ClaudeCard({ ctx }: { ctx: CardContext }) {
   const c = ctx.usage.claude;
+  const cliQuota = ctx.pref("claudeCLIQuotaEnabled", false);
   const r = getRange(c.ranges, ctx.range, EMPTY_CLAUDE_RANGE);
   const sessions = r.sessions ?? 0;
   const state = quotaState([
@@ -75,7 +76,6 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
         hasBreakdown: true,
       };
     });
-  const cliQuota = ctx.pref("claudeCLIQuotaEnabled", false);
   return (
     <VStack>
       <CardHead title="Claude Code" tint={Theme.claude} sessions={sessions} />
@@ -126,11 +126,8 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
             <ThinDivider />
             <QuotaStateNotice
               title={L("暂未获取到额度数据")}
-              detail={
-                cliQuota
-                  ? L("用量统计不受影响；登录态或网络恢复后会自动重试。")
-                  : L("仅使用 CLI 时，可在「隐私与额度」开启 Claude Code CLI 额度查询。")
-              }
+              detail={cliQuota ? L("用量统计不受影响；登录态或网络恢复后会自动重试。")
+                : L("仅使用 CLI 时，可在「隐私与额度」开启 Claude Code CLI 额度查询。")}
               source={L("Claude Code 额度缓存")}
               updated={c.q_updated}
               tint={Theme.claude}

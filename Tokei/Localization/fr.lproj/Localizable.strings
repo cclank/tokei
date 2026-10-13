@@ -500,3 +500,13 @@
 "默认只读 ~/.grok 本地日志，不访问网络" = "Par défaut, lit uniquement les journaux locaux ~/.grok, aucun accès réseau";
 "默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。" = "Par défaut, lit uniquement les instantanés des journaux locaux Grok, sans accès réseau. Si activé, interroge l'API de facturation Grok avec les identifiants locaux.";
 "（当前范围无可复制的用量）" = "(Aucune consommation partageable dans cette plage)";
+
+// Windows 界面与授权
+"打开主窗口" = "Ouvrir la fenêtre principale";
+"快捷面板" = "Panneau rapide";
+"主窗口" = "Fenêtre principale";
+"点击托盘图标" = "Clic sur l’icône de notification";
+"关闭快捷面板" = "Fermer le panneau rapide";
+"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用请点击“授权 Grok Bot”；授权在重启和升级后保留。登录 Token 仅在辅助进程内存中使用。" = "Utilise la session propre à Grok Bot pour consulter les quotas et tokens officiels, avec un cache de 5 minutes. Cliquez sur « Autoriser Grok Bot » à la première utilisation ; l’autorisation est conservée après les redémarrages et mises à jour. Les tokens de connexion restent uniquement en mémoire du processus auxiliaire.";
+"此授权功能仅在 Windows 应用中可用。" = "Cette autorisation est disponible uniquement dans l’application Windows.";
+"Grok Bot 的登录凭据格式暂不支持，请更新 Tokei。" = "Ce format d’identifiants Grok Bot n’est pas encore pris en charge. Mettez Tokei à jour.";

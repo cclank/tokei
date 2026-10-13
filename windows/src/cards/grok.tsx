@@ -1,7 +1,7 @@
 // Grok 卡片（PanelView.grokBlock 及 grokAuthExpiredNotice、grokQuotaStatus、grokQuotaSourceLabel、
 // grokProductLabel、grokProductHelp、grokProductShareRow）与 Grok Bot 卡片（grokBotBlock）。
 // Grok Bot 的官方额度授权在 Mac 上靠钥匙串原生助手（重新授权提示 grokBotReauthorizePrompt），
-// Windows 没有这个助手：不显示授权相关的界面，JSON 里有的额度和用量照常画。
+// Windows 使用 DPAPI 集成脚本；授权入口在设置页，JSON 里的额度和用量照常画。
 import * as Fmt from "../lib/fmt";
 import { L } from "../lib/i18n";
 import { rangeLabel } from "../lib/store";
@@ -438,7 +438,7 @@ function GrokBotCard({ ctx }: { ctx: CardContext }) {
           {fallbackNote}
           <CostHeadline value={Fmt.human(r.calls > 0 ? r.calls : r.turns)} caption={L("%@ 响应", displayedLabel)} />
           <MetricGrid top={activityMetrics} tint={Theme.grokBot} />
-          {/* Mac 版这里还有一行「本地活动 · 授权后显示官方 Token、模型和成本」：授权靠 macOS 钥匙串助手，Windows 上没有，不显示。 */}
+          <Caption size={8.5} text={L("本地活动 · 授权后显示官方 Token、模型和成本")} />
         </>
       ) : (
         !quota.available && <EmptyHint />

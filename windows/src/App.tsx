@@ -1,7 +1,8 @@
-// 托盘面板（Mac 版 PanelView 的外壳）：头部、页签、卡片网格、页脚，以及设置等其他页面。
+// Windows 桌面窗口：导航、页签、卡片网格、页脚，以及设置等其他页面。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CARDS } from "./cards/registry";
 import type { CardContext, CardSpec } from "./cards/spec";
+import { sortedUsageCards } from "./lib/cardOrder";
 import { call, inTauri } from "./lib/collector";
 import { currentLanguage, L } from "./lib/i18n";
 import { recordQuotaHistory } from "./lib/quotaHistory";
@@ -10,14 +11,15 @@ import { pushTrayMenu } from "./lib/native";
 import { getPref, usePrefsVersion } from "./lib/prefs";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
+import { hideQuickPanel, isQuickSurface, openMainWindow } from "./lib/surface";
 import DashboardPage from "./pages/Dashboard";
 import { prewarmDashboard } from "./pages/dashboard/repository";
 import ProjectsPage from "./pages/Projects";
 import QuotaHistoryPage from "./pages/QuotaHistory";
 import SettingsPage from "./pages/Settings";
 import { Icon } from "./ui/Icon";
-import { Card, CardHeadTrailing, HStack, Spacer } from "./ui/kit";
-import { fill, fs, gradient, rgba, T, Theme } from "./ui/theme";
+import { Card, CardHeadTrailing } from "./ui/kit";
+import { fill, fs, rgba, T, Theme } from "./ui/theme";
 
 export type PanelMode = "cards" | "quotaHistory" | "dashboard" | "projects" | "settings";
 
@@ -33,8 +35,9 @@ function festiveEmoji(): string | null {
 
 function HeaderButton({ icon, active, tip, onClick }: { icon: string; active: boolean; tip: string; onClick: () => void }) {
   return (
-    <button className="circle-button" title={tip} onClick={onClick} style={{ color: active ? rgba(Theme.claude) : T.tertiary }}>
-      <Icon name={icon} size={fs(12)} strokeWidth={2} />
+    <button type="button" className={`header-button${active ? " active" : ""}`} title={tip} aria-label={tip} aria-pressed={active} onClick={onClick} style={{ fontSize: fs(11) }}>
+      <Icon name={icon} size={fs(14)} strokeWidth={2} />
+      <span>{tip}</span>
     </button>
   );
 }
@@ -44,8 +47,8 @@ function Header({ mode, setMode }: { mode: PanelMode; setMode: (m: PanelMode) =>
   const emoji = festiveEmoji();
   const toggle = (target: PanelMode) => setMode(mode === target ? "cards" : target);
   return (
-    <HStack gap={9}>
-      <button className="plain" title={L("主页")} onClick={() => setMode("cards")} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+    <header className="panel-header">
+      <button className="plain panel-brand" title={L("主页")} onClick={() => setMode("cards")}>
         <span style={{ position: "relative", display: "grid", placeItems: "center" }}>
           <Icon name="timer" size={fs(18)} color={rgba(Theme.claude)} strokeWidth={2.6} />
           {emoji && <span style={{ position: "absolute", right: -9, top: -9, fontSize: fs(11) }}>{emoji}</span>}
@@ -55,13 +58,14 @@ function Header({ mode, setMode }: { mode: PanelMode; setMode: (m: PanelMode) =>
           <span style={{ fontSize: fs(9), color: T.tertiary, whiteSpace: "nowrap" }}>{L("知度 · AI 用量")}</span>
         </span>
       </button>
-      <Spacer />
-      <span style={{ fontSize: fs(9.5), fontFamily: "var(--mono)", color: T.tertiary, whiteSpace: "nowrap" }}>{lastUpdated}</span>
-      <HeaderButton icon="folder" active={mode === "projects"} tip={L("项目足迹")} onClick={() => toggle("projects")} />
-      <HeaderButton icon="chart.xyaxis.line" active={mode === "quotaHistory"} tip={L("额度曲线")} onClick={() => toggle("quotaHistory")} />
-      <HeaderButton icon="chart.bar" active={mode === "dashboard"} tip={L("数据面板")} onClick={() => toggle("dashboard")} />
-      <HeaderButton icon="gearshape" active={mode === "settings"} tip={L("设置")} onClick={() => toggle("settings")} />
-    </HStack>
+      <span className="panel-updated" style={{ fontSize: fs(9.5) }}>{lastUpdated}</span>
+      <nav className="panel-navigation">
+        <HeaderButton icon="folder" active={mode === "projects"} tip={L("项目足迹")} onClick={() => toggle("projects")} />
+        <HeaderButton icon="chart.xyaxis.line" active={mode === "quotaHistory"} tip={L("额度曲线")} onClick={() => toggle("quotaHistory")} />
+        <HeaderButton icon="chart.bar" active={mode === "dashboard"} tip={L("数据面板")} onClick={() => toggle("dashboard")} />
+        <HeaderButton icon="gearshape" active={mode === "settings"} tip={L("设置")} onClick={() => toggle("settings")} />
+      </nav>
+    </header>
   );
 }
 
@@ -74,6 +78,30 @@ function SegmentedTabs({ value, onChange }: { value: RangeKey; onChange: (k: Ran
         </button>
       ))}
     </div>
+  );
+}
+
+function QuickHeader({ range }: { range: RangeKey }) {
+  const { lastUpdated } = useUsageStore();
+  return (
+    <header className="quick-header">
+      <div className="quick-brand">
+        <Icon name="timer" size={fs(18)} color={rgba(Theme.claude)} />
+        <div>
+          <span className="quick-title">Tokei <span>{L("快捷面板")}</span></span>
+          <span className="quick-updated" style={{ fontSize: fs(9.5) }}>{lastUpdated}</span>
+        </div>
+      </div>
+      <div className="quick-actions">
+        <button type="button" className="header-button" onClick={() => void openMainWindow(range)} style={{ fontSize: fs(10) }}>
+          <Icon name="arrow.up.right" size={fs(12)} />
+          <span>{L("打开主窗口")}</span>
+        </button>
+        <button type="button" className="circle-button" title={L("关闭快捷面板")} aria-label={L("关闭快捷面板")} onClick={() => void hideQuickPanel()}>
+          <Icon name="xmark" size={fs(12)} />
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -152,8 +180,7 @@ function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: R
   const ctx: CardContext = { usage, range, rangeLabel: rangeLabel(range), refreshing, pref: getPref };
   const visible = CARDS.filter((spec) => getPref(spec.visibleKey, spec.visibleDefault));
   const shown = visible.filter((spec) => safe(() => spec.active(ctx), false));
-  const compact = shown.filter((spec) => (spec.presentation?.(ctx) ?? "standard") === "compact");
-  const standard = shown.filter((spec) => (spec.presentation?.(ctx) ?? "standard") === "standard");
+  const ordered = sortedUsageCards(shown, usage, range);
   const inactive = visible.filter((spec) => !shown.includes(spec)).map(cardName);
   const render = (spec: CardSpec) => (
     <Card key={`${spec.id}:${range}`} tint={spec.tint}>
@@ -167,8 +194,7 @@ function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: R
   return (
     <>
       <SegmentedTabs value={range} onChange={setRange} />
-      {compact.length > 0 && <div className={compact.length === 1 ? "grid one" : "grid"}>{compact.map(render)}</div>}
-      {standard.length > 0 && <div className="grid">{standard.map(render)}</div>}
+      <div className={ordered.length === 1 ? "grid one" : "grid"}>{ordered.map(render)}</div>
       {inactive.length > 0 && (
         <div style={{ fontSize: fs(9), color: T.tertiary, textAlign: "center" }}>{L("未检测到本地数据: %@", inactive.join(" · "))}</div>
       )}
@@ -199,21 +225,22 @@ function FooterButton({ icon, label, onClick, active = false, tip }: { icon: str
   );
 }
 
-function Footer({ mode, range, copy }: { mode: PanelMode; range: RangeKey; copy: Copy }) {
+function Footer({ mode, range, copy, quick = false }: { mode: PanelMode; range: RangeKey; copy: Copy; quick?: boolean }) {
   const { usage, lastUpdated, refresh } = useUsageStore();
   const [awake, setAwake] = useState(false);
   useEffect(() => {
+    if (quick) return;
     void call<boolean>("keep_awake_active").then((value) => setAwake(Boolean(value)));
-  }, []);
+  }, [quick]);
   const toggleAwake = async () => {
     const next = await call<boolean>("set_keep_awake", { on: !awake });
     setAwake(next ?? !awake);
   };
   return (
-    <HStack gap={4}>
-      <span style={{ fontSize: fs(9), color: T.tertiary }}>{mode === "settings" ? "Made by lank" : L("成本按 API 价估算,非订阅实付")}</span>
-      <Spacer />
-      <FooterButton icon={awake ? "cup.and.saucer.fill" : "cup.and.saucer"} label={L("防休眠")} active={awake} onClick={toggleAwake} />
+    <footer className="panel-footer">
+      <span className="footer-note" style={{ fontSize: fs(9), color: T.tertiary }}>{mode === "settings" ? "Made by lank" : L("成本按 API 价估算,非订阅实付")}</span>
+      <div className="footer-actions">
+      {!quick && <FooterButton icon={awake ? "cup.and.saucer.fill" : "cup.and.saucer"} label={L("防休眠")} active={awake} onClick={toggleAwake} />}
       <FooterButton
         icon={copy.state.footer ? "checkmark" : "photo.on.rectangle"}
         label={copy.state.footer ? L("已复制") : L("复制")}
@@ -222,36 +249,59 @@ function Footer({ mode, range, copy }: { mode: PanelMode; range: RangeKey; copy:
         }}
       />
       <FooterButton icon="arrow.clockwise" label={L("刷新")} onClick={refresh} />
-      <FooterButton icon="power" label={L("退出")} onClick={() => void call("quit_app")} />
-    </HStack>
+      {!quick && <FooterButton icon="power" label={L("退出")} onClick={() => void call("quit_app")} />}
+      </div>
+    </footer>
   );
 }
 
 function Panel() {
   const [mode, setMode] = useState<PanelMode>("cards");
-  const [range, setRange] = useState<RangeKey>("today");
+  const [range, setRange] = useState<RangeKey>(() => {
+    const value = new URLSearchParams(window.location.search).get("range") as RangeKey;
+    return DISPLAY_RANGES.includes(value) ? value : "today";
+  });
   const copy = useCopyFeedback();
+  const scroll = useRef<HTMLElement>(null);
   usePrefsVersion();
   const language = currentLanguage();
   useEffect(() => {
-    if (inTauri) void pushTrayMenu();
+    scroll.current?.scrollTo({ top: 0 });
+  }, [mode]);
+  useEffect(() => {
+    if (inTauri && !isQuickSurface) void pushTrayMenu();
   }, [language]);
   useEffect(() => {
-    if (!inTauri) return;
-    let off: (() => void) | undefined;
-    import("@tauri-apps/api/event").then(async ({ listen }) => {
-      off = await listen("tokei://open-settings", () => setMode("settings"));
-    });
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") void call("hide_panel");
+      if (event.key === "Escape") {
+        if (isQuickSurface) void hideQuickPanel();
+        else setMode("cards");
+      }
     };
     window.addEventListener("keydown", onKey);
+    let disposed = false;
+    let off: (() => void)[] = [];
+    if (inTauri && !isQuickSurface) {
+      void import("@tauri-apps/api/event").then(async ({ listen }) => {
+        const listeners = await Promise.all([
+          listen("tokei://open-settings", () => setMode("settings")),
+          listen<RangeKey | null>("tokei://open-home", (event) => {
+            setMode("cards");
+            if (event.payload && DISPLAY_RANGES.includes(event.payload)) setRange(event.payload);
+          }),
+        ]);
+        if (disposed) listeners.forEach((unlisten) => unlisten());
+        else off = listeners;
+      });
+    }
     return () => {
-      off?.();
+      disposed = true;
+      off.forEach((unlisten) => unlisten());
       window.removeEventListener("keydown", onKey);
     };
   }, []);
   const content = useMemo(() => {
+    if (isQuickSurface) return <CardsPage range={range} setRange={setRange} copy={copy} />;
     switch (mode) {
       case "settings":
         return <SettingsPage onClose={() => setMode("cards")} />;
@@ -266,15 +316,14 @@ function Panel() {
     }
   }, [mode, range, copy]);
   return (
-    <div className="panel" style={{ background: `${gradient([0.2, 0.21, 0.25], 0.97)}` }}>
-      <div className="panel-scroll">
+    <div className={`panel${isQuickSurface ? " quick-window" : ""}`}>
+      {isQuickSurface ? <QuickHeader range={range} /> : <Header mode={mode} setMode={setMode} />}
+      <main className="panel-scroll" ref={scroll}>
         <div className="panel-content">
-          <Header mode={mode} setMode={setMode} />
           {content}
-          <div style={{ flex: 1 }} />
-          <Footer mode={mode} range={range} copy={copy} />
         </div>
-      </div>
+      </main>
+      <Footer mode={mode} range={range} copy={copy} quick={isQuickSurface} />
     </div>
   );
 }
@@ -292,8 +341,13 @@ function onUsage(usage: Usage) {
 }
 
 export default function App() {
+  useEffect(() => {
+    if (inTauri && !isQuickSurface) {
+      void call("start_activity_reporter", { enabled: getPref("shareBasicActivity", true) }).catch(() => {});
+    }
+  }, []);
   return (
-    <UsageProvider onUsage={onUsage}>
+    <UsageProvider onUsage={isQuickSurface ? undefined : onUsage} shared={isQuickSurface}>
       <Panel />
     </UsageProvider>
   );

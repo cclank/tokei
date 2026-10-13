@@ -82,7 +82,7 @@ export function CardHead({
           flex: "none",
         }}
       />
-      <span style={{ fontSize: fs(14), fontWeight: 700, color: T.primary, whiteSpace: "nowrap" }}>{title}</span>
+      <span className="card-title" style={{ fontSize: fs(14), fontWeight: 700, color: T.primary }}>{title}</span>
       {sessions > 0 && (
         <span
           style={{
@@ -92,6 +92,7 @@ export function CardHead({
             padding: "1.5px 5px",
             borderRadius: 999,
             background: rgba(tint, 0.12),
+            flexShrink: 0,
           }}
         >
           {sessions}
@@ -145,11 +146,11 @@ export function MetricCell({ m, tint }: { m: Metric; tint: RGB }) {
         <Icon name={m.icon} size={fs(10.5)} strokeWidth={2.6} />
       </span>
       <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-        <span style={{ fontSize: fs(9.5), color: T.tertiary, display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: fs(9.5), color: T.tertiary, display: "flex", alignItems: "center", gap: 3, overflowWrap: "anywhere" }}>
           {m.label}
           {m.help && <Icon name="info.circle" size={fs(8.5)} strokeWidth={2} />}
         </span>
-        <span style={{ fontSize: fs(12.5), fontWeight: 600, fontFamily: MONO, color: T.primary, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: fs(12.5), fontWeight: 600, fontFamily: MONO, color: T.primary, overflowWrap: "anywhere" }}>
           {m.value}
         </span>
       </div>
@@ -195,7 +196,7 @@ export function RingMetricCell({ value, label, tint }: { value: number; label: s
 /** 两列指标格：top 在前，命中率环（hit>0 时）其后，再接 extra。 */
 export function MetricGrid({ top = [], hit = 0, extra = [], tint }: { top?: Metric[]; hit?: number; extra?: Metric[]; tint: RGB }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 10, rowGap: 9 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", columnGap: 10, rowGap: 9 }}>
       {top.map((m, i) => (
         <MetricCell key={`t${i}`} m={m} tint={tint} />
       ))}

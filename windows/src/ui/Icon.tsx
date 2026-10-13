@@ -1,4 +1,4 @@
-// Mac 版用 SF Symbols；这里按同名映射到 lucide 图标，移植过来的代码可以照抄符号名。
+// Mac 版用 SF Symbols；这里将同名符号映射到跨平台的 lucide SVG。
 import type { CSSProperties } from "react";
 import {
   Activity,
@@ -149,5 +149,5 @@ export function Icon({
   style?: CSSProperties;
 }) {
   const Component = MAP[name] ?? Info;
-  return <Component size={size} color={color ?? "currentColor"} strokeWidth={strokeWidth} style={style} />;
+  return <Component className="icon" size={size} color={color ?? "currentColor"} strokeWidth={strokeWidth} aria-hidden="true" focusable="false" style={{ flexShrink: 0, ...style }} />;
 }

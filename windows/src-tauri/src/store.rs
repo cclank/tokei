@@ -26,6 +26,13 @@ const SECRETS: &[(&str, &str)] = &[
 ];
 
 pub fn tokei_dir() -> Result<PathBuf, String> {
+    // 本机原生窗口测试使用独立目录，避免写入维护者的真实配置和额度历史。
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("TOKEI_TEST_STATE_DIR") {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() { return Ok(dir); }
+        return Err("TOKEI_TEST_STATE_DIR must be an absolute path".into());
+    }
     let home = dirs::home_dir().ok_or_else(|| "找不到用户目录".to_string())?;
     Ok(home.join(".tokei"))
 }

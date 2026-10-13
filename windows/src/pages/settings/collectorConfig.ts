@@ -4,6 +4,8 @@
 import { CARDS } from "../../cards/registry";
 import { hasSecret, updateTokeiConfig } from "../../lib/native";
 import { getPref } from "../../lib/prefs";
+import { setPref } from "../../lib/prefs";
+import { call, inTauri } from "../../lib/collector";
 
 /** 「显示卡片」里会顺带开关采集的几张卡：偏好键 → config.json 的键。 */
 export const CARD_CONFIG_KEYS: Record<string, string> = {
@@ -19,6 +21,8 @@ export const CARD_CONFIG_KEYS: Record<string, string> = {
 
 /** 「隐私与额度」里的开关：偏好键 → config.json 的键（都默认关）。 */
 export const PRIVACY_CONFIG_KEYS: Record<string, string> = {
+  shareBasicActivity: "share_basic_activity",
+  claudeCLIQuotaEnabled: "claude_cli_quota_enabled",
   grokLiveQuotaEnabled: "grok_live_quota_enabled",
   grokBotQuotaEnabled: "grok_bot_quota_enabled",
   qwenWorkQuotaEnabled: "qwenwork_quota_enabled",
@@ -51,13 +55,19 @@ function cardShown(visibleKey: string): boolean {
  * 但采集脚本默认不采，开关从没动过就永远不会写进 config.json。MiniMax 要卡片开着且填过 Key 才联网查。
  */
 export async function syncCollectorConfigOnLaunch(): Promise<void> {
+  if (inTauri) {
+    const saved = await call<Record<string, unknown>>("read_tokei_config").catch(() => undefined);
+    for (const [prefKey, configKey] of Object.entries(PRIVACY_CONFIG_KEYS)) {
+      if (typeof saved?.[configKey] === "boolean") setPref(prefKey, saved[configKey]);
+    }
+  }
   const patch: Record<string, boolean> = {};
   for (const [visibleKey, configKey] of Object.entries(CARD_CONFIG_KEYS)) {
     if (visibleKey === "showMiniMax") continue;
     patch[configKey] = cardShown(visibleKey);
   }
   for (const [prefKey, configKey] of Object.entries(PRIVACY_CONFIG_KEYS)) {
-    patch[configKey] = getPref(prefKey, false);
+    patch[configKey] = getPref(prefKey, prefKey === "shareBasicActivity");
   }
   patch.minimax_quota_enabled = cardShown("showMiniMax") && (await minimaxKeyStored());
   try {

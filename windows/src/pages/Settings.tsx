@@ -4,19 +4,20 @@
 import { useEffect, useState } from "react";
 import { CARDS } from "../cards/registry";
 import type { CardSpec } from "../cards/spec";
-import { inTauri } from "../lib/collector";
+import { call, inTauri } from "../lib/collector";
 import { L, selectedLanguage, setLanguage, type LangSetting } from "../lib/i18n";
 import { autostartEnabled, openExternal, setAutostart } from "../lib/native";
 import { getPref, setPref, usePrefsVersion } from "../lib/prefs";
 import { pushTrayTooltip, useUsageStore } from "../lib/store";
 import { Icon } from "../ui/Icon";
-import { ThinDivider } from "../ui/kit";
 import { FONT_SIZE_KEY, fs, rgba, T, Theme } from "../ui/theme";
-import { CARD_CONFIG_KEYS, minimaxKeyStored, PRIVACY_CONFIG_KEYS, writeCollectorFlag } from "./settings/collectorConfig";
+import { CARD_CONFIG_KEYS, minimaxKeyStored, writeCollectorFlag } from "./settings/collectorConfig";
+import { PrivacySection } from "./settings/PrivacySection";
 import { Note, Segmented, SettingsSection, StackedValue, TintToggleRow, ToggleGrid, ToggleRow } from "./settings/controls";
 import { DiagnosticsSection, PricingSection } from "./settings/MaintenanceSections";
 import { ProviderQuotaSection } from "./settings/ProviderQuotaSection";
 import { TRAY_QUOTA_SOURCES, trayQuotaEnabled } from "../lib/trayQuota";
+import { normalizeTrayClickAction, openQuickPanel, TRAY_CLICK_KEY, type TrayClickAction } from "../lib/surface";
 
 const GITHUB_URL = "https://github.com/cclank/tokei";
 
@@ -148,6 +149,29 @@ function AgentsSection() {
 
 function AppearanceSection() {
   const fontSize = getPref<string>(FONT_SIZE_KEY, "small") === "large" ? "large" : "small";
+  const trayAction = normalizeTrayClickAction(getPref(TRAY_CLICK_KEY, "quick"));
+  const [savingTray, setSavingTray] = useState(false);
+  const [trayError, setTrayError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    void call<TrayClickAction>("get_tray_click_action").then((action) => {
+      if (!disposed && action) setPref(TRAY_CLICK_KEY, normalizeTrayClickAction(action));
+    }).catch((err) => { if (!disposed) setTrayError(String(err)); });
+    return () => { disposed = true; };
+  }, []);
+  const changeTrayAction = async (action: TrayClickAction) => {
+    if (savingTray) return;
+    setSavingTray(true);
+    setTrayError(null);
+    try {
+      const saved = await call<TrayClickAction>("set_tray_click_action", { action });
+      setPref(TRAY_CLICK_KEY, saved ?? action);
+    } catch (err) {
+      setTrayError(String(err));
+    } finally {
+      setSavingTray(false);
+    }
+  };
   return (
     <SettingsSection icon="textformat.size" title={L("界面")}>
       <StackedValue title={L("语言")}>
@@ -165,6 +189,21 @@ function AppearanceSection() {
           ))}
         </select>
       </StackedValue>
+      <StackedValue title={L("点击托盘图标")}>
+        <div aria-busy={savingTray} style={savingTray ? { pointerEvents: "none", opacity: 0.65 } : undefined}>
+          <Segmented
+            label={L("点击托盘图标")}
+            value={trayAction}
+            onChange={(value) => void changeTrayAction(value)}
+            options={[
+              { value: "quick", label: L("快捷面板") },
+              { value: "window", label: L("主窗口") },
+            ]}
+          />
+        </div>
+      </StackedValue>
+      <button type="button" className="st-action" onClick={() => void openQuickPanel()} style={{ fontSize: fs(10), alignSelf: "flex-end" }}>{L("预览")}</button>
+      {trayError && <Note>{trayError}</Note>}
       <StackedValue title={L("字体大小")}>
         <Segmented
           label={L("字体大小")}
@@ -202,35 +241,6 @@ function TrayQuotaSection() {
           />
         ))}
       </ToggleGrid>
-    </SettingsSection>
-  );
-}
-
-function PrivacySection() {
-  const { refresh } = useUsageStore();
-  const row = (title: string, prefKey: string) => (
-    <ToggleRow
-      title={title}
-      on={getPref(prefKey, false)}
-      onChange={(enabled) => {
-        setPref(prefKey, enabled);
-        void writeCollectorFlag(PRIVACY_CONFIG_KEYS[prefKey], enabled).then(refresh);
-      }}
-    />
-  );
-  return (
-    <SettingsSection icon="lock.shield" title={L("隐私与额度")}>
-      {row(L("Grok 实时额度查询"), "grokLiveQuotaEnabled")}
-      <Note>{L("默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。")}</Note>
-      <ThinDivider />
-      {row(L("Grok Bot 额度查询"), "grokBotQuotaEnabled")}
-      <ThinDivider />
-      {row(L("千问办公额度查询"), "qwenWorkQuotaEnabled")}
-      <Note>
-        {L(
-          "默认关闭。开启后，Tokei 仅连接千问办公桌面端在本机 127.0.0.1 提供的受保护接口；千问办公可能随之向官方服务刷新额度。Tokei 不读取或保存登录凭据，需保持千问办公已登录并运行。",
-        )}
-      </Note>
     </SettingsSection>
   );
 }

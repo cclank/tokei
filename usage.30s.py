@@ -257,6 +257,8 @@ CMDCODE_DIR = os.path.abspath(os.path.expanduser(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _USER_DIR = os.path.join(HOME, ".tokei")
+if _IS_WINDOWS and os.path.isabs(os.environ.get("TOKEI_WINDOWS_STATE_DIR", "")):
+    _USER_DIR = os.environ["TOKEI_WINDOWS_STATE_DIR"]
 
 def _writable_path(name):
     """优先用 ~/.tokei/ 下的可写副本,没有则用脚本同目录(开发模式)。"""
@@ -6479,6 +6481,8 @@ def _provider_quota_enabled(provider):
     if env == "1":
         return True
     default = provider in ("antigravity", "devin")
+    if provider == "claude_cli":
+        return _tokei_config().get("claude_cli_quota_enabled") is True
     return bool(_tokei_config().get(f"{provider}_quota_enabled", default))
 
 
@@ -7106,6 +7110,13 @@ def _normalize_cursor_quota(summary, *, request_usage=None, sand_usage=None, use
 
 
 def _grok_bot_active_account_id(path=None):
+    if _IS_WINDOWS and path is None:
+        bridge = _windows_native_bridge()
+        if bridge:
+            try:
+                return bridge.grok_metadata()[2]
+            except (OSError, ValueError, bridge.BridgeError):
+                return None
     secrets_path = path or _first_existing_file(GROK_BOT_SECRET_PATHS)
     if not secrets_path or not os.path.isfile(secrets_path):
         return None
@@ -7174,6 +7185,30 @@ def _grok_bot_helper_files():
             os.path.join(directory, "grok_bot_helper.state.json"))
 
 
+_WINDOWS_NATIVE_BRIDGE = None
+
+
+def _windows_native_bridge():
+    global _WINDOWS_NATIVE_BRIDGE
+    if not _IS_WINDOWS:
+        return None
+    if _WINDOWS_NATIVE_BRIDGE is None:
+        import importlib.util
+        candidates = [os.path.join(BASE_DIR, "windows_native.py"),
+                      os.path.join(BASE_DIR, "windows", "native_bridge.py")]
+        path = next((p for p in candidates if os.path.isfile(p)), None)
+        if not path:
+            return None
+        try:
+            spec = importlib.util.spec_from_file_location("tokei_windows_native", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _WINDOWS_NATIVE_BRIDGE = module
+        except (OSError, ImportError):
+            return None
+    return _WINDOWS_NATIVE_BRIDGE
+
+
 def _grok_bot_helper_running(state):
     pid, started = state.get("pid"), state.get("started")
     if not isinstance(pid, int) or not isinstance(started, (int, float)):
@@ -7181,7 +7216,23 @@ def _grok_bot_helper_running(state):
     if _time.time() - started > _GROK_BOT_HELPER_MAX_RUNTIME:
         return False
     if _IS_WINDOWS:
-        return False  # Windows 上 os.kill(pid, 0) 会直接结束进程，而且这里不会有助手
+        # Windows 上 os.kill(pid, 0) 会结束进程；只查询进程状态。
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value == 259)
+        finally:
+            kernel.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -7221,7 +7272,11 @@ def _grok_bot_helper_take_result(marker):
 # 辅助程序的翻页上限。平时只拉最近两天（--since 那天零点起），这两天整天替换，
 # 更早的日子原样留着；还没有存档时才从年初拉一次。只留今年的，跨年自动清掉。
 def _grok_bot_event_dir():
-    return os.path.join(os.path.dirname(PROVIDER_QUOTA_CACHE) or ".", "grok_bot_events")
+    directory = os.path.join(os.path.dirname(PROVIDER_QUOTA_CACHE) or ".", "grok_bot_events")
+    if _IS_WINDOWS:
+        # Windows 授权按账号隔离，切换登录后不混用其他账号的官方事件。
+        return os.path.join(directory, _grok_bot_active_account_id() or "unavailable")
+    return directory
 
 
 def _grok_bot_stored_days():
@@ -7329,7 +7384,8 @@ def _grok_bot_merge_events(payload):
 
 def _grok_bot_helper_start(marker):
     """后台没在跑就启动一次辅助程序。返回 (是否有一次在跑, 是不是这次启动的)。"""
-    helper = _grok_bot_helper_path()
+    bridge = _windows_native_bridge() if _IS_WINDOWS else None
+    helper = bridge.__file__ if bridge else _grok_bot_helper_path()
     if not helper or not marker:
         return False, False
     result_path, state_path = _grok_bot_helper_files()
@@ -7342,12 +7398,20 @@ def _grok_bot_helper_start(marker):
     since_args = '--since "$3"' if since is not None else ""
     try:
         os.makedirs(os.path.dirname(result_path) or ".", mode=0o700, exist_ok=True)
-        process = subprocess.Popen(
-            ["/bin/sh", "-c",
-             f'umask 077; "$0" --grok-bot-data-json {since_args} > "$1" && mv -f "$1" "$2" || rm -f "$1"',
-             helper, temporary, result_path, str(since or "")],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, close_fds=True)
+        if _IS_WINDOWS:
+            args = [sys.executable, helper, "grok-data", "--result", result_path]
+            if since is not None:
+                args.extend(["--since", str(since)])
+            process = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=0x08000000, close_fds=True)
+        else:
+            process = subprocess.Popen(
+                ["/bin/sh", "-c",
+                 f'umask 077; "$0" --grok-bot-data-json {since_args} > "$1" && mv -f "$1" "$2" || rm -f "$1"',
+                 helper, temporary, result_path, str(since or "")],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=True)
     except OSError:
         return False, False
     _atomic_write_json(state_path, {"pid": process.pid, "started": int(_time.time()), "marker": marker})
@@ -7597,7 +7661,11 @@ def _grok_bot_usage_only_fallback():
 
 
 def fetch_grok_bot_quota(session=None):
-    native_fallback = _latest_cached_provider_quota(
+    if _IS_WINDOWS:
+        bridge = _windows_native_bridge()
+        if bridge is None or bridge.grok_status().get("status") != "authorized":
+            return None
+    native_fallback = None if _IS_WINDOWS else _latest_cached_provider_quota(
         "grok_bot", _PROVIDER_QUOTA_FALLBACK_TTL, stale=True) \
         or _grok_bot_usage_only_fallback()
     if session is None:
@@ -7654,6 +7722,9 @@ def fetch_grok_bot_quota(session=None):
                         return {}
                 _save_provider_quota_attempt("grok_bot", native_marker)
 
+    if _IS_WINDOWS:
+        # 查询 Grok Bot 自身账号；没有授权时不借用其他应用的账号。
+        return native_fallback
     session = session or _cursor_session()
     if not session:
         return native_fallback
@@ -14702,7 +14773,12 @@ def _scan_claude_plan_raw(now=None):
 
 
 def scan_claude_plan():
-    return _claude_quota_from_environment() or _scan_claude_plan_raw()
+    quota = _claude_quota_from_environment() or _scan_claude_plan_raw()
+    if _IS_WINDOWS and _provider_quota_enabled("claude_cli"):
+        bridge = _windows_native_bridge()
+        if bridge:
+            quota = bridge.fetch_claude_quota(quota or {})
+    return quota
 
 
 @_with_scan_cache_lock

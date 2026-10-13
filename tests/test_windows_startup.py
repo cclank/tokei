@@ -117,3 +117,61 @@ for (const bad of ['{', JSON.stringify({version: 99}), encodeUsagePreview(usage,
             result = subprocess.run([node, "-e", script, str(Path(tmp) / "usagePreview.js")],
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+    def test_language_tables_are_loaded_in_each_window_after_a_shared_preference_change(self):
+        node = shutil.which("node")
+        compiler = ROOT / "windows/node_modules/typescript/bin/tsc"
+        if not node or not compiler.is_file():
+            self.skipTest("Windows frontend dependencies are not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run([node, str(compiler), "--ignoreConfig", "--module", "commonjs",
+                                     "--target", "ES2020", "--skipLibCheck", "--outDir", tmp,
+                                     "src/lib/i18n.ts", "src/vite-env.d.ts"],
+                                    cwd=ROOT / "windows", capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            script = r"""
+const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const assert = require('node:assert/strict');
+const folder = process.argv[1], storage = new Map();
+const tick = () => new Promise(resolve => setTimeout(resolve, 20));
+function realm() {
+ const handlers=[], cache=new Map(), reads=[];
+ const context = vm.createContext({console, navigator:{languages:['zh'],language:'zh'},
+  localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},
+  window:{addEventListener:(name,fn)=>{if(name==='storage')handlers.push(fn)}} });
+ const load = (name) => {
+  if (name === 'react') return {};
+  if (name.includes('.lproj/')) {
+   const lang=name.match(/(en|fr|ja|ko)\.lproj/)[1]; reads.push(lang);
+   return {__esModule:true,default:`"主页" = "${{en:'Home',ja:'ホーム',fr:'Accueil',ko:'홈'}[lang]}";`};
+  }
+  const file=path.join(folder,name.replace('./','')+'.js');
+  if(cache.has(file)) return cache.get(file);
+  const exports={}; cache.set(file,exports);
+  vm.runInContext('(function(exports, require){'+fs.readFileSync(file,'utf8')+'})',context)(exports,load);
+  return exports;
+ };
+ return {i18n:load('./i18n'),handlers,reads};
+}
+(async()=>{
+ const main=realm(), follower=realm();
+ await main.i18n.prepareLanguage(); await follower.i18n.prepareLanguage();
+ assert.equal(main.reads.length,0);assert.equal(follower.reads.length,0);
+ main.i18n.setLanguage('ja');await tick();
+ assert.equal(main.i18n.L('主页'),'ホーム');
+ for(const handler of follower.handlers)handler({key:'appLanguage'});
+ await tick();
+ assert.equal(follower.i18n.L('主页'),'ホーム');
+ assert.deepEqual([...follower.reads].sort(),['en','ja']);
+ await Promise.all([follower.i18n.prepareLanguage(),follower.i18n.prepareLanguage()]);
+ assert.equal(follower.reads.length,2); // No duplicate module reads.
+ main.i18n.setLanguage('fr'); await tick();
+ for(const handler of follower.handlers)handler({key:'appLanguage'});
+ await tick();assert.equal(follower.i18n.L('主页'),'Accueil');
+ assert.equal(follower.reads.includes('ko'),false);
+ console.log('language loading and cross-window preference synchronization passed');
+})().catch(err=>{console.error(err);process.exitCode=1});
+"""
+            result = subprocess.run([node, "-e", script, tmp], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

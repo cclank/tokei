@@ -1,7 +1,7 @@
 // 界面语言，与 Mac 版 L10n.swift 同一套规则：
 // 中文是源语言，代码里写的中文原文就是 key；其他语言查 Tokei/Localization/<lang>.lproj 的词表
 // （直接读 Mac 版那份，不另存一份）。法、日、韩缺词先回退英文，再回退中文原文。
-import { getPref, setPref } from "./prefs";
+import { getPref, invalidatePrefs, setPref } from "./prefs";
 
 export type Lang = "zh" | "en" | "fr" | "ja" | "ko";
 export type LangSetting = "system" | Lang;
@@ -82,10 +82,12 @@ function loadTable(lang: Exclude<Lang, "zh">): Promise<void> {
   return promise;
 }
 
-export async function prepareLanguage(lang = currentLanguage()): Promise<void> {
-  if (lang === "zh") return;
+let loadedLanguage: Lang | undefined;
+export async function prepareLanguage(lang = requestedLanguage()): Promise<void> {
+  if (lang === "zh") { loadedLanguage = "zh"; return; }
   try { await Promise.all(lang === "en" ? [loadTable("en")] : [loadTable(lang), loadTable("en")]); }
   catch (err) { console.error("Tokei language load failed", err); }
+  if (tables[lang] && tables.en) loadedLanguage = lang;
 }
 
 /** 跟随系统时取浏览器 / WebView 的首选语言，不支持的回退英文。 */
@@ -105,9 +107,15 @@ export function selectedLanguage(): LangSetting {
   return all.some((l) => l.startsWith("zh")) ? "zh" : "system";
 }
 
-export function currentLanguage(): Lang {
+function requestedLanguage(): Lang {
   const selected = selectedLanguage();
   return selected === "system" ? resolveSystem() : selected;
+}
+
+export function currentLanguage(): Lang {
+  const requested = requestedLanguage();
+  const ready = requested === "zh" || (tables[requested] && tables.en);
+  return ready ? requested : loadedLanguage ?? requested;
 }
 
 let languageChange = 0;
@@ -117,6 +125,12 @@ export function setLanguage(value: LangSetting) {
     if (change === languageChange) { dataPatterns = null; setPref(LANGUAGE_KEY, value); }
   });
 }
+
+// Other WebViews share the preference, but have their own module cache.
+window.addEventListener("storage", (event) => {
+  if (event.key !== LANGUAGE_KEY && event.key !== null) return;
+  void prepareLanguage().then(() => { dataPatterns = null; invalidatePrefs(); });
+});
 
 export function isChinese(): boolean {
   return currentLanguage() === "zh";

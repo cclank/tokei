@@ -15000,7 +15000,7 @@ def compute(local_only=False):
     p5, pw = quota["p5"], quota["pw"]
     r5, rw = quota["r5"], quota["rw"]
 
-    # Windows 首屏先读本地用量；网络额度、登录凭据和授权助手留给完整刷新。
+    # Windows 首屏先读本地用量；网络额度查询和授权助手留给完整刷新。
     if local_only:
         plan, grok_quota, qwenwork_quota = {}, {}, {}
         kimi_plan = kimi_updated = None

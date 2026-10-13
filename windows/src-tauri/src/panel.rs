@@ -1,122 +1,296 @@
-//! 托盘弹出面板：挂在托盘图标旁边，失去焦点就收起。
-//!
-//! 位置用点托盘时拿到的图标矩形来算：任务栏在下面（Windows 默认）就弹到图标上方，
-//! 在上面（macOS 菜单栏、或把任务栏拖到顶部）就弹到下方；水平方向以图标为中心，
-//! 并夹在这块屏幕的工作区里。高度按屏幕比例，和 Mac 版一样不写死。
+//! 常规主窗口和独立托盘快捷面板，各自保留对应的窗口行为。
 
+use crate::{
+    placement::{quick_placement, Bounds},
+    store,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindowBuilder,
+    WindowEvent,
+};
 
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow};
-
+// 沿用原窗口标签，保留现有 WebView 偏好和权限配置。
 pub const LABEL: &str = "panel";
-/// 逻辑像素。两列卡片的宽度，与 Mac 版宽面板一致。
-const WIDTH: f64 = 640.0;
-/// 面板最多占屏幕工作区高度的比例（Mac 版 PanelPlacement.heightRatio）。
-const HEIGHT_RATIO: f64 = 0.88;
-const MIN_HEIGHT: f64 = 420.0;
-const MARGIN: f64 = 8.0;
+pub const QUICK_LABEL: &str = "quick";
+const PREFS_FILE: &str = "windows-ui.json";
 
-#[derive(Default)]
-pub struct PanelState {
-    inner: Mutex<Inner>,
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrayAction {
+    #[default]
+    Quick,
+    Window,
 }
 
 #[derive(Default)]
-struct Inner {
-    /// 上次点托盘时图标的位置（物理像素）：从菜单、第二个实例唤出面板时沿用。
-    tray: Option<(PhysicalPosition<f64>, PhysicalSize<f64>)>,
-    /// 面板因失焦收起的时间。点托盘图标本身就会先让面板失焦，紧接着的那次点击
-    /// 应当是「关掉」而不是「重新打开」。
+pub struct SurfaceState {
+    quick: Mutex<QuickState>,
+    action: Mutex<TrayAction>,
+}
+
+#[derive(Default)]
+struct QuickState {
+    tray: Option<Bounds>,
     blurred_at: Option<Instant>,
+    creating: bool,
+    requested: bool,
+    pending_rect: Option<Rect>,
 }
 
-fn window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window(LABEL)
-}
-
-pub fn toggle(app: &AppHandle, rect: Rect) {
-    let Some(win) = window(app) else { return };
-    let state = app.state::<PanelState>();
-    let just_blurred = state
-        .inner
-        .lock()
-        .ok()
-        .and_then(|inner| inner.blurred_at)
-        .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
-    if win.is_visible().unwrap_or(false) || just_blurred {
-        hide(app);
-        return;
-    }
-    show_near_tray(app, Some(rect));
-}
-
-pub fn show_near_tray(app: &AppHandle, rect: Option<Rect>) {
-    let Some(win) = window(app) else { return };
-    let state = app.state::<PanelState>();
-    let scale = win.scale_factor().unwrap_or(1.0);
-    let tray = rect
-        .map(|r| (r.position.to_physical::<f64>(scale), r.size.to_physical::<f64>(scale)))
-        .or_else(|| state.inner.lock().ok().and_then(|inner| inner.tray));
-    if let Ok(mut inner) = state.inner.lock() {
-        if tray.is_some() {
-            inner.tray = tray;
+impl SurfaceState {
+    pub fn load() -> Self {
+        let action = store::read_tokei_file(PREFS_FILE.into())
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("tray_action").cloned())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        Self {
+            action: Mutex::new(action),
+            ..Default::default()
         }
-        inner.blurred_at = None;
-    }
-    place(&win, tray);
-    let _ = win.show();
-    let _ = win.set_focus();
-    let _ = app.emit("tokei://panel-shown", ());
-}
-
-pub fn hide(app: &AppHandle) {
-    if let Some(win) = window(app) {
-        let _ = win.hide();
     }
 }
 
-pub fn on_blur(app: &AppHandle) {
-    let Some(win) = window(app) else { return };
-    if !win.is_visible().unwrap_or(false) {
+#[tauri::command]
+pub fn get_tray_click_action(state: tauri::State<'_, SurfaceState>) -> TrayAction {
+    *state.action.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[tauri::command]
+pub fn set_tray_click_action(
+    app: AppHandle,
+    state: tauri::State<'_, SurfaceState>,
+    action: TrayAction,
+) -> Result<TrayAction, String> {
+    let mut selected = state.action.lock().unwrap_or_else(|e| e.into_inner());
+    let mut prefs = match store::read_tokei_file(PREFS_FILE.into())? {
+        Some(text) => serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text)
+            .map_err(|e| e.to_string())?,
+        None => serde_json::Map::new(),
+    };
+    prefs.insert(
+        "tray_action".into(),
+        serde_json::to_value(action).map_err(|e| e.to_string())?,
+    );
+    store::write_tokei_file(
+        PREFS_FILE.into(),
+        serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?,
+    )?;
+    *selected = action;
+    hide_quick(&app);
+    Ok(action)
+}
+
+pub fn tray_click(app: &AppHandle, rect: Rect) {
+    match get_tray_click_action(app.state::<SurfaceState>()) {
+        TrayAction::Window => show(app),
+        TrayAction::Quick => toggle_quick(app, rect),
+    }
+}
+
+pub fn show(app: &AppHandle) {
+    hide_quick(app);
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return;
+    };
+    let _ = window.show();
+    if window.is_minimized().unwrap_or(false) {
+        let _ = window.unminimize();
+    }
+    let _ = window.set_focus();
+    let _ = app.emit_to(LABEL, "tokei://panel-shown", ());
+}
+
+#[tauri::command]
+pub fn open_main_window(app: AppHandle, range: Option<String>) -> Result<(), String> {
+    if range.as_deref().is_some_and(|range| {
+        !["today", "yesterday", "week", "last_week", "month", "year"].contains(&range)
+    }) {
+        return Err("Unknown time range".into());
+    }
+    show(&app);
+    app.emit_to(LABEL, "tokei://open-home", range)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn hide_quick_panel(app: AppHandle) {
+    hide_quick(&app);
+}
+
+#[tauri::command]
+pub fn open_quick_panel(app: AppHandle) {
+    show_quick(&app, None);
+}
+
+#[tauri::command]
+pub fn quick_panel_visible(app: AppHandle) -> bool {
+    app.get_webview_window(QUICK_LABEL)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
+}
+
+pub fn hide_quick(app: &AppHandle) {
+    app.state::<SurfaceState>()
+        .quick
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .requested = false;
+    if let Some(window) = app.get_webview_window(QUICK_LABEL) {
+        let _ = window.hide();
+        let _ = app.emit_to(LABEL, "tokei://quick-visible", false);
+    }
+}
+
+pub fn quick_blurred(app: &AppHandle) {
+    if !quick_panel_visible(app.clone()) {
         return;
     }
-    if let Ok(mut inner) = app.state::<PanelState>().inner.lock() {
-        inner.blurred_at = Some(Instant::now());
-    }
-    let _ = win.hide();
+    let state = app.state::<SurfaceState>();
+    state
+        .quick
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .blurred_at = Some(Instant::now());
+    hide_quick(app);
 }
 
-fn place(win: &WebviewWindow, tray: Option<(PhysicalPosition<f64>, PhysicalSize<f64>)>) {
+fn toggle_quick(app: &AppHandle, rect: Rect) {
+    let state = app.state::<SurfaceState>();
+    let quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+    let just_blurred = quick
+        .blurred_at
+        .is_some_and(|time| time.elapsed() < Duration::from_millis(300));
+    let requested = quick.requested;
+    drop(quick);
+    if requested || quick_panel_visible(app.clone()) || just_blurred {
+        hide_quick(app);
+        return;
+    }
+    show_quick(app, Some(rect));
+}
+
+pub fn show_quick(app: &AppHandle, rect: Option<Rect>) {
+    {
+        let state = app.state::<SurfaceState>();
+        let mut quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+        quick.requested = true;
+        if rect.is_some() {
+            quick.pending_rect = rect;
+        }
+        if app.get_webview_window(QUICK_LABEL).is_none() {
+            if quick.creating {
+                return;
+            }
+            quick.creating = true;
+            drop(quick);
+            let handle = app.clone();
+            // WebView2 creation must run outside synchronous command/event handlers.
+            std::thread::spawn(move || {
+                let result = create_quick(&handle);
+                let state = handle.state::<SurfaceState>();
+                state
+                    .quick
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .creating = false;
+                let ready = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let state = ready.state::<SurfaceState>();
+                    let quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+                    if !quick.requested {
+                        return;
+                    }
+                    drop(quick);
+                    if result.is_ok() {
+                        show_ready_quick(&ready);
+                    } else {
+                        show(&ready);
+                    }
+                });
+            });
+            return;
+        }
+    }
+    show_ready_quick(app);
+}
+
+fn create_quick(app: &AppHandle) -> tauri::Result<()> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == QUICK_LABEL)
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    let window = WebviewWindowBuilder::from_config(app, config)?.build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(false) => quick_blurred(&handle),
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            hide_quick(&handle);
+        }
+        _ => {}
+    });
+    Ok(())
+}
+
+fn show_ready_quick(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(QUICK_LABEL) else {
+        return;
+    };
+    let state = app.state::<SurfaceState>();
+    let mut quick = state.quick.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(rect) = quick.pending_rect.take() {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let position = rect.position.to_physical::<f64>(scale);
+        let size = rect.size.to_physical::<f64>(scale);
+        quick.tray = Some(Bounds {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        });
+    }
+    let tray = quick.tray;
+    quick.blurred_at = None;
+    drop(quick);
     let monitor = tray
-        .and_then(|(pos, size)| {
-            win.monitor_from_point(pos.x + size.width / 2.0, pos.y + size.height / 2.0)
+        .and_then(|rect| {
+            window
+                .monitor_from_point(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
                 .ok()
                 .flatten()
         })
-        .or_else(|| win.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else { return };
-    let scale = monitor.scale_factor();
-    let work = monitor.work_area();
-    let (wx, wy) = (work.position.x as f64, work.position.y as f64);
-    let (ww, wh) = (work.size.width as f64, work.size.height as f64);
-    let margin = MARGIN * scale;
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let work = monitor.work_area();
+        let place = quick_placement(
+            Bounds {
+                x: work.position.x as f64,
+                y: work.position.y as f64,
+                width: work.size.width as f64,
+                height: work.size.height as f64,
+            },
+            monitor.scale_factor(),
+            tray,
+        );
+        let _ = window.set_position(PhysicalPosition::new(place.x, place.y));
+        let _ = window.set_size(PhysicalSize::new(place.width, place.height));
+        let _ = window.set_position(PhysicalPosition::new(place.x, place.y));
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = app.emit_to(LABEL, "tokei://quick-visible", true);
+}
 
-    let width = (WIDTH * scale).min(ww - 2.0 * margin);
-    let height = (wh * HEIGHT_RATIO).max(MIN_HEIGHT * scale).min(wh - 2.0 * margin);
-    let _ = win.set_size(PhysicalSize::new(width.round() as u32, height.round() as u32));
-
-    // 没有托盘位置（第一次从开始菜单打开）时，按 Windows 默认任务栏放在右下角。
-    let (center_x, tray_top, tray_bottom) = match tray {
-        Some((pos, size)) => (pos.x + size.width / 2.0, pos.y, pos.y + size.height),
-        None => (wx + ww - width / 2.0 - margin, wy + wh, wy + wh),
-    };
-    let x = (center_x - width / 2.0).clamp(wx + margin, wx + ww - width - margin);
-    let tray_below_middle = (tray_top + tray_bottom) / 2.0 > wy + wh / 2.0;
-    let y = if tray_below_middle {
-        (tray_top - height - margin).min(wy + wh - height - margin).max(wy + margin)
-    } else {
-        (tray_bottom + margin).min(wy + wh - height - margin)
-    };
-    let _ = win.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+pub fn hide(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.hide();
+    }
 }

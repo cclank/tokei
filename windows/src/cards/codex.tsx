@@ -13,6 +13,7 @@ import {
   MetricGrid,
   perfMetrics,
   QuotaRow,
+  QuotaLoading,
   QuotaStateNotice,
   Spacer,
   StaleQuotaFootnote,
@@ -163,13 +164,15 @@ function CodexCard({ ctx }: { ctx: CardContext }) {
       {sessions > 0 && !hasQuota && (
         <>
           <ThinDivider />
-          <QuotaStateNotice
+          {ctx.previewing ? <QuotaLoading /> : (
+            <QuotaStateNotice
             title={L("暂未获取到额度数据")}
             detail={L("用量统计不受影响；检测到订阅周期后会自动展示。")}
             source={L("Codex 本地状态")}
             updated={null}
             tint={Theme.codex}
-          />
+            />
+          )}
         </>
       )}
     </VStack>

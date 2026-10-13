@@ -26,6 +26,11 @@ export function setPref<T>(key: string, value: T) {
   } catch {
     // 存不下就只在本次会话生效
   }
+  invalidatePrefs();
+}
+
+/** Refresh derived preferences after a local dependency (such as a language table) finishes loading. */
+export function invalidatePrefs() {
   version++;
   listeners.forEach((listener) => listener());
 }
@@ -49,6 +54,5 @@ export function usePref<T>(key: string, fallback: T): [T, (value: T) => void] {
 
 // 其他窗口（例如将来的独立设置窗口）改了偏好，也同步过来。
 window.addEventListener("storage", () => {
-  version++;
-  listeners.forEach((listener) => listener());
+  invalidatePrefs();
 });

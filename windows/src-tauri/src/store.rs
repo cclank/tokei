@@ -26,6 +26,13 @@ const SECRETS: &[(&str, &str)] = &[
 ];
 
 pub fn tokei_dir() -> Result<PathBuf, String> {
+    // 本机原生窗口测试使用独立目录，避免写入维护者的真实配置和额度历史。
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("TOKEI_TEST_STATE_DIR") {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() { return Ok(dir); }
+        return Err("TOKEI_TEST_STATE_DIR must be an absolute path".into());
+    }
     let home = dirs::home_dir().ok_or_else(|| "找不到用户目录".to_string())?;
     Ok(home.join(".tokei"))
 }
@@ -116,12 +123,14 @@ fn secret_entry(provider: &str) -> Result<keyring::Entry, String> {
 
 /// 只回答有没有存，不把 Key 本身交给前端。
 #[tauri::command]
-pub fn has_secret(provider: String) -> Result<bool, String> {
-    match secret_entry(&provider)?.get_password() {
-        Ok(value) => Ok(!value.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(err) => Err(err.to_string()),
-    }
+pub async fn has_secret(provider: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        match secret_entry(&provider)?.get_password() {
+            Ok(value) => Ok(!value.is_empty()),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(err) => Err(err.to_string()),
+        }
+    }).await.map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

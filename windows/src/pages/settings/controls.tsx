@@ -263,7 +263,7 @@ export function Segmented<V extends string>({
   style?: CSSProperties;
 }) {
   return (
-    <div className="segmented st-segmented" role="radiogroup" aria-label={label} style={{ background: fill(0.06), ...style }}>
+    <div className="segmented st-segmented" role="radiogroup" aria-label={label} style={{ background: fill(0.06), gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`, ...style }}>
       {options.map((option) => (
         <button
           key={option.value}

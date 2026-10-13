@@ -1,11 +1,7 @@
 // 界面语言，与 Mac 版 L10n.swift 同一套规则：
 // 中文是源语言，代码里写的中文原文就是 key；其他语言查 Tokei/Localization/<lang>.lproj 的词表
 // （直接读 Mac 版那份，不另存一份）。法、日、韩缺词先回退英文，再回退中文原文。
-import enStrings from "../../../Tokei/Localization/en.lproj/Localizable.strings?raw";
-import frStrings from "../../../Tokei/Localization/fr.lproj/Localizable.strings?raw";
-import jaStrings from "../../../Tokei/Localization/ja.lproj/Localizable.strings?raw";
-import koStrings from "../../../Tokei/Localization/ko.lproj/Localizable.strings?raw";
-import { getPref, setPref } from "./prefs";
+import { getPref, invalidatePrefs, setPref } from "./prefs";
 
 export type Lang = "zh" | "en" | "fr" | "ja" | "ko";
 export type LangSetting = "system" | Lang;
@@ -64,12 +60,35 @@ export function parseStrings(source: string): Record<string, string> {
   return table;
 }
 
-const tables: Record<Exclude<Lang, "zh">, Record<string, string>> = {
-  en: parseStrings(enStrings),
-  fr: parseStrings(frStrings),
-  ja: parseStrings(jaStrings),
-  ko: parseStrings(koStrings),
+const sources = {
+  en: () => import("../../../Tokei/Localization/en.lproj/Localizable.strings?raw"),
+  fr: () => import("../../../Tokei/Localization/fr.lproj/Localizable.strings?raw"),
+  ja: () => import("../../../Tokei/Localization/ja.lproj/Localizable.strings?raw"),
+  ko: () => import("../../../Tokei/Localization/ko.lproj/Localizable.strings?raw"),
 };
+const tables: Partial<Record<Exclude<Lang, "zh">, Record<string, string>>> = {};
+const loading = new Map<Exclude<Lang, "zh">, Promise<void>>();
+function table(lang: Exclude<Lang, "zh">): Record<string, string> {
+  return tables[lang] ?? {};
+}
+
+function loadTable(lang: Exclude<Lang, "zh">): Promise<void> {
+  if (tables[lang]) return Promise.resolve();
+  const pending = loading.get(lang);
+  if (pending) return pending;
+  const promise = sources[lang]().then(({ default: source }) => { tables[lang] = parseStrings(source); })
+    .finally(() => loading.delete(lang));
+  loading.set(lang, promise);
+  return promise;
+}
+
+let loadedLanguage: Lang | undefined;
+export async function prepareLanguage(lang = requestedLanguage()): Promise<void> {
+  if (lang === "zh") { loadedLanguage = "zh"; return; }
+  try { await Promise.all(lang === "en" ? [loadTable("en")] : [loadTable(lang), loadTable("en")]); }
+  catch (err) { console.error("Tokei language load failed", err); }
+  if (tables[lang] && tables.en) loadedLanguage = lang;
+}
 
 /** 跟随系统时取浏览器 / WebView 的首选语言，不支持的回退英文。 */
 function resolveSystem(): Lang {
@@ -88,14 +107,30 @@ export function selectedLanguage(): LangSetting {
   return all.some((l) => l.startsWith("zh")) ? "zh" : "system";
 }
 
-export function currentLanguage(): Lang {
+function requestedLanguage(): Lang {
   const selected = selectedLanguage();
   return selected === "system" ? resolveSystem() : selected;
 }
 
-export function setLanguage(value: LangSetting) {
-  setPref(LANGUAGE_KEY, value);
+export function currentLanguage(): Lang {
+  const requested = requestedLanguage();
+  const ready = requested === "zh" || (tables[requested] && tables.en);
+  return ready ? requested : loadedLanguage ?? requested;
 }
+
+let languageChange = 0;
+export function setLanguage(value: LangSetting) {
+  const change = ++languageChange;
+  void prepareLanguage(value === "system" ? resolveSystem() : value).then(() => {
+    if (change === languageChange) { dataPatterns = null; setPref(LANGUAGE_KEY, value); }
+  });
+}
+
+// Other WebViews share the preference, but have their own module cache.
+window.addEventListener("storage", (event) => {
+  if (event.key !== LANGUAGE_KEY && event.key !== null) return;
+  void prepareLanguage().then(() => { dataPatterns = null; invalidatePrefs(); });
+});
 
 export function isChinese(): boolean {
   return currentLanguage() === "zh";
@@ -104,9 +139,9 @@ export function isChinese(): boolean {
 function lookup(key: string): string {
   const lang = currentLanguage();
   if (lang === "zh") return key;
-  const own = tables[lang][key];
+  const own = table(lang)[key];
   if (own !== undefined) return own;
-  if (lang !== "en" && tables.en[key] !== undefined) return tables.en[key];
+  if (lang !== "en" && table("en")[key] !== undefined) return table("en")[key];
   return key;
 }
 
@@ -133,7 +168,7 @@ let dataPatterns: { key: string; regex: RegExp }[] | null = null;
 function patterns() {
   if (dataPatterns) return dataPatterns;
   const result: { key: string; regex: RegExp }[] = [];
-  for (const key of Object.keys(tables.en)) {
+  for (const key of Object.keys(table("en"))) {
     if (!key.includes("%@")) continue;
     const pieces = key.split("%@");
     if (!/[一-鿿]/.test(pieces.join(""))) continue;

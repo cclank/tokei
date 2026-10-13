@@ -438,7 +438,7 @@
 "爆肝日" = "Marathon Day";
 "版本与更新" = "Version & updates";
 "用 VS Code 打开" = "Open in VS Code";
-"用于了解应用的活跃安装数量，默认开启，可随时关闭。每次启动仅尝试上报一次随机安装 ID、Tokei 版本及系统名称和主次版本。服务端记录首次和最近活跃时间，并保存最近一次来源 IP。不会上传账号、项目、对话、Token、费用或额度。关闭后停止发送，重新开启于下次启动生效；安装 ID 不参与多设备同步。" = "Used to count active installs. On by default; can be turned off anytime. On each launch it attempts a single report of a random install ID, Tokei version, and OS name plus major/minor version. The server records first- and last-seen times plus the most recent source IP. No accounts, projects, chats, tokens, costs, or quotas are uploaded. Takes effect on next launch after toggling; the install ID is not multi-device synced.";
+"用于了解应用的活跃安装数量，默认开启，可随时关闭。每次启动仅尝试上报一次随机安装 ID、Tokei 版本及系统名称和主次版本。服务端记录首次和最近活跃时间，并保存最近一次来源 IP。不会上传账号、项目、对话、Token、费用或额度。关闭后停止发送，重新开启于下次启动生效；安装 ID 不参与多设备同步。" = "Used to count active installs. On by default; can be turned off anytime. On each launch it attempts a single report of a random install ID, Tokei version, and OS name plus major/minor version. The server records first- and last-seen times plus the most recent source IP. No accounts, projects, chats, tokens, costs, or quotas are uploaded. Turning it off stops reporting immediately. Turning it back on takes effect on the next launch; the install ID is not multi-device synced.";
 "用到%@%%" = "%@%% used";
 "用量结构" = "Usage breakdown";
 "用量统计不受影响；检测到订阅周期后会自动展示。" = "Usage stats unaffected; shown automatically once a subscription cycle is detected.";
@@ -584,3 +584,15 @@
 "默认只读 ~/.grok 本地日志，不访问网络" = "By default only reads local ~/.grok logs, no network access";
 "默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。" = "By default only reads quota snapshots from local Grok logs, no network access. When enabled, requests the Grok billing API with local credentials for the latest remaining quota.";
 "（当前范围无可复制的用量）" = "(No copyable usage in this range)";
+
+// Windows 界面与授权
+"打开主窗口" = "Open main window";
+"快捷面板" = "Quick panel";
+"主窗口" = "Main window";
+"点击托盘图标" = "Tray icon click";
+"关闭快捷面板" = "Close quick panel";
+"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用请点击“授权 Grok Bot”；授权在重启和升级后保留。登录 Token 仅在辅助进程内存中使用。" = "When enabled, queries official quota and tokens using Grok Bot’s own login session, cached for 5 minutes. Click “Authorize Grok Bot” on first use; authorization survives restarts and upgrades. Login tokens stay in helper-process memory only.";
+"此授权功能仅在 Windows 应用中可用。" = "This authorization feature is only available in the Windows app.";
+"Grok Bot 的登录凭据格式暂不支持，请更新 Tokei。" = "This Grok Bot credential format is not supported yet. Please update Tokei.";
+"上次数据 %@" = "Previous data %@";
+"额度更新中…" = "Updating quotas…";

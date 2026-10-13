@@ -56,7 +56,7 @@ export async function setAutostart(on: boolean): Promise<void> {
 
 /** 托盘右键菜单换成当前界面语言，顺带按实际状态重设「登录时启动」的勾。 */
 export async function pushTrayMenu(): Promise<void> {
-  await call("set_tray_menu_labels", { refresh: L("刷新"), settings: L("设置"), autostart: L("登录时启动"), quit: L("退出") });
+  await call("set_tray_menu_labels", { open: L("打开主窗口"), quick: L("快捷面板"), refresh: L("刷新"), settings: L("设置"), autostart: L("登录时启动"), quit: L("退出") });
 }
 
 export async function openExternal(url: string): Promise<void> {

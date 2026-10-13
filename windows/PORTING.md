@@ -1,7 +1,9 @@
 # 从 Mac 版移植到 Windows 版的规范
 
-Windows 版（`windows/`，Tauri 2 + React-TS）是 Mac 版（`Tokei/Sources/Tokei/*.swift`，SwiftUI）的忠实移植：
-同样的布局、文案、配色、交互和数据口径。Mac 版代码是唯一的参照，改了 Mac 的界面，这里跟着改。
+Windows 版（`windows/`，Tauri 2 + React-TS）复用 Mac 版（`Tokei/Sources/Tokei/*.swift`，SwiftUI）的卡片、
+文案、配色和数据口径。卡片内容以 Mac 版代码为参照；窗口外壳按 Windows 的桌面习惯适配。
+Windows 使用带标题栏和任务栏入口的可缩放主窗口，托盘负责恢复窗口与后台运行。
+独立快捷面板只显示用量卡片；采集和历史写入由主窗口负责，两套界面共享用量状态和偏好。
 
 ## 先读这些
 
@@ -21,10 +23,13 @@ Windows 版（`windows/`，Tauri 2 + React-TS）是 Mac 版（`Tokei/Sources/Tok
    定义 TS 类型前先看 `Model.swift` 的 `CodingKeys`，再用真实的 `~/.tokei/last_usage.json` 核对。
 3. **字号与颜色**：Swift 的 `Theme.fontSize(x)` 写 `fs(x)`；`Theme.xxx` 用 `ui/theme.ts` 的同名常量，
    `tint.opacity(a)` 写 `rgba(tint, a)`，`Theme.tPrimary/tSecondary/tTertiary` 写 `T.primary/...`。
+   `fs()` 统一处理 Windows 字体的像素大小和最低可读字号。布局需适配窄窗口与大字号。
 4. **图标**：SF Symbols 名字直接传给 `<Icon name="..." />`，没有的在 `Icon.tsx` 里补一条 lucide 映射。
 5. **偏好键**：与 Mac 版 `@AppStorage` 同名（`showClaude`、`panelFontSize`……），默认值也一样。
 6. **平台差异**：Mac 独有的能力（钥匙串授权、菜单栏文字、原生 Swift 助手等）在 Windows 上能等价实现就实现，
    做不了就不显示，并在 README 的「与 Mac 版的差异」里记一笔。
+   Windows 手动启动显示窗口，失焦保持打开，最小化进入任务栏，关闭窗口后留在托盘；退出由明确的退出操作完成。
+   快捷面板无边框、置顶、失焦收起、隐藏任务栏入口。快捷面板打开主窗口时保留所选时间范围。
 7. **校验**：`npx tsc --noEmit -p .` 和 `node scripts/check-i18n.mjs`（`pnpm build` 也会跑）。文案检查要求
    key 在英文词表里逐字存在、参数个数与占位符一致、中文都包在 `L()` 里；刻意保留的中文（数据标识等）
    在那一行写 `// l10n-ignore`。`TOKEI_EN_STRINGS` 可以指向另一份英文词表来对照。

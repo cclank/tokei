@@ -1,28 +1,65 @@
 mod collector;
 mod panel;
+mod placement;
 mod power;
+mod privacy;
+mod snapshot;
 mod store;
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+struct StartupWindow {
+    manual: bool,
+    shown: AtomicBool,
+}
+
 /// 前端调采集脚本：`args` 如 `["--json"]`、`["--dashboard", "--period", "7d"]`。
 #[tauri::command]
-async fn run_collector(app: AppHandle, args: Vec<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || collector::run(&app, &args, &store::secret_environment()))
-        .await
-        .map_err(|err| err.to_string())?
+async fn run_collector(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    args: Vec<String>,
+) -> Result<String, String> {
+    if window.label() != panel::LABEL {
+        return Err("Usage collection belongs to the main window".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let env = if args.iter().any(|arg| arg == "--local-only") {
+            Vec::new()
+        } else {
+            store::secret_environment()
+        };
+        collector::run(&app, &args, &env)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// 设置页「诊断」：不管成败都交回退出状态和两路输出（Mac 版 runScriptRaw，超时 8 秒）。
 #[tauri::command]
-async fn run_collector_raw(app: AppHandle, args: Vec<String>) -> Result<collector::RawOutput, String> {
+async fn run_collector_raw(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    args: Vec<String>,
+) -> Result<collector::RawOutput, String> {
+    if window.label() != panel::LABEL {
+        return Err("Diagnostics belong to the main window".into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
-        collector::run_raw(&app, &args, &store::secret_environment(), std::time::Duration::from_secs(8))
+        collector::run_raw(
+            &app,
+            &args,
+            &store::secret_environment(),
+            std::time::Duration::from_secs(8),
+        )
     })
     .await
     .map_err(|err| err.to_string())?
@@ -38,6 +75,8 @@ fn set_tray_tooltip(app: AppHandle, text: String) {
 
 /// 托盘右键菜单的几项；文字由前端按界面语言推过来（`set_tray_menu_labels`）。
 struct TrayMenu {
+    open: MenuItem<Wry>,
+    quick: MenuItem<Wry>,
     refresh: MenuItem<Wry>,
     settings: MenuItem<Wry>,
     autostart: CheckMenuItem<Wry>,
@@ -49,25 +88,27 @@ struct TrayMenu {
 fn set_tray_menu_labels(
     app: AppHandle,
     menu: tauri::State<'_, TrayMenu>,
+    open: String,
+    quick: String,
     refresh: String,
     settings: String,
     autostart: String,
     quit: String,
 ) {
+    let _ = menu.open.set_text(open);
+    let _ = menu.quick.set_text(quick);
     let _ = menu.refresh.set_text(refresh);
     let _ = menu.settings.set_text(settings);
     let _ = menu.autostart.set_text(autostart);
-    let _ = menu.autostart.set_checked(app.autolaunch().is_enabled().unwrap_or(false));
+    let _ = menu
+        .autostart
+        .set_checked(app.autolaunch().is_enabled().unwrap_or(false));
     let _ = menu.quit.set_text(quit);
 }
 
 #[tauri::command]
-fn hide_panel(app: AppHandle) {
-    panel::hide(&app);
-}
-
-#[tauri::command]
 fn quit_app(app: AppHandle) {
+    app.state::<privacy::ActivityState>().stop();
     app.exit(0);
 }
 
@@ -84,23 +125,55 @@ fn keep_awake_active(state: tauri::State<'_, Mutex<power::KeepAwake>>) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // 再打开一次 Tokei（开始菜单、桌面快捷方式）就直接唤出面板，而不是起第二个进程。
+        // 再打开一次快捷方式时恢复主窗口。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            panel::show_near_tray(app, None);
+            panel::show(app);
         }))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .manage(Mutex::new(power::KeepAwake::default()))
-        .manage(panel::PanelState::default())
+        .manage(panel::SurfaceState::load())
+        .manage(snapshot::SnapshotStore::default())
+        .manage(privacy::ActivityState::default())
+        .manage(StartupWindow {
+            manual: !std::env::args().any(|arg| arg == "--autostart"),
+            shown: AtomicBool::new(false),
+        })
+        .on_page_load(|webview, payload| {
+            if webview.label() == panel::LABEL
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
+                let app = webview.app_handle();
+                let startup = app.state::<StartupWindow>();
+                if startup.manual && !startup.shown.swap(true, Ordering::SeqCst) {
+                    panel::show(app);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             run_collector,
             run_collector_raw,
             set_tray_tooltip,
             set_tray_menu_labels,
-            hide_panel,
             quit_app,
             set_keep_awake,
             keep_awake_active,
+            privacy::start_activity_reporter,
+            privacy::set_activity_statistics,
+            privacy::grok_bot_authorization_status,
+            privacy::authorize_grok_bot,
+            panel::open_main_window,
+            panel::hide_quick_panel,
+            panel::open_quick_panel,
+            panel::quick_panel_visible,
+            panel::get_tray_click_action,
+            panel::set_tray_click_action,
+            snapshot::get_usage_snapshot,
+            snapshot::publish_usage_snapshot,
+            snapshot::request_usage_refresh,
             store::read_tokei_file,
             store::write_tokei_file,
             store::read_tokei_config,
@@ -118,14 +191,11 @@ pub fn run() {
             if let Some(window) = app.get_webview_window(panel::LABEL) {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
-                    if let WindowEvent::Focused(false) = event {
-                        panel::on_blur(&handle);
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        panel::hide(&handle);
                     }
                 });
-            }
-            // 手动启动（不是开机自启）时直接打开面板，让用户知道 Tokei 在托盘里。
-            if !std::env::args().any(|arg| arg == "--autostart") {
-                panel::show_near_tray(app.handle(), None);
             }
             Ok(())
         })
@@ -135,14 +205,30 @@ pub fn run() {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // 先用中文原文占位，前端起来后按界面语言换成译文。
+    let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
+    let quick = MenuItem::with_id(app, "quick", "快捷面板", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "刷新", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
-    let autostart = CheckMenuItem::with_id(app, "autostart", "登录时启动", true, autostart_on, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "登录时启动",
+        true,
+        autostart_on,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&refresh, &settings, &autostart, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open, &quick, &refresh, &settings, &autostart, &separator, &quit,
+        ],
+    )?;
     app.manage(TrayMenu {
+        open,
+        quick,
         refresh: refresh.clone(),
         settings: settings.clone(),
         autostart: autostart.clone(),
@@ -156,17 +242,27 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {
+            "open" => {
+                let _ = panel::open_main_window(app.clone(), None);
+            }
+            "quick" => {
+                panel::show_quick(app, None);
+            }
             "refresh" => {
-                let _ = app.emit("tokei://refresh", ());
+                let _ = app.emit_to(panel::LABEL, "tokei://refresh", ());
             }
             "settings" => {
-                panel::show_near_tray(app, None);
-                let _ = app.emit("tokei://open-settings", ());
+                panel::show(app);
+                let _ = app.emit_to(panel::LABEL, "tokei://open-settings", ());
             }
             "autostart" => {
                 let launcher = app.autolaunch();
                 let enabled = launcher.is_enabled().unwrap_or(false);
-                let _ = if enabled { launcher.disable() } else { launcher.enable() };
+                let _ = if enabled {
+                    launcher.disable()
+                } else {
+                    launcher.enable()
+                };
                 let _ = autostart.set_checked(launcher.is_enabled().unwrap_or(false));
             }
             "quit" => app.exit(0),
@@ -180,7 +276,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                panel::toggle(tray.app_handle(), rect);
+                panel::tray_click(tray.app_handle(), rect);
             }
         })
         .build(app)?;

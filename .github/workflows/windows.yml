@@ -33,6 +33,10 @@ jobs:
       # 采集脚本在干净的临时 HOME 里跑一遍所有入口：这是 Windows 版能用的底线。
       - name: Cross-platform smoke test
         run: python -m unittest tests.test_cross_platform_smoke -v
+      - name: Windows privacy and credentials tests
+        run: |
+          python -m pip install cryptography==50.0.1
+          python -m unittest tests.test_windows_native_bridge tests.test_windows_native_collector tests.test_windows_startup.StartupCollectorTests -v
 
   # 现有测试大多是在 macOS 上写的（不少要编译 Swift），这里只看结果、不拦合并，也不挡安装包构建。
   full-suite:
@@ -44,6 +48,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Windows crypto test dependency
+        run: python -m pip install cryptography==50.0.1
       - name: Full test suite
         env:
           PYTHONUTF8: "1"
@@ -82,11 +88,11 @@ jobs:
           $target = "windows/src-tauri/python"
           Invoke-WebRequest "https://www.python.org/ftp/python/$version/python-$version-embed-amd64.zip" -OutFile python-embed.zip
           Expand-Archive python-embed.zip -DestinationPath $target
-          python -m pip install zstandard --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp --target "$target/Lib/site-packages"
+          python -m pip install zstandard cryptography==50.0.1 --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp --target "$target/Lib/site-packages"
           $pth = Get-ChildItem $target -Filter "python*._pth" | Select-Object -First 1
           $lines = (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site'
           $lines + 'Lib\site-packages' | Set-Content $pth.FullName -Encoding ascii
-          & "$target/python.exe" -c "import sqlite3, zstandard, ssl; print('embedded python ok', sqlite3.sqlite_version)"
+          & "$target/python.exe" -c "import sqlite3, zstandard, ssl; from cryptography.hazmat.primitives.ciphers.aead import AESGCM; print('embedded python ok', sqlite3.sqlite_version)"
 
       # 用 cmd 重定向拿原始字节：PowerShell 管道会先按控制台代码页解码，中文就乱了。
       - name: Collector runs on the embedded runtime
@@ -94,10 +100,19 @@ jobs:
         run: |
           windows\src-tauri\python\python.exe usage.30s.py --json --no-sync-snapshot > collector.json || exit /b 1
           python -c "import json; d = json.load(open('collector.json', encoding='utf-8')); print(sorted(d)[:6], len(d))"
+          windows\src-tauri\python\python.exe usage.30s.py --json --no-sync-snapshot --local-only > preview.json || exit /b 1
+          python -c "import json; d = json.load(open('preview.json', encoding='utf-8')); assert 'ranges' in d['codex']; print('local-first preview ok')"
 
       - name: Install frontend dependencies
         working-directory: windows
         run: pnpm install --frozen-lockfile
+
+      - name: Native window and privacy tests
+        working-directory: windows/src-tauri
+        run: cargo test --locked --lib
+
+      - name: Startup and shared usage regression tests
+        run: python -m unittest tests.test_windows_startup tests.test_windows_usage_snapshot -v
 
       - name: Build installer
         working-directory: windows

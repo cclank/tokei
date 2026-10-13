@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && node scripts/check-i18n.mjs && vite build",
+    "build": "tsc && node scripts/check-i18n.mjs && vite build && node scripts/check-startup-budget.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

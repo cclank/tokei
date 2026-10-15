@@ -584,3 +584,44 @@
 "默认只读 ~/.grok 本地日志，不访问网络" = "By default only reads local ~/.grok logs, no network access";
 "默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。" = "By default only reads quota snapshots from local Grok logs, no network access. When enabled, requests the Grok billing API with local credentials for the latest remaining quota.";
 "（当前范围无可复制的用量）" = "(No copyable usage in this range)";
+
+"额外重置动态" = "Extra reset updates";
+"上次检查：无待生效公告" = "Last check: no pending announcement";
+"暂无待生效公告" = "No pending announcement";
+"最近：%@" = "Latest: %@";
+"按预计时间应已生效，尚未确认" = "Expected to be effective; not confirmed";
+"下一次尚未公布，不预测固定周期" = "Next reset unannounced; no fixed schedule";
+"刷新失败，显示上次记录" = "Refresh failed; showing the last record";
+"来源检查有延迟，等待更新" = "Source checks delayed; awaiting an update";
+"检查 %@" = "Checked %@";
+"原帖 ↗" = "Post ↗";
+"重置动态暂不可用" = "Reset updates unavailable";
+"正在读取重置公告…" = "Loading reset announcements…";
+"AIHOT 整理 · 非官方 · %@" = "AIHOT · Unofficial · %@";
+"重置卡发放" = "Reset credits issued";
+"额度重置" = "Quota reset";
+"重置公告" = "Reset announcement";
+"上次公告状态，待重新核实" = "Previous announcement; awaiting verification";
+"已确认生效，以账户显示为准" = "Confirmed; check your account for availability";
+"正在进行，等待完成确认" = "In progress; awaiting completion";
+"距预计开始还有 %@" = "Estimated start in %@";
+"处于预计时段，等待确认" = "Within the estimated window; awaiting confirmation";
+"已过预计时间，等待确认" = "Past the estimate; awaiting confirmation";
+"已宣布，具体时间待定" = "Announced; timing not specified";
+"公告状态待核实，请查看原文" = "Unverified status; see the original post";
+"预计 %@" = "Estimated %@";
+"预计不晚于 %@" = "Estimated by %@";
+"适用：%@" = "Eligibility: %@";
+"原帖未说明" = "Not specified in the post";
+"发卡后需自行使用，余额以 Codex 为准" = "Redeem credits yourself; see Codex for your balance";
+"确认帖 %@ · 非精确到账时间" = "Confirmed %@ · not the exact credit time";
+"核实到账日期：%@（来源时区 UTC+8）" = "Receipt verified: %@ (source time zone UTC+8)";
+"来源已核实到账，具体日期未定" = "Receipt verified by the source; exact date unknown";
+
+"Codex 额外重置动态" = "Codex extra reset updates";
+"默认开启，可随时关闭。每 10 分钟从 AIHOT 获取公开重置公告，不发送登录凭据或用量。预计时间仅供参考，不预测未公布的下一次重置；个人额度以 Codex 为准。" = "On by default; can be disabled at any time. Fetch public reset announcements from AIHOT every 10 minutes, without sending credentials or usage. Times are estimates; unannounced resets are not predicted. Check Codex for your personal quota.";
+
+"网络请求失败（%@），将自动重试" = "Network request failed (%@); retrying automatically";
+"来源返回 HTTP %@，将自动重试" = "Source returned HTTP %@; retrying automatically";
+"来源响应无效，将自动重试" = "Invalid source response; retrying automatically";
+"公告数据格式异常，将自动重试" = "Invalid announcement data; retrying automatically";

@@ -70,6 +70,9 @@ final class Store: ObservableObject {
     }
 
     func refresh(prewarmQuotaDetail: Bool = false) {
+        CodexResetMonitor.shared.refresh(enabled:
+            CodexResetMonitor.isEnabled() &&
+            UserDefaults.standard.object(forKey: "showCodex") as? Bool != false)
         quotaDetailPrewarmPending = quotaDetailPrewarmPending || prewarmQuotaDetail
         if refreshInFlight {
             refreshPending = true
@@ -683,6 +686,16 @@ enum Shot {
             sem.wait()
         }
         MainActor.assumeIsolated {
+            if let idx = CommandLine.arguments.firstIndex(of: "--reset-feed"),
+               CommandLine.arguments.count > idx + 1 {
+                do {
+                    let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[idx + 1]))
+                    CodexResetMonitor.shared.usePreview(try CodexResetFeed.decode(data))
+                    PanelView.showCodexResetForShot = true
+                } catch {
+                    fputs("Tokei --reset-feed: \(error)\n", stderr)
+                }
+            }
             let store = Store()
             store.usage = usage
             store.lastUpdated = L("预览")

@@ -43,6 +43,7 @@ struct PanelView: View {
     static var initialMode: PanelMode = .cards
     /// 离屏截图（--expand-models）时把按模型列表全部展开，方便检查明细行。
     static var expandModelsForShot = false
+    static var showCodexResetForShot = false
     @State private var mode: PanelMode = PanelView.initialMode
     @State private var trailProjects: [TrailProject]?
     enum PanelMode: String { case cards, quotaHistory, dashboard, projects, settings }
@@ -98,6 +99,7 @@ struct PanelView: View {
     @AppStorage("qwenWorkQuotaEnabled") private var qwenWorkQuotaEnabled = false
     /// 默认关闭：仅在 Desktop 缓存不可用时复用 Claude Code CLI 登录态查询官方额度。
     @AppStorage("claudeCLIQuotaEnabled") private var claudeCLIQuotaEnabled = false
+    @AppStorage(CodexResetMonitor.enabledKey) private var codexResetAnnouncementsEnabled = true
     @AppStorage(ActivityReporter.enabledKey) private var activityStatisticsEnabled = true
     /// 菜单栏额度来源（与显示卡片独立），每项是一个具体窗口。
     /// 只有历史上就默认开的 Claude 5h 与 Codex 周保持默认开，其余窗口默认关，避免抢占状态栏。
@@ -443,7 +445,8 @@ struct PanelView: View {
                          content: AnyView(claudeBlock(u.claude, cr))),
             ToolCardItem(id: "codex", name: "Codex", visible: showCodex,
                          active: xr.sessions > 0 || u.codex.p5 != nil || u.codex.pw != nil ||
-                             (u.codex.reset_cards?.count ?? 0) > 0,
+                             (u.codex.reset_cards?.count ?? 0) > 0 ||
+                             codexResetAnnouncementsEnabled || Self.showCodexResetForShot,
                          tint: Theme.codex, content: AnyView(codexBlock(u.codex, xr))),
             ToolCardItem(id: "gemini", name: "Gemini", visible: showGemini,
                          active: geminiRange.hasUsage,
@@ -758,6 +761,10 @@ struct PanelView: View {
                     updated: nil,
                     tint: Theme.codex
                 )
+            }
+            if codexResetAnnouncementsEnabled || Self.showCodexResetForShot {
+                thinDivider
+                CodexResetAnnouncementView(monitor: .shared, live: scrollable && store.popoverVisible)
             }
         }
     }
@@ -3426,6 +3433,14 @@ struct PanelView: View {
 
             thinDivider
 
+            settingsToggleRow(L("Codex 额外重置动态"), isOn: $codexResetAnnouncementsEnabled)
+            Text(L("默认开启，可随时关闭。每 10 分钟从 AIHOT 获取公开重置公告，不发送登录凭据或用量。预计时间仅供参考，不预测未公布的下一次重置；个人额度以 Codex 为准。"))
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            thinDivider
+
             settingsToggleRow(L("Grok 实时额度查询"), isOn: $grokLiveQuotaEnabled)
             Text(L("默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。"))
                 .font(.system(size: Theme.fontSize(8.5)))
@@ -3473,6 +3488,9 @@ struct PanelView: View {
         }
         .onChange(of: claudeCLIQuotaEnabled) { _ in
             store.refresh()
+        }
+        .onChange(of: codexResetAnnouncementsEnabled) { enabled in
+            CodexResetMonitor.shared.refresh(enabled: enabled && showCodex)
         }
         .onChange(of: grokLiveQuotaEnabled) { enabled in
             Self.setGrokLiveQuotaEnabled(enabled)

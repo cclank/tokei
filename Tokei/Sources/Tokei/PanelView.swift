@@ -248,6 +248,8 @@ struct PanelView: View {
                 settingsContent
             } else if let u = store.usage {
                 let cards = toolCards(for: u)
+                LocalOutputThroughputView(throughput: store.localOutputThroughput,
+                                          live: store.popoverVisible)
                 SegmentedTabs(sel: $sel)
                 toolCardsLayout(cards.filter { $0.visible && $0.active })
                 inactiveToolsLine(cards)

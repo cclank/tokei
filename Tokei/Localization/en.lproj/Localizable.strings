@@ -584,3 +584,8 @@
 "默认只读 ~/.grok 本地日志，不访问网络" = "By default only reads local ~/.grok logs, no network access";
 "默认只读本机 Grok 日志中的额度快照，不访问网络。开启后才会用本地登录凭据请求 Grok 账单接口，以便拿到最新剩余额度。" = "By default only reads quota snapshots from local Grok logs, no network access. When enabled, requests the Grok billing API with local credentials for the latest remaining quota.";
 "（当前范围无可复制的用量）" = "(No copyable usage in this range)";
+
+"本机总输出" = "Local total output";
+"近 %@ 秒" = "Last %@ s";
+"等待采样…" = "Waiting for samples…";
+"本机所有已采集任务的新增输出（含推理）÷ 实际经过时间，最多统计最近 60 秒。并发任务相加，不受日期、卡片显隐或多设备切换影响。基于日志落盘，可能延迟；不含输入、缓存和云端账号用量。" = "New output (including reasoning) across collected local tasks divided by wall time, over up to 60 seconds. Concurrent tasks add together, independent of date, card visibility or device scope. Based on persisted logs, so updates may lag. Excludes input, cache and cloud account usage.";

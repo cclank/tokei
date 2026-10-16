@@ -203,6 +203,57 @@ class KimiQuotaFetchTests(unittest.TestCase):
         self.assertEqual(plan, "LEVEL_INTERMEDIATE")
         self.assertAlmostEqual(limits["five_hour"]["used_percent"], 42.0)
 
+    def test_exhausted_limits_sleeps_until_reset(self):
+        """当 5h 窗口或订阅额度已满 (used_percent >= 100)，在重置之前不发网络请求。"""
+        self.write_creds(expires_in_seconds=7200)
+        # 缓存时间超过 300s TTL，但 5h 额度已用满且 resets_at 在 1 小时后
+        self.write_cache(age_seconds=USAGE._KIMI_QUOTA_TTL + 500, used=100.0)
+        with mock.patch("urllib.request.urlopen") as opener:
+            limits, plan, _ = USAGE.fetch_kimi_live_limits()
+        opener.assert_not_called()
+        self.assertEqual(plan, "LEVEL_INTERMEDIATE")
+        self.assertAlmostEqual(limits["five_hour"]["used_percent"], 100.0)
+
+    def test_exhausted_limits_recheck_hourly(self):
+        """耗尽时放慢到每小时复查，超过复查间隔照样视为过期。"""
+        self.write_creds(expires_in_seconds=7200)
+        self.write_cache(age_seconds=3000, used=100.0)
+        auth_key = hashlib.sha256(self.current_token.encode()).hexdigest()
+        now = datetime.now().timestamp()
+        self.assertIsNotNone(USAGE._cached_kimi_live_limits(
+            USAGE._KIMI_QUOTA_TTL, auth_key, now_epoch=now))
+        self.assertIsNone(USAGE._cached_kimi_live_limits(
+            USAGE._KIMI_QUOTA_TTL, auth_key, now_epoch=now + 700))
+
+    def test_exhausted_limits_refreshes_after_reset(self):
+        """重置时间过后，缓存不再因用尽而休眠，立即发请求刷新。"""
+        self.write_creds(expires_in_seconds=7200)
+        now = int(datetime.now().timestamp())
+        payload = {
+            "fetched_at": now - (USAGE._KIMI_QUOTA_TTL + 500),
+            "limits": {
+                "five_hour": {"used_percent": 100.0, "resets_at": now - 10},
+                "subscription": {"used_percent": 100.0, "resets_at": now - 10},
+            },
+            "plan": "LEVEL_INTERMEDIATE",
+            "auth_key": hashlib.sha256(self.current_token.encode()).hexdigest(),
+        }
+        with open(self.cache, "w") as fh:
+            json.dump(payload, fh)
+
+        fresh_res = json.dumps(current_sample()).encode()
+
+        class Res:
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+            def geturl(self_inner): return USAGE._KIMI_USAGE_URL
+            def read(self_inner, *a): return fresh_res
+
+        with mock.patch("urllib.request.urlopen", return_value=Res()) as opener:
+            limits, plan, _ = USAGE.fetch_kimi_live_limits()
+        opener.assert_called_once()
+        self.assertAlmostEqual(limits["five_hour"]["used_percent"], 25.0)
+
     def test_account_switch_never_returns_or_relabels_previous_cache(self):
         self.write_creds(expires_in_seconds=1800, token="token-a")
         self.write_cache(age_seconds=1, used=73.0)

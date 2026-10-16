@@ -281,6 +281,183 @@ class CodexQuotaValuesTests(unittest.TestCase):
         self.assertTrue(USAGE._codex_live_snapshot_is_current(
             1_700_000_002, "2023-11-14T22:13:21+00:00"))
 
+    def test_exhausted_limits_sleeps_until_reset(self):
+        """额度用尽 (used_percent >= 100) 且离重置仍有时长时，在重置前不发网络请求。"""
+        now = USAGE.datetime.now().timestamp()
+        auth = {
+            "tokens": {
+                "access_token": "test-token",
+                "account_id": "current-account",
+            },
+        }
+        account_key = USAGE._codex_auth_context(auth)["account_key"]
+        auth_key = USAGE._codex_auth_context(auth)["auth_key"]
+        limits = {
+            "primary": {
+                "used_percent": 100.0,
+                "window_minutes": 300,
+                "resets_at": int(now + 1800),
+            },
+            "secondary": {
+                "used_percent": 45.0,
+                "window_minutes": 10080,
+                "resets_at": int(now + 86400),
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache.json"
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(auth))
+            cache_path.write_text(json.dumps({
+                "fetched_at": now - 600,  # 10 分钟前获取，已超过 300s TTL
+                "limits": limits,
+                "plan": "plus",
+                "account_key": account_key,
+                "auth_key": auth_key,
+            }))
+            with mock.patch.object(USAGE, "CODEX_AUTH", str(auth_path)), \
+                    mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)), \
+                    mock.patch("urllib.request.urlopen") as opener:
+                cached_limits, plan, fetched_at = USAGE.fetch_codex_live_limits()
+
+        opener.assert_not_called()
+        self.assertEqual(cached_limits["primary"]["used_percent"], 100.0)
+        self.assertEqual(plan, "plus")
+        self.assertEqual(fetched_at, now - 600)
+
+    def test_exhausted_limits_recheck_hourly(self):
+        """耗尽时放慢到每小时复查，不是一直睡到重置：提前重置、升级套餐要能看到。"""
+        now = USAGE.datetime.now().timestamp()
+        limits = {
+            "primary": {"used_percent": 100.0, "window_minutes": 300,
+                        "resets_at": int(now + 86400)},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache.json"
+            cache_path.write_text(json.dumps({
+                "fetched_at": now,
+                "limits": limits,
+            }))
+            recheck = USAGE._QUOTA_EXHAUSTED_RECHECK_TTL
+            with mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)):
+                self.assertIsNotNone(USAGE._cached_codex_live_limits(
+                    USAGE._CODEX_QUOTA_TTL, now_epoch=now + recheck - 60))
+                self.assertIsNone(USAGE._cached_codex_live_limits(
+                    USAGE._CODEX_QUOTA_TTL, now_epoch=now + recheck + 60))
+
+    def test_exhausted_limits_do_not_hide_another_windows_reset(self):
+        """周额度耗尽时，5h 窗口过了重置时刻照样要刷新。"""
+        now = USAGE.datetime.now().timestamp()
+        limits = {
+            "primary": {"used_percent": 60.0, "resets_at": int(now - 1)},
+            "secondary": {"used_percent": 100.0, "resets_at": int(now + 86400)},
+        }
+        self.assertIsNone(USAGE._codex_limits_exhausted_reset_at(limits, now_epoch=now))
+        limits["primary"]["resets_at"] = int(now + 60)
+        self.assertEqual(
+            USAGE._codex_limits_exhausted_reset_at(limits, now_epoch=now),
+            int(now + 86400))
+
+    def test_exhausted_limits_refreshes_once_reset_reached(self):
+        """重置时间一到，缓存视为过期，立即发起联网请求更新额度。"""
+        now = USAGE.datetime.now().timestamp()
+        auth = {
+            "tokens": {
+                "access_token": "test-token",
+                "account_id": "current-account",
+            },
+        }
+        account_key = USAGE._codex_auth_context(auth)["account_key"]
+        auth_key = USAGE._codex_auth_context(auth)["auth_key"]
+        cached_limits = {
+            "primary": {
+                "used_percent": 100.0,
+                "window_minutes": 300,
+                "resets_at": int(now - 1),  # 已到达重置时间
+            },
+        }
+        fresh_payload = {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 0.0,
+                    "limit_window_seconds": 18000,
+                    "reset_at": int(now + 18000),
+                },
+            },
+            "plan_type": "plus",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache.json"
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(auth))
+            cache_path.write_text(json.dumps({
+                "fetched_at": now - 900,
+                "limits": cached_limits,
+                "plan": "plus",
+                "account_key": account_key,
+                "auth_key": auth_key,
+            }))
+            opener = mock.Mock(return_value=_Response(fresh_payload))
+            with mock.patch.object(USAGE, "CODEX_AUTH", str(auth_path)), \
+                    mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)), \
+                    mock.patch("urllib.request.urlopen", opener):
+                limits, plan, fetched_at = USAGE.fetch_codex_live_limits()
+
+        opener.assert_called_once()
+        self.assertEqual(limits["primary"]["used_percent"], 0.0)
+
+    def test_exhausted_limits_with_positive_credits_does_not_sleep(self):
+        """如果有正余额 Credits 可供调用，不视为彻底耗尽。"""
+        now = USAGE.datetime.now().timestamp()
+        auth = {
+            "tokens": {
+                "access_token": "test-token",
+                "account_id": "current-account",
+            },
+        }
+        account_key = USAGE._codex_auth_context(auth)["account_key"]
+        auth_key = USAGE._codex_auth_context(auth)["auth_key"]
+        cached_limits = {
+            "primary": {
+                "used_percent": 100.0,
+                "window_minutes": 300,
+                "resets_at": int(now + 1800),
+            },
+            "credits": {
+                "has_credits": True,
+                "balance": "25.0",
+            },
+        }
+        fresh_payload = {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 100.0,
+                    "limit_window_seconds": 18000,
+                    "reset_at": int(now + 1500),
+                },
+            },
+            "credits": {"has_credits": True, "balance": "24.0"},
+            "plan_type": "plus",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache.json"
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(auth))
+            cache_path.write_text(json.dumps({
+                "fetched_at": now - 900,
+                "limits": cached_limits,
+                "plan": "plus",
+                "account_key": account_key,
+                "auth_key": auth_key,
+            }))
+            opener = mock.Mock(return_value=_Response(fresh_payload))
+            with mock.patch.object(USAGE, "CODEX_AUTH", str(auth_path)), \
+                    mock.patch.object(USAGE, "CODEX_QUOTA_CACHE", str(cache_path)), \
+                    mock.patch("urllib.request.urlopen", opener):
+                limits, plan, fetched_at = USAGE.fetch_codex_live_limits()
+
+        opener.assert_called_once()
+
 
 def _epoch(year, month, day, hour=0, minute=0):
     return int(datetime(year, month, day, hour, minute).timestamp())

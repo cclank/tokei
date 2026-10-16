@@ -77,6 +77,7 @@ final class DataLoader {
     }
 
     private static let claudeQuotaStaleTTL = 30 * 60
+    private static let claudeExhaustedQuotaStaleTTL = 2 * 60 * 60
     private static let claudeQuotaFullScanInterval = 6 * 60 * 60
     private static let claudeQuotaRetryScanInterval = 5 * 60
     private static let claudeCacheFileLimit = 16 * 1024 * 1024
@@ -627,7 +628,13 @@ final class DataLoader {
         let now = Int(Date().timeIntervalSince1970)
         let updated = intValue(claude["q_updated"]) ?? 0
         let age = now - updated
-        let sourceStale = updated <= 0 || age > claudeQuotaStaleTTL || age < -300
+        // 5h 或周额度用尽后，CLI 额度桥放慢到每小时查一次，
+        // 过期线跟着放宽到两小时，否则耗尽期间会一直显示过期。
+        let exhausted = [("q5", "q5_reset"), ("q7", "q7_reset")].contains { valueKey, resetKey in
+            (numberValue(claude[valueKey]) ?? 0) >= 100 && (intValue(claude[resetKey]) ?? 0) > now
+        }
+        let staleAfter = exhausted ? claudeExhaustedQuotaStaleTTL : claudeQuotaStaleTTL
+        let sourceStale = updated <= 0 || age > staleAfter || age < -300
         for (valueKey, resetKey, staleKey) in [
             ("q5", "q5_reset", "q5_stale"),
             ("q7", "q7_reset", "q7_stale"),

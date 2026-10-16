@@ -69,7 +69,23 @@ for fname in usage.30s.py pricing.json pricing_overrides.json; do
     fi
 done
 
-# 4. 写配置
+# 4. 确保 zstandard 可导入：OpenClaw 新版把事件正文压缩进 event_zstd，
+#    缺依赖会静默跳过这部分用量。已装则跳过，装不上不阻断安装。
+if python3 -c 'import zstandard' >/dev/null 2>&1; then
+    echo "[✓] zstandard 已可用"
+else
+    echo "[·] 安装 zstandard（读 OpenClaw 压缩事件正文）..."
+    if python3 -m pip install --quiet zstandard >/dev/null 2>&1 \
+            || python3 -m pip install --quiet --user zstandard >/dev/null 2>&1 \
+            || python3 -m pip install --quiet --break-system-packages zstandard >/dev/null 2>&1; then
+        echo "[✓] zstandard 安装完成"
+    else
+        echo "[!] zstandard 未安装：OpenClaw 压缩存储的用量事件将被跳过"
+        echo "    可手动执行: python3 -m pip install --user zstandard"
+    fi
+fi
+
+# 5. 写配置
 python3 - "$SYNC_DIR" "$NAME" "$INTERVAL" > "$TOKEI_DIR/config.json" <<'PY'
 import json
 import sys
@@ -84,7 +100,7 @@ print()
 PY
 echo "[✓] 配置已写入 $TOKEI_DIR/config.json"
 
-# 5. 创建同步脚本
+# 6. 创建同步脚本
 SYNC_SCRIPT="$TOKEI_DIR/sync.sh"
 cat > "$SYNC_SCRIPT" <<'SYNCEOF'
 #!/usr/bin/env bash
@@ -99,7 +115,7 @@ SYNCEOF
 chmod +x "$SYNC_SCRIPT"
 echo "[✓] 同步脚本: $SYNC_SCRIPT"
 
-# 6. 添加 crontab
+# 7. 添加 crontab
 CRON_LINE="*/$INTERVAL * * * * $SYNC_SCRIPT >/dev/null 2>&1"
 (crontab -l 2>/dev/null | grep -v "tokei/sync.sh"; echo "$CRON_LINE") | crontab -
 echo "[✓] Cron 已配置: 每 ${INTERVAL} 分钟同步"
@@ -110,5 +126,5 @@ echo "  首次同步: bash $SYNC_SCRIPT"
 echo "  查看状态: cat $SYNC_DIR/$NAME.json | python3 -m json.tool | head -5"
 echo ""
 
-# 7. 立即执行一次
+# 8. 立即执行一次
 bash "$SYNC_SCRIPT" && echo "[✓] 首次同步成功" || echo "[!] 首次同步失败,请检查 Git 权限"

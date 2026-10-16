@@ -10245,10 +10245,14 @@ def scan_hermes(bounds, cache):
 
 # ---------- OpenClaw ----------
 # 全局 SQLite: $OPENCLAW_STATE_DIR/state/openclaw.sqlite（任务 + agent DB 注册表）
-# Agent SQLite: agent_databases.path -> transcript_events.event_json（新版 token 用量）
+# Agent SQLite: agent_databases.path -> transcript_events（新版 token 用量）
+#   transcript_events 的事件正文有两种互斥存储：event_json(TEXT) 与
+#   event_zstd(BLOB, zstd 压缩)。以 event_json 为非空判断是旧形态；只要
+#   event_json 为 NULL 就必须解压 event_zstd，否则用量事件被整条丢弃。
 # Session JSONL: $OPENCLAW_STATE_DIR/agents/*/sessions/*.jsonl（旧版 token 用量）
 # 3：附上每条回复的端到端耗时。
-_OPENCLAW_PARSER_VERSION = 3
+# 4：读 event_zstd（zstd 压缩正文），不再静默丢压缩存储的用量事件。
+_OPENCLAW_PARSER_VERSION = 4
 _OPENCLAW_LEDGER_VERSION = 2
 
 
@@ -10302,6 +10306,62 @@ def _scan_openclaw_db(db_path, sqlite_module):
         return task_days
     finally:
         conn.close()
+
+
+# event_zstd 的解压上限。OpenClaw 的 CHECK 约束把未压缩正文限制在 4 MiB
+# （event_utf8_bytes/event_zstd 均在 1..4194304），这里留出相同上限并按需增长，
+# 避免一次性按压缩比外推而误伤超大事件。
+_OPENCLAW_MAX_EVENT_BYTES = 4 * 1024 * 1024
+_OPENCLAW_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+_OPENCLAW_ZSTD_AVAILABLE = None
+
+
+def _openclaw_zstd_available():
+    """event_zstd 列可解压时返回 True。缺 zstandard 时只探测一次并记住结果。
+
+    现有安装不一定装了 zstandard（它本用于 Claude 桌面额度缓存）。缺依赖时
+    _openclaw_zstd_blob 会解压失败并跳过该事件，等价于旧行为，不会报错。
+    """
+    global _OPENCLAW_ZSTD_AVAILABLE
+    if _OPENCLAW_ZSTD_AVAILABLE is None:
+        try:
+            import zstandard  # noqa: F401
+        except Exception:
+            _OPENCLAW_ZSTD_AVAILABLE = False
+        else:
+            _OPENCLAW_ZSTD_AVAILABLE = True
+    return _OPENCLAW_ZSTD_AVAILABLE
+
+
+def _openclaw_zstd_blob(value):
+    """解压 event_zstd 的 BLOB 正文，失败返回 None（调用方跳过该行）。"""
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        return None
+    data = bytes(value)
+    if not data or data[:4] != _OPENCLAW_ZSTD_MAGIC:
+        return None
+    if not _openclaw_zstd_available():
+        return None
+    try:
+        import zstandard
+    except Exception:
+        return None
+    try:
+        return zstandard.ZstdDecompressor().decompress(
+            data, max_output_size=_OPENCLAW_MAX_EVENT_BYTES)
+    except Exception:
+        return None
+
+
+def _openclaw_event_text(event_json, event_zstd):
+    """取事件正文（bytes）用于 json.loads。
+
+    两种存储互斥：优先 event_json，其次解压 event_zstd。均不可用时返回 None。
+    event_json 在 SQLite 里若存成 BLOB，json.loads 也能吃 bytes（且支持 UTF-8 BOM）。
+    """
+    if event_json is not None:
+        return event_json
+    return _openclaw_zstd_blob(event_zstd)
 
 
 def _openclaw_agent_db_paths(sqlite_module):
@@ -10467,8 +10527,15 @@ def _scan_openclaw_agent_db(db_path, sqlite_module):
         if "transcript_events" not in tables:
             raise sqlite_module.OperationalError("missing transcript_events")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(transcript_events)")}
-        if not {"session_id", "seq", "event_json", "created_at"}.issubset(columns):
+        if not {"session_id", "seq", "created_at"}.issubset(columns):
             raise sqlite_module.OperationalError("incompatible transcript_events")
+        if "event_json" not in columns and "event_zstd" not in columns:
+            raise sqlite_module.OperationalError("incompatible transcript_events")
+
+        # 正文可能有三种列组合：旧库只有 event_json；压缩库两者都有；更早/更窄的
+        # 只读视图可能缺其中一列。SELECT 里始终保留两列名，用常量 NULL 占位。
+        json_expr = "event_json" if "event_json" in columns else "NULL"
+        zstd_expr = "event_zstd" if "event_zstd" in columns else "NULL"
 
         session_models = {}
         if "session_windows" in tables:
@@ -10482,9 +10549,12 @@ def _scan_openclaw_agent_db(db_path, sqlite_module):
 
         sessions = {}
         seen_events = {}
-        for session_id, seq, raw_event, created_at in conn.execute(
-                "SELECT session_id, seq, event_json, created_at "
+        for session_id, seq, raw_json, raw_zstd, created_at in conn.execute(
+                f"SELECT session_id, seq, {json_expr}, {zstd_expr}, created_at "
                 "FROM transcript_events ORDER BY session_id, seq"):
+            raw_event = _openclaw_event_text(raw_json, raw_zstd)
+            if raw_event is None:
+                continue
             try:
                 event = json.loads(raw_event)
             except (TypeError, ValueError):

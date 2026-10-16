@@ -13,6 +13,13 @@ try:
 except ImportError:
     from test_codex_limits import USAGE
 
+try:
+    import zstandard as _zstandard
+except ImportError:
+    _zstandard = None
+
+ZSTANDARD_AVAILABLE = _zstandard is not None
+
 
 class OpenClawTaskTests(unittest.TestCase):
     def create_database(self, path, created_ms, statuses, with_tasks=True):
@@ -55,18 +62,31 @@ class OpenClawTaskTests(unittest.TestCase):
         connection.commit()
         connection.close()
 
-    def create_agent_database(self, path, events, session_models=None, fts_event=None):
+    def create_agent_database(self, path, events, session_models=None, fts_event=None,
+                              zstd=False):
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path)
-        connection.execute("""
-            CREATE TABLE transcript_events (
-                session_id TEXT NOT NULL,
-                seq INTEGER NOT NULL,
-                event_json TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                PRIMARY KEY (session_id, seq)
-            )
-        """)
+        if zstd:
+            connection.execute("""
+                CREATE TABLE transcript_events (
+                    session_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    event_json TEXT,
+                    created_at INTEGER NOT NULL,
+                    event_zstd BLOB,
+                    event_utf8_bytes INTEGER
+                )
+            """)
+        else:
+            connection.execute("""
+                CREATE TABLE transcript_events (
+                    session_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    event_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (session_id, seq)
+                )
+            """)
         connection.execute("""
             CREATE TABLE session_windows (
                 session_id TEXT PRIMARY KEY,
@@ -98,11 +118,24 @@ class OpenClawTaskTests(unittest.TestCase):
             )
         """)
         connection.execute("CREATE TABLE session_transcript_fts (event_json TEXT NOT NULL)")
-        connection.executemany(
-            "INSERT INTO transcript_events VALUES (?, ?, ?, ?)",
-            [(session_id, seq, json.dumps(event), created_ms)
-             for seq, (session_id, event, created_ms) in enumerate(events, 1)],
-        )
+        if zstd:
+            if _zstandard is None:
+                connection.close()
+                self.skipTest("zstandard not installed")
+            compressor = _zstandard.ZstdCompressor()
+            rows = []
+            for seq, (session_id, event, created_ms) in enumerate(events, 1):
+                payload = json.dumps(event).encode("utf-8")
+                rows.append((session_id, seq, None, created_ms,
+                             compressor.compress(payload), len(payload)))
+            connection.executemany(
+                "INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?)", rows)
+        else:
+            connection.executemany(
+                "INSERT INTO transcript_events VALUES (?, ?, ?, ?)",
+                [(session_id, seq, json.dumps(event), created_ms)
+                 for seq, (session_id, event, created_ms) in enumerate(events, 1)],
+            )
         for session_id, model in (session_models or {}).items():
             created_ms = next(
                 created for sid, _, created in events if sid == session_id)
@@ -583,6 +616,142 @@ class OpenClawTaskTests(unittest.TestCase):
 
         self.assertEqual(merged[day_key]["in"], 10)
         self.assertEqual(merged[day_key]["reason"], 1)
+
+
+    def test_reads_zstd_stored_transcript_events(self):
+        """event_json 为 NULL 时正文在 event_zstd，用量事件不能被丢弃。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "openclaw fixture"
+            state_db = root / "state" / "openclaw.sqlite"
+            agent_db = root / "agents" / "example-agent" / "agent" / "openclaw-agent.sqlite"
+            now = datetime.now().astimezone().replace(microsecond=0)
+            created_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+            task_created_ms = int(now.timestamp() * 1000)
+            usage = {"input": 120, "output": 30, "cacheRead": 40, "cacheWrite": 0,
+                     "reasoningTokens": 7, "totalTokens": 190,
+                     "cost": {"total": 0.75}}
+            assistant = self.usage_event("zstd-usage", now, usage)
+            self.create_database(state_db, task_created_ms, ["completed"])
+            self.add_agent_registry(state_db, [
+                os.path.relpath(agent_db, root)])
+            self.create_agent_database(
+                agent_db,
+                [("session-zstd", assistant, created_ms)],
+                {"session-zstd": "vendor/zstd-session-model"},
+                zstd=True,
+            )
+
+            result, _ = self.scan(state_db, root / "tasks" / "runs.sqlite",
+                                  root / "agents")
+
+        today = result["ranges"]["today"]
+        self.assertEqual((today["in"], today["out"], today["cr"], today["cw"],
+                          today["reason"]), (120, 30, 40, 0, 7))
+        self.assertAlmostEqual(today["cost"], 0.75)
+        self.assertEqual(today["sessions"], {"session-zstd"})
+
+    def test_mixed_json_and_zstd_events_are_deduplicated(self):
+        """两种存储并存时按事件 id 去重，不会把同一事件算两次。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "openclaw fixture"
+            state_db = root / "state" / "openclaw.sqlite"
+            agent_db = root / "agents" / "example-agent" / "agent" / "openclaw-agent.sqlite"
+            now = datetime.now().astimezone().replace(microsecond=0)
+            created_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+            task_created_ms = int(now.timestamp() * 1000)
+            json_usage = {"input": 100, "output": 10, "cacheRead": 0, "cacheWrite": 0,
+                          "reasoningTokens": 0, "totalTokens": 110,
+                          "cost": {"total": 0.1}}
+            zstd_usage = {"input": 500, "output": 50, "cacheRead": 0, "cacheWrite": 0,
+                          "reasoningTokens": 0, "totalTokens": 550,
+                          "cost": {"total": 0.5}}
+            json_event = self.usage_event("evt-json", now, json_usage)
+            zstd_event = self.usage_event("evt-zstd", now, zstd_usage)
+            duplicate = self.usage_event("evt-json", now, zstd_usage)
+            self.create_database(state_db, task_created_ms, ["completed"])
+            self.add_agent_registry(state_db, [os.path.relpath(agent_db, root)])
+            self.create_agent_database(
+                agent_db,
+                [("session-mixed", json_event, created_ms),
+                 ("session-mixed", zstd_event, created_ms),
+                 ("session-mixed", duplicate, created_ms)],
+                zstd=True,
+            )
+
+            result, _ = self.scan(state_db, root / "tasks" / "runs.sqlite",
+                                  root / "agents")
+
+        today = result["ranges"]["today"]
+        # evt-json(100) 只计一次（幂等重复行被 id 去重），加 evt-zstd(500)
+        self.assertEqual(today["in"], 600)
+        self.assertEqual(today["out"], 60)
+
+    def test_zstd_events_skipped_when_dependency_missing(self):
+        """缺 zstandard 时安全降级：不报错，只是读不到压缩事件。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "openclaw fixture"
+            state_db = root / "state" / "openclaw.sqlite"
+            agent_db = root / "agents" / "example-agent" / "agent" / "openclaw-agent.sqlite"
+            now = datetime.now().astimezone().replace(microsecond=0)
+            created_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+            task_created_ms = int(now.timestamp() * 1000)
+            assistant = self.usage_event(
+                "zstd-usage", now,
+                {"input": 120, "output": 30, "cacheRead": 0, "cacheWrite": 0,
+                 "reasoningTokens": 0, "totalTokens": 150, "cost": {"total": 0.75}},
+            )
+            self.create_database(state_db, task_created_ms, ["completed"])
+            self.add_agent_registry(state_db, [os.path.relpath(agent_db, root)])
+            self.create_agent_database(agent_db, [("session-zstd", assistant, created_ms)],
+                                       zstd=True)
+
+            with mock.patch.object(USAGE, "_OPENCLAW_ZSTD_AVAILABLE", False):
+                result, _ = self.scan(state_db, root / "tasks" / "runs.sqlite",
+                                      root / "agents")
+
+        today = result["ranges"]["today"]
+        # 解压不可用：压缩事件被跳过，但扫描本身不得抛异常
+        self.assertEqual((today["in"], today["out"]), (0, 0))
+
+    def test_parser_version_bump_rescans_stale_cached_sessions(self):
+        """旧缓存（parser_version=3）必须被重扫，才能补回压缩事件。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "openclaw fixture"
+            state_db = root / "state" / "openclaw.sqlite"
+            agent_db = root / "agents" / "example-agent" / "agent" / "openclaw-agent.sqlite"
+            now = datetime.now().astimezone().replace(microsecond=0)
+            created_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+            task_created_ms = int(now.timestamp() * 1000)
+            assistant = self.usage_event(
+                "zstd-usage", now,
+                {"input": 120, "output": 30, "cacheRead": 0, "cacheWrite": 0,
+                 "reasoningTokens": 0, "totalTokens": 150, "cost": {"total": 0.75}},
+            )
+            self.create_database(state_db, task_created_ms, ["completed"])
+            self.add_agent_registry(state_db, [os.path.relpath(agent_db, root)])
+            self.create_agent_database(agent_db, [("session-zstd", assistant, created_ms)],
+                                       zstd=True)
+
+            # 模拟旧解析器写下的缓存：parser_version 落后，days 为空
+            entry_key = "sqlite:" + os.path.realpath(str(agent_db))
+            stale_entry = {"source": "sqlite", "path": str(agent_db),
+                           "sig": "stale-signature", "parser_version": 3,
+                           "sessions": {}}
+            cache = {"v": USAGE._SCAN_CACHE_VERSION,
+                     "openclaw": {entry_key: stale_entry}}
+            result, cache = self.scan(state_db, root / "tasks" / "runs.sqlite",
+                                      root / "agents", cache=cache)
+
+        refreshed = cache["openclaw"][entry_key]
+        self.assertEqual(refreshed["parser_version"], USAGE._OPENCLAW_PARSER_VERSION)
+        self.assertGreaterEqual(refreshed["parser_version"], 4)
+
+    def test_zstd_decoder_rejects_non_zstd_input(self):
+        """只接受 zstd 魔数开头的 BLOB，其余一律返回 None。"""
+        self.assertIsNone(USAGE._openclaw_zstd_blob(b"not-zstd"))
+        self.assertIsNone(USAGE._openclaw_zstd_blob(b""))
+        self.assertIsNone(USAGE._openclaw_zstd_blob(None))
+        self.assertIsNone(USAGE._openclaw_zstd_blob("a string"))
 
 
 if __name__ == "__main__":

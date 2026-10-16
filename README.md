@@ -212,7 +212,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl`（含真实 token + billing 额度）+ `sessions/*/*/{summary,signals}.json`；可选实时账单接口（设置里默认关闭） |
 | Grok Bot | `~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob`（本地活动）；可选 Sand 官方 usage-events / 额度接口（首次需授权 Grok Bot 钥匙串，设置里默认关闭） |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` |
-| OpenClaw | `~/.openclaw/state/openclaw.sqlite` 动态发现 agent SQLite；兼容旧版 `agents/*/sessions/*.jsonl` |
+| OpenClaw | `~/.openclaw/state/openclaw.sqlite` 动态发现 agent SQLite；`transcript_events` 正文兼容 `event_json` 与 `event_zstd`（zstd 压缩，需 zstandard）两种存储；兼容旧版 `agents/*/sessions/*.jsonl` |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` |
 | Prime Agent | `~/.prime/agent/sessions/*.jsonl` + `session-artifacts/**/**/*.jsonl` |
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` |

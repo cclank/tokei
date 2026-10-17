@@ -39,7 +39,7 @@ class ProjectSourceRegistryTests(unittest.TestCase):
         for tool in ("claude", "codex", "devin", "minimax", "hermes", "opencode",
                      "kimicode", "pi", "prime_agent", "workbuddy",
                      "workbuddy_ai", "deepseek_harness", "mimocode",
-                     "musecode", "cmdcode", "codebuddy"):
+                     "musecode", "cmdcode", "copilot", "codebuddy"):
             self.assertIn(tool, registered, f"{tool} 应参与项目维度")
 
 

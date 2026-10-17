@@ -264,6 +264,7 @@ struct ProjectTrailView: View {
         case "kimicode": return Theme.kimicode
         case "musecode": return Theme.musecode
         case "cmdcode": return Theme.cmdcode
+        case "copilot": return Theme.copilot
         case "devin": return Theme.devin
         case "minimax": return Theme.minimax
         default: return Theme.tTertiary

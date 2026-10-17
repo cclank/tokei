@@ -23,8 +23,20 @@ struct Tip: NSViewRepresentable {
     func updateNSView(_ v: NSView, context: Context) { v.toolTip = text }
 }
 
+/// `ImageRenderer` 离屏截图时 NSView 工具提示 overlay 会渲染成破损图标，需跳过。
+enum OffscreenRender {
+    static var suppressTips = false
+}
+
 extension View {
-    func tip(_ text: String) -> some View { overlay(Tip(text: text)) }
+    @ViewBuilder
+    func tip(_ text: String) -> some View {
+        if OffscreenRender.suppressTips {
+            self
+        } else {
+            overlay(Tip(text: text))
+        }
+    }
 }
 
 // 设计系统:颜色 / 间距 / 圆角集中定义,组件语义化复用。
@@ -62,6 +74,7 @@ enum Theme {
     static let kimicode = Color(red: 0.20, green: 0.78, blue: 0.66) // 月石青
     static let musecode = Color(red: 0.10, green: 0.42, blue: 0.92) // Meta 蓝
     static let cmdcode = Color(red: 0.22, green: 0.68, blue: 0.32) // 终端绿
+    static let copilot = Color(red: 0.54, green: 0.34, blue: 0.90) // GitHub Copilot 紫（#8957E5 系）
     static let devin = Color(red: 0.42, green: 0.47, blue: 0.98)    // 深蓝紫
     static let minimax = Color(red: 0.91, green: 0.25, blue: 0.40)  // MiniMax 玫红
 

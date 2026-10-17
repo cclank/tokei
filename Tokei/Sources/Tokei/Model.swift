@@ -1187,6 +1187,7 @@ struct Usage: Codable {
     @Boxed var kimicode: KimiCodeStat
     @Boxed var musecode: TokenUsageStat
     @Boxed var cmdcode: TokenUsageStat
+    @Boxed var copilot: TokenUsageStat
     @Boxed var devin: DevinStat
     @Boxed var minimax: MiniMaxStat
     @Boxed var antigravity: ProviderQuotaStat
@@ -1201,7 +1202,7 @@ struct Usage: Codable {
         case openclaw, pi, workbuddy, workbuddyAI = "workbuddy_ai"
         case codebuddy
         case deepseekHarness = "deepseek_harness", opencode, qwencode
-        case qwenwork, kimicode, musecode, cmdcode, prime_agent, devin, minimax, antigravity, cursor, zed, sub2api, zai
+        case qwenwork, kimicode, musecode, cmdcode, copilot, prime_agent, devin, minimax, antigravity, cursor, zed, sub2api, zai
     }
 
     init(from decoder: Decoder) throws {
@@ -1235,6 +1236,7 @@ struct Usage: Codable {
         kimicode = try c.decodeIfPresent(KimiCodeStat.self, forKey: .kimicode) ?? KimiCodeStat(ranges: .empty)
         musecode = try c.decodeIfPresent(TokenUsageStat.self, forKey: .musecode) ?? TokenUsageStat(ranges: .empty)
         cmdcode = try c.decodeIfPresent(TokenUsageStat.self, forKey: .cmdcode) ?? TokenUsageStat(ranges: .empty)
+        copilot = try c.decodeIfPresent(TokenUsageStat.self, forKey: .copilot) ?? TokenUsageStat(ranges: .empty)
         devin = (try? c.decodeIfPresent(DevinStat.self, forKey: .devin)) ?? .empty
         minimax = (try? c.decodeIfPresent(MiniMaxStat.self, forKey: .minimax)) ?? .empty
         antigravity = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .antigravity) ?? ProviderQuotaStat()

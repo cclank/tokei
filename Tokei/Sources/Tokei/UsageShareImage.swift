@@ -143,6 +143,7 @@ enum UsageShareImage {
         case "Kimi Code": return Theme.kimicode
         case "Muse Code": return Theme.musecode
         case "Command Code": return Theme.cmdcode
+        case "GitHub Copilot": return Theme.copilot
         case "Prime Agent": return Theme.primeAgent
         case "DeepSeek Harness": return Theme.deepseekHarness
         case "Devin": return Theme.devin
@@ -356,6 +357,10 @@ private func nativeToolCard(
             if let cost = line.cost, cost > 0 || (line.cost_cny ?? 0) > 0 {
                 MetricCell(icon: "dollarsign.circle", label: L("≈成本"),
                            value: nativeMoney(cost, line.cost_cny), tint: tint)
+            }
+            if let extra = line.extra, !extra.isEmpty {
+                MetricCell(icon: "circle.hexagongrid.fill", label: "Credits",
+                           value: extra.replacingOccurrences(of: " Credits", with: ""), tint: tint)
             }
             if let hit = line.hit, hit > 0 {
                 RingMetricCell(value: hit, label: "Cache Hit", tint: tint)

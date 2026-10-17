@@ -476,6 +476,7 @@ final class SyncManager {
             mergeRanges(&u.kimicode.ranges, peer.usage.kimicode.ranges, pairs)
             mergeRanges(&u.musecode.ranges, peer.usage.musecode.ranges, pairs)
             mergeRanges(&u.cmdcode.ranges, peer.usage.cmdcode.ranges, pairs)
+            mergeRanges(&u.copilot.ranges, peer.usage.copilot.ranges, pairs)
             mergeRanges(&u.devin.ranges, peer.usage.devin.ranges, pairs)
             mergeRanges(&u.minimax.ranges, peer.usage.minimax.ranges, pairs)
         }

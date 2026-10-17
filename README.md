@@ -59,6 +59,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 | **Kimi Code** | Token（输入/输出/缓存）、会话、模型、项目、配额（5h / 订阅周期） |
 | **Muse Code** | Token（输入/输出/缓存/推理）、成本、模型、项目 |
 | **Command Code** | Token（输入/输出/缓存）、成本、模型、项目 |
+| **GitHub Copilot** | Token（输入/输出/缓存）、Premium Requests、模型、项目（本地日志） |
 | **Devin** | Token（输入/输出/缓存）、成本、模型、会话；日/周/消息额度、套餐与账号、超额余额 |
 | **MiniMax Code** | Token（输入/输出/缓存）、成本、模型、会话、项目；可选 Token Plan 5 小时 / 周额度（填入 Key 后联网查询） |
 

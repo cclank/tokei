@@ -30,6 +30,7 @@ Tokei 主要读取本地 AI 工具日志，统计 token 用量与成本。额度
 | Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl`；兼容旧版 `${KIMI_SHARE_DIR:-~/.kimi}/sessions/*/*/wire.jsonl` | JSONL, protocol 1.5 `usage.record` / protocol 1 `StatusUpdate.token_usage` |
 | Muse Code | `${TOKEI_MUSE_DIR:-~/.local/share/muse}/sessions/*/*/*/session.jsonl` | JSONL, `model_completed` 事件 `usage` + `model` |
 | Command Code | `${TOKEI_CMDCODE_DIR:-~/.commandcode}/projects/*/*.jsonl` | JSONL, assistant message 顶层 `usage` + `costUsd` |
+| GitHub Copilot | `${TOKEI_COPILOT_DIR:-~/.copilot}/session-state/*/events.jsonl`（兼容 SQLite `assistant_usage_events`） | JSONL, `session.shutdown` 的 `modelMetrics` + `totalPremiumRequests` |
 | Kimi Code(额度) | `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json` → `api.kimi.com/coding/v1/usages` | 本机登录态只读查询，见 §5 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | SQLite, `model_usage` Token 明细 |
 | MiMoCode | `$XDG_DATA_HOME/mimocode/mimocode*.db`，macOS 使用 `~/Library/Application Support/mimocode/` | SQLite, OpenCode-compatible `message` 数据 |
@@ -153,6 +154,17 @@ protocol 1.5 为每个 Agent 单独保存 `agents/<agent>/wire.jsonl`。Tokei �
 只读取真实会话转录中的 assistant `usage`，跳过 checkpoints、prompts 与 hooks audit
 sidecar，并按消息身份与时刻跨文件去重。兼容顶层和嵌套消息结构，项目取自 session
 记录的 `cwd`，时刻取自 `timestamp`（ISO 8601，兼容 `Z` 后缀）。
+
+**GitHub Copilot** — 以 `session.shutdown` 的 `modelMetrics` 为准（会话级汇总）:
+- 输入 = `usage.inputTokens`
+- 输出 = `usage.outputTokens`
+- 缓存读 = `usage.cacheReadTokens`
+- 缓存写 = `usage.cacheWriteTokens`
+- Premium Requests = `totalPremiumRequests`（展示在 Credits 行）
+- 成本 = 按模型 ID 查价格表估算（日志无账单）
+
+按 `session.start` 的 `startTime`（或 shutdown 的 `sessionStartTime`）归日；项目取自
+`session.start` 的 `context.cwd` / `gitRoot`。只读本地 `events.jsonl` 用量字段，不读对话正文。
 
 **Prime Agent** — Usage 字段与 Pi Coding Agent 一致:
 - 输入 = `usage.input`

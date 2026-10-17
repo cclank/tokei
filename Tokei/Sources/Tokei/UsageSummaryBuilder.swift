@@ -26,6 +26,7 @@ struct UsageToolVisibility: Equatable {
     var kimicode = true
     var musecode = true
     var cmdcode = true
+    var copilot = true
     var devin = true
     var minimax = true
 
@@ -343,6 +344,10 @@ enum UsageSummaryBuilder {
         if visibility.cmdcode {
             appendTokenTool(&lines, id: "cmdcode", name: "Command Code",
                             range: usage.cmdcode.ranges.get(range))
+        }
+        if visibility.copilot {
+            appendTokenTool(&lines, id: "copilot", name: "GitHub Copilot",
+                            range: usage.copilot.ranges.get(range), includesCredits: true)
         }
         if visibility.devin {
             appendTokenTool(&lines, id: "devin", name: "Devin",

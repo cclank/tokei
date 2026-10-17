@@ -213,7 +213,7 @@ struct UsageSummaryBuilderCheck {
 
         // 分享图按展示名取主题色；漏登记的工具会掉进默认灰（Muse/Kimi/Prime/DeepSeek 曾全灰）。
         let gray = NSColor(Theme.tTertiary)
-        for name in ["Prime Agent", "DeepSeek Harness", "Kimi Code", "Muse Code"] {
+        for name in ["Prime Agent", "DeepSeek Harness", "Kimi Code", "Muse Code", "GitHub Copilot"] {
             let tint = NSColor(UsageShareImage.tint(for: name))
             try expect(!tint.isEqual(gray), "\(name) share tint must not be gray")
         }

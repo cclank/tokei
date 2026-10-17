@@ -52,6 +52,7 @@ curl -sL https://raw.githubusercontent.com/<user>/tokei-sync/main/install.sh | b
 - Kimi Code (`${KIMI_CODE_HOME:-~/.kimi-code}/`，兼容旧版 `${KIMI_SHARE_DIR:-~/.kimi}/`)
 - Muse Code (`${TOKEI_MUSE_DIR:-~/.local/share/muse}/sessions/`)
 - Command Code (`${TOKEI_CMDCODE_DIR:-~/.commandcode}/projects/`)
+- GitHub Copilot (`${TOKEI_COPILOT_DIR:-~/.copilot}/session-state/`)
 
 ## 卸载
 

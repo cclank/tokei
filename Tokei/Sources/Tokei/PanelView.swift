@@ -34,6 +34,7 @@ struct PanelView: View {
     @State private var kimiCodeModelsOpen = false
     @State private var museCodeModelsOpen = false
     @State private var cmdCodeModelsOpen = false
+    @State private var copilotModelsOpen = false
     @State private var devinModelsOpen = false
     @State private var miniMaxModelsOpen = false
     @State private var openClawModelsOpen = false
@@ -88,6 +89,7 @@ struct PanelView: View {
     @AppStorage("showKimiCode") private var showKimiCode = true
     @AppStorage("showMuseCode") private var showMuseCode = true
     @AppStorage("showCmdCode") private var showCmdCode = true
+    @AppStorage("showCopilot") private var showCopilot = true
     @AppStorage("showDevin") private var showDevin = true
     @AppStorage("showMiniMax") private var showMiniMax = true
     /// 默认关闭：Grok 额度只读本地日志；开启后才用登录凭据请求实时账单接口。
@@ -124,7 +126,7 @@ struct PanelView: View {
             codebuddy: showCodeBuddy,
             deepseekHarness: showDeepSeekHarness,
             opencode: showOpenCode, qwencode: showQwenCode, kimicode: showKimiCode,
-            musecode: showMuseCode, cmdcode: showCmdCode,
+            musecode: showMuseCode, cmdcode: showCmdCode, copilot: showCopilot,
             devin: showDevin, minimax: showMiniMax
         )
     }
@@ -136,7 +138,7 @@ struct PanelView: View {
          showOpenClaw, showPi, showWorkBuddy, showWorkBuddyAI, showDeepSeekHarness,
          showCodeBuddy,
          showOpenCode, showQwenCode,
-         showQwenWork, showKimiCode, showMuseCode, showCmdCode, showPrimeAgent, showDevin,
+         showQwenWork, showKimiCode, showMuseCode, showCmdCode, showCopilot, showPrimeAgent, showDevin,
          showMiniMax].filter { $0 }.count
     }
     private var hasMultipleDevices: Bool { store.syncEnabled && !store.peers.isEmpty }
@@ -434,6 +436,7 @@ struct PanelView: View {
         let zaiUsage = u.zai.usage?.ranges.get(sel) ?? TokenUsageRange()
         let qcr = u.qwencode.ranges.get(sel), kcr = u.kimicode.ranges.get(sel)
         let mcr = u.musecode.ranges.get(sel), ccr = u.cmdcode.ranges.get(sel)
+        let cpr = u.copilot.ranges.get(sel)
         let dvr = u.devin.ranges.get(sel), mmr = u.minimax.ranges.get(sel)
         return [
             ToolCardItem(id: "claude", name: "Claude", visible: showClaude,
@@ -572,6 +575,12 @@ struct PanelView: View {
                          tint: Theme.musecode, content: AnyView(tokenUsageBlock(title: "Muse Code", mcr, tint: Theme.musecode, modelsOpen: $museCodeModelsOpen, reasonIncludedInOutput: true, toolID: "musecode"))),
             ToolCardItem(id: "cmdcode", name: "Command Code", visible: showCmdCode, active: ccr.sessions > 0,
                          tint: Theme.cmdcode, content: AnyView(tokenUsageBlock(title: "Command Code", ccr, tint: Theme.cmdcode, modelsOpen: $cmdCodeModelsOpen, toolID: "cmdcode"))),
+            ToolCardItem(id: "copilot", name: "GitHub Copilot", visible: showCopilot,
+                         active: cpr.sessions > 0 || cpr.credits > 0,
+                         tint: Theme.copilot,
+                         content: AnyView(tokenUsageBlock(title: "GitHub Copilot", cpr, tint: Theme.copilot,
+                                                          modelsOpen: $copilotModelsOpen, showsCredits: true,
+                                                          toolID: "copilot"))),
         ]
     }
 
@@ -3128,6 +3137,7 @@ struct PanelView: View {
                 settingsRow("Kimi Code", tint: Theme.kimicode, isOn: $showKimiCode)
                 settingsRow("Muse Code", tint: Theme.musecode, isOn: $showMuseCode)
                 settingsRow("Command Code", tint: Theme.cmdcode, isOn: $showCmdCode)
+                settingsRow("GitHub Copilot", tint: Theme.copilot, isOn: $showCopilot)
                 settingsRow("Devin", tint: Theme.devin, isOn: $showDevin)
                 settingsRow("MiniMax Code", tint: Theme.minimax, isOn: $showMiniMax)
             }
@@ -4276,7 +4286,7 @@ struct PanelView: View {
                          "zcode", "mimocode", "openclaw", "pi", "workbuddy", "workbuddy_ai",
                          "codebuddy",
                          "deepseek_harness",
-                         "opencode", "qwencode", "qwenwork", "kimicode", "musecode", "cmdcode", "prime_agent",
+                         "opencode", "qwencode", "qwenwork", "kimicode", "musecode", "cmdcode", "copilot", "prime_agent",
                          "devin", "minimax"]
                 .filter { json[$0] != nil }
                 .joined(separator: ",")

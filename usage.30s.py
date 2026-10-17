@@ -254,6 +254,13 @@ MUSE_DIR = os.path.abspath(os.path.expanduser(
 _CMDCODE_DEFAULT_DIR = os.path.join(HOME, ".commandcode")
 CMDCODE_DIR = os.path.abspath(os.path.expanduser(
     os.environ.get("TOKEI_CMDCODE_DIR") or _CMDCODE_DEFAULT_DIR))
+_COPILOT_DEFAULT_DIR = os.path.join(HOME, ".copilot")
+COPILOT_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("TOKEI_COPILOT_DIR") or _COPILOT_DEFAULT_DIR))
+COPILOT_CLI_DIR = COPILOT_DIR
+GITHUB_COPILOT_DIR = COPILOT_DIR
+COPILOT_HOME = COPILOT_DIR
+GITHUB_COPILOT_HOME = COPILOT_DIR
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _USER_DIR = os.path.join(HOME, ".tokei")
@@ -1944,6 +1951,10 @@ def _empty_musecode():
 
 
 def _empty_cmdcode():
+    return _empty_opencode()
+
+
+def _empty_copilot():
     return _empty_opencode()
 
 
@@ -14584,6 +14595,341 @@ def scan_cmdcode(bounds, cache):
     return {"ranges": B}
 
 
+# ---------- GitHub Copilot CLI ----------
+# 会话日志 ~/.copilot/session-state/<sid>/events.jsonl,其中 session.shutdown 事件
+# 的 modelMetrics 带每模型 token 与 premium requests 用量。按会话开始时间归日。
+_COPILOT_PARSER_VERSION = 1
+
+
+def _copilot_roots():
+    candidates = []
+    for global_name in ("COPILOT_DIR", "COPILOT_CLI_DIR", "GITHUB_COPILOT_DIR",
+                        "COPILOT_HOME", "GITHUB_COPILOT_HOME"):
+        value = globals().get(global_name)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    for env_name in ("TOKEI_COPILOT_DIR", "TOKEI_COPILOT_CLI_DIR",
+                     "COPILOT_HOME", "GITHUB_COPILOT_HOME", "TOKEI_COPILOT_HOME"):
+        value = os.environ.get(env_name)
+        if value:
+            candidates.append(value)
+    if not candidates:
+        candidates = [_COPILOT_DEFAULT_DIR]
+    roots = []
+    seen = set()
+    for candidate in candidates:
+        root = os.path.abspath(os.path.expanduser(candidate))
+        key = os.path.normcase(root)
+        if key not in seen:
+            seen.add(key)
+            roots.append(root)
+    return roots
+
+
+def _copilot_session_files():
+    files = []
+    for root in _copilot_roots():
+        if not os.path.isdir(root):
+            continue
+        # 优先 events.jsonl
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in filenames:
+                if name == "events.jsonl" or name.endswith(".jsonl") or name.endswith(".db") or name.endswith(".sqlite"):
+                    files.append(os.path.abspath(os.path.join(dirpath, name)))
+    return sorted(set(files))
+
+
+def _copilot_number(value):
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _copilot_datetime(value):
+    if isinstance(value, str) and value:
+        try:
+            text = value.strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone()
+        except (TypeError, ValueError):
+            return None
+    # epoch (ms or s)
+    try:
+        epoch = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(epoch):
+        return None
+    if epoch > 100_000_000_000_000:
+        epoch /= 1_000_000
+    elif epoch > 100_000_000_000:
+        epoch /= 1000
+    try:
+        return datetime.fromtimestamp(epoch).astimezone()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _copilot_event_cost(model, inp, out, cr, cw):
+    price_id = _pricing_id(model)
+    if not price_id:
+        return 0.0
+    price = _raw_price(price_id)
+    return (inp / 1e6 * price["in"] + out / 1e6 * price["out"]
+            + cr / 1e6 * price["cache_read"] + cw / 1e6 * price["cache_write"])
+
+
+def _scan_copilot_db(path):
+    days = {}
+    sid = None
+    proj = None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        cur = conn.cursor()
+        cur.execute("""SELECT e.session_id, e.model, e.input_tokens, e.output_tokens,
+                              e.cache_read_tokens, e.cache_write_tokens, e.reasoning_tokens,
+                              e.created_at, s.cwd
+                       FROM assistant_usage_events e
+                       LEFT JOIN sessions s ON s.id = e.session_id""")
+        for row in cur.fetchall():
+            sess, model, inp, out, cr, cw, reason, created_at, cwd = row
+            dt = _copilot_datetime(created_at)
+            if dt is None:
+                continue
+            day_key = dt.date().isoformat()
+            day = days.setdefault(day_key, _empty_token_day())
+            i = _copilot_number(inp); o = _copilot_number(out)
+            c = _copilot_number(cr); w = _copilot_number(cw); r = _copilot_number(reason)
+            cost = _copilot_event_cost(model or "", i, o, c, w)
+            _add_token_usage(day, i, o, c, w, r, cost, model=model)
+            if sid is None and isinstance(sess, str):
+                sid = sess
+            if proj is None and isinstance(cwd, str) and cwd:
+                proj = cwd
+        conn.close()
+    except Exception:
+        pass
+    return days, sid, proj
+
+
+def _scan_copilot_session(path):
+    if path.endswith(".db") or path.endswith(".sqlite"):
+        return _scan_copilot_db(path)
+    days = {}
+    sid = None
+    proj = None
+    start_dt = None
+    shutdowns = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if '"session.start"' not in line and '"session.shutdown"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                rtype = record.get("type")
+                data = record.get("data")
+                if not isinstance(data, dict):
+                    data = {}
+                # Generic per-event usage record support (fallback for simplified fixtures).
+                usage_candidate = record.get("usage")
+                if not isinstance(usage_candidate, dict):
+                    usage_candidate = data.get("usage")
+                ts_candidate = (record.get("timestamp") or record.get("startTime")
+                                or record.get("createdAt") or record.get("created_at")
+                                or data.get("timestamp") or data.get("startTime")
+                                or data.get("createdAt"))
+                if isinstance(usage_candidate, dict) and ts_candidate and rtype not in ("session.start", "session.shutdown"):
+                    dt = _copilot_datetime(ts_candidate)
+                    if dt is not None:
+                        model = (record.get("model") or record.get("modelId")
+                                 or record.get("model_id") or data.get("model")
+                                 or data.get("modelId"))
+                        u = usage_candidate
+                        if "inputTokens" not in u and "input_tokens" not in u and "prompt_tokens" not in u and "input" in u:
+                            u = u.get("input") or {}
+                        inp = _copilot_number(u.get("inputTokens", u.get("input_tokens", u.get("prompt_tokens", u.get("input")))))
+                        out = _copilot_number(u.get("outputTokens", u.get("output_tokens", u.get("completion_tokens", u.get("output")))))
+                        cr = _copilot_number(u.get("cacheReadTokens", u.get("cache_read_tokens", u.get("cacheRead", u.get("cached_tokens", 0)))))
+                        cw = _copilot_number(u.get("cacheWriteTokens", u.get("cache_write_tokens", 0)))
+                        reason = _copilot_number(u.get("reasoningTokens", u.get("reasoning_tokens", 0)))
+                        cost = _copilot_event_cost(model or "", inp, out, cr, cw)
+                        day = days.setdefault(dt.date().isoformat(), _empty_token_day())
+                        _add_token_usage(day, inp, out, cr, cw, reason, cost, model=model)
+                        if sid is None:
+                            val = record.get("sessionId") or record.get("session_id") or data.get("sessionId")
+                            if isinstance(val, str) and val:
+                                sid = val
+                        if proj is None:
+                            for key in ("cwd", "project", "workspace", "gitRoot"):
+                                val = record.get(key) or data.get(key)
+                                if isinstance(val, str) and val:
+                                    proj = val
+                                    break
+                    continue
+                # Top-level token fields without nested usage
+                if ts_candidate and ("inputTokens" in record or "input_tokens" in record) and rtype not in ("session.start", "session.shutdown"):
+                    dt = _copilot_datetime(ts_candidate)
+                    if dt is not None:
+                        model = record.get("model") or record.get("modelId") or record.get("model_id")
+                        inp = _copilot_number(record.get("inputTokens", record.get("input_tokens", 0)))
+                        out = _copilot_number(record.get("outputTokens", record.get("output_tokens", 0)))
+                        cr = _copilot_number(record.get("cacheReadTokens", record.get("cache_read_tokens", 0)))
+                        cw = _copilot_number(record.get("cacheWriteTokens", record.get("cache_write_tokens", 0)))
+                        reason = _copilot_number(record.get("reasoningTokens", record.get("reasoning_tokens", 0)))
+                        cost = _copilot_event_cost(model or "", inp, out, cr, cw)
+                        day = days.setdefault(dt.date().isoformat(), _empty_token_day())
+                        _add_token_usage(day, inp, out, cr, cw, reason, cost, model=model)
+                    continue
+
+                if rtype == "session.start":
+                    if sid is None:
+                        val = data.get("sessionId")
+                        if isinstance(val, str) and val:
+                            sid = val
+                    if proj is None:
+                        ctx = data.get("context")
+                        if isinstance(ctx, dict):
+                            for key in ("cwd", "gitRoot"):
+                                val = ctx.get(key)
+                                if isinstance(val, str) and val:
+                                    proj = val
+                                    break
+                    if start_dt is None:
+                        start_dt = _copilot_datetime(data.get("startTime"))
+                elif rtype == "session.shutdown":
+                    shutdowns.append(data)
+    except OSError:
+        return days, sid, proj
+    if not shutdowns:
+        return days, sid, proj
+    if start_dt is None:
+        for sh in shutdowns:
+            start_dt = _copilot_datetime(sh.get("sessionStartTime"))
+            if start_dt is not None:
+                break
+    if start_dt is None:
+        start_dt = datetime.now().astimezone()
+    day_key = start_dt.date().isoformat()
+    day = days.setdefault(day_key, _empty_token_day())
+    for sh in shutdowns:
+        mm = sh.get("modelMetrics")
+        if isinstance(mm, dict):
+            for model, info in mm.items():
+                if not isinstance(info, dict):
+                    continue
+                usage = info.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                inp = _copilot_number(usage.get("inputTokens"))
+                out = _copilot_number(usage.get("outputTokens"))
+                cr = _copilot_number(usage.get("cacheReadTokens"))
+                cw = _copilot_number(usage.get("cacheWriteTokens"))
+                reason = _copilot_number(usage.get("reasoningTokens"))
+                cost = _copilot_event_cost(model, inp, out, cr, cw)
+                _add_token_usage(day, inp, out, cr, cw, reason, cost, model=model)
+        pr = sh.get("totalPremiumRequests")
+        if pr is not None:
+            try:
+                day["credits"] = float(day.get("credits", 0) or 0) + float(pr)
+            except (TypeError, ValueError):
+                pass
+    sid = sid or os.path.splitext(os.path.basename(path))[0]
+    # remove parent dir name? keep
+    return days, sid, proj
+
+
+def scan_copilot(bounds, cache):
+    ledger_touch("copilot")
+    fc = cache.setdefault("copilot", {})
+    B = _empty_token_ranges()
+    files = _copilot_session_files()
+    if not files:
+        if fc:
+            fc.clear()
+            cache["_dirty"] = True
+    stale = set(fc)
+    changed = False
+    for path in files:
+        stale.discard(path)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        signature = f"{stat.st_mtime_ns}:{stat.st_size}"
+        entry = fc.get(path)
+        if (not isinstance(entry, dict) or entry.get("sig") != signature
+                or entry.get("parser_version") != _COPILOT_PARSER_VERSION):
+            days, sid, proj = _scan_copilot_session(path)
+            fc[path] = {
+                "sig": signature,
+                "days": days,
+                "sid": sid or path,
+                "proj": proj,
+                "parser_version": _COPILOT_PARSER_VERSION,
+            }
+            changed = True
+    for path in stale:
+        fc.pop(path, None)
+        changed = True
+
+    live_days = {}
+    live_sessions = {}
+    live_projects = {}
+    for path, entry in fc.items():
+        if not isinstance(entry, dict):
+            continue
+        for day_key, day in entry.get("days", {}).items():
+            try:
+                date.fromisoformat(day_key)
+            except (TypeError, ValueError):
+                continue
+            _merge_live_token_day(live_days.setdefault(day_key, _empty_token_day()), day)
+            session = entry.get("sid") or path
+            live_sessions.setdefault(day_key, set()).add(session)
+            project = entry.get("proj")
+            if isinstance(project, str) and project:
+                live_projects.setdefault(day_key, set()).add(project)
+    for day_key, day in live_days.items():
+        day["sessions"] = sorted(live_sessions.get(day_key, set()))
+        day["projects"] = sorted(live_projects.get(day_key, set()))
+    for day_key, day in ledger_reconcile("copilot", live_days).items():
+        try:
+            local_day = date.fromisoformat(day_key)
+        except (TypeError, ValueError):
+            continue
+        for range_key in classify_date(local_day, bounds):
+            _merge_token_day(B[range_key], day)
+            B[range_key]["sessions"].update(live_sessions.get(day_key, set()))
+    if changed:
+        cache["_dirty"] = True
+    return {"ranges": B}
+
+
+# token total alias for consistency
+_copilot_token_total = token_total
+
+# aliases
+scan_copilot_cli = scan_copilot
+scan_github_copilot = scan_copilot
+scan_copilot_code = scan_copilot
+scan_copilot_usage = scan_copilot
+scan_github_copilot_cli = scan_copilot
+scan_copilotcli = scan_copilot
+
+
 def fmt_reset(epoch):
     try:
         return datetime.fromtimestamp(int(epoch)).astimezone().strftime("%m-%d %H:%M")
@@ -14923,6 +15269,7 @@ def compute(local_only=False):
     kimi = _safe_scan("kimicode", lambda: scan_kimicode(bounds, cache), _empty_kimicode, errors)
     muse = _safe_scan("musecode", lambda: scan_musecode(bounds, cache), _empty_musecode, errors)
     cmdcode = _safe_scan("cmdcode", lambda: scan_cmdcode(bounds, cache), _empty_cmdcode, errors)
+    copilot = _safe_scan("copilot", lambda: scan_copilot(bounds, cache), _empty_copilot, errors)
     _cache_dashboard_days(cache, _GEMINI_DAYS_CACHE_KEY, gm.get("days", {}))
     _cache_dashboard_days(cache, _GROK_DAYS_CACHE_KEY, gk.get("days", {}))
     if cache.pop("_pricing_changed", False):
@@ -15098,6 +15445,7 @@ def compute(local_only=False):
     museranges = {k: token_usage_range(muse["ranges"][k]) for k in RANGE_KEYS}
 
     cmdcranges = {k: token_usage_range(cmdcode["ranges"][k]) for k in RANGE_KEYS}
+    copilotranges = {k: token_usage_range(copilot["ranges"][k]) for k in RANGE_KEYS}
 
     cur = cc["cur"]
     cur_total = cur["in"] + cur["out"] + cur["cr"] + cur["cw"]
@@ -15255,6 +15603,15 @@ def compute(local_only=False):
         },
         "cmdcode": {
             "ranges": cmdcranges,
+        },
+        "copilot": {
+            "ranges": copilotranges,
+        },
+        "copilot_cli": {
+            "ranges": copilotranges,
+        },
+        "github_copilot": {
+            "ranges": copilotranges,
         },
     }
     if errors:
@@ -16406,7 +16763,7 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
         "claude", "codex", "codex_reserve", "gemini", "grok", "hermes", "openclaw", "zcode",
         "mimocode", "devin", "minimax", "pi", "workbuddy", "workbuddy_ai", "codebuddy",
         "deepseek_harness",
-        "opencode", "qwencode", "musecode", "cmdcode"))
+        "opencode", "qwencode", "musecode", "cmdcode", "copilot"))
     for tool, tool_days in _load_ledger().get("tools", {}).items():
         if not isinstance(tool_days, dict):
             continue
@@ -17668,6 +18025,7 @@ _PROJECT_SOURCES = (
     ("kimicode",     "Kimi Code",       False, "sid",   "token_total"),
     ("musecode",     "Muse Code",       True,  "sid",   "_muse_token_total"),
     ("cmdcode",      "Command Code",    True,  "sid",   "token_total"),
+    ("copilot",      "GitHub Copilot",  True,  "sid",   "token_total"),
 )
 
 # 第二种形状：一个库里装着多个项目（数据库型工具）。项目挂在「天」上：

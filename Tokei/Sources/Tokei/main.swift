@@ -666,22 +666,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 // 加 --usage /path/usage.json 时直接渲染这份数据，不跑采集器——用来看过期、空态这类
 // 平时不好凑出来的状态。
 enum Shot {
-    static func run(path: String) {
-        _ = NSApplication.shared
-        var usage: Usage?
+    static func loadUsage() -> Usage? {
         if let idx = CommandLine.arguments.firstIndex(of: "--usage"),
            CommandLine.arguments.count > idx + 1 {
             let url = URL(fileURLWithPath: CommandLine.arguments[idx + 1])
             do {
-                usage = try Usage.decode(from: Data(contentsOf: url))
+                return try Usage.decode(from: Data(contentsOf: url))
             } catch {
                 fputs("Tokei --usage: \(error)\n", stderr)
+                return nil
             }
-        } else {
-            let sem = DispatchSemaphore(value: 0)
-            DispatchQueue.global().async { usage = DataLoader.loadSync(); sem.signal() }
-            sem.wait()
         }
+        let sem = DispatchSemaphore(value: 0)
+        var usage: Usage?
+        DispatchQueue.global().async { usage = DataLoader.loadSync(); sem.signal() }
+        sem.wait()
+        return usage
+    }
+
+    static func run(path: String) {
+        _ = NSApplication.shared
+        guard let usage = loadUsage() else { exit(1) }
+        OffscreenRender.suppressTips = true
+        defer { OffscreenRender.suppressTips = false }
         MainActor.assumeIsolated {
             let store = Store()
             store.usage = usage
@@ -695,6 +702,50 @@ enum Shot {
                 if let png = rep.representation(using: .png, properties: [:]) {
                     try? png.write(to: URL(fileURLWithPath: path))
                 }
+            }
+        }
+        exit(0)
+    }
+}
+
+// PR / 文档用单工具分享图（与卡片「复制此工具用量图」同一路径，避免 --shot 整面板截图）。
+enum ShareShot {
+    static func run(path: String) {
+        _ = NSApplication.shared
+        guard let usage = Shot.loadUsage() else { exit(1) }
+        guard let toolIdx = CommandLine.arguments.firstIndex(of: "--tool"),
+              CommandLine.arguments.count > toolIdx + 1 else {
+            fputs("Tokei --share-shot: missing --tool <id>\n", stderr)
+            exit(1)
+        }
+        let toolID = CommandLine.arguments[toolIdx + 1]
+        let range: RangeKey = {
+            if let rIdx = CommandLine.arguments.firstIndex(of: "--range"),
+               CommandLine.arguments.count > rIdx + 1,
+               let key = RangeKey(rawValue: CommandLine.arguments[rIdx + 1]) {
+                return key
+            }
+            return .today
+        }()
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        MainActor.assumeIsolated {
+            guard let line = UsageSummaryBuilder.line(
+                forToolID: toolID, usage: usage, range: range, visibility: .allVisible
+            ) else {
+                fputs("Tokei --share-shot: no usage for tool \(toolID)\n", stderr)
+                exit(1)
+            }
+            guard let png = UsageShareImage.pngData(
+                line: line, range: range, updated: L("更新于 %@", stamp)
+            ) else {
+                fputs("Tokei --share-shot: render failed\n", stderr)
+                exit(1)
+            }
+            do {
+                try png.write(to: URL(fileURLWithPath: path))
+            } catch {
+                fputs("Tokei --share-shot: \(error)\n", stderr)
+                exit(1)
             }
         }
         exit(0)
@@ -779,6 +830,12 @@ if let idx = CommandLine.arguments.firstIndex(of: "--mode"),
 
 if CommandLine.arguments.contains("--expand-models") {
     PanelView.expandModelsForShot = true
+}
+
+if let idx = CommandLine.arguments.firstIndex(of: "--share-shot") {
+    let out = CommandLine.arguments.count > idx + 1
+        ? CommandLine.arguments[idx + 1] : "/tmp/tokei_share.png"
+    ShareShot.run(path: out)
 }
 
 if let idx = CommandLine.arguments.firstIndex(of: "--shot") {

@@ -853,6 +853,98 @@ class ProviderQuotaTests(unittest.TestCase):
             self.assertIn(("http", 63040, "", False), endpoints)
             self.assertIn(("https", 63040, "", False), endpoints)
 
+    def test_antigravity_rejects_stale_token_whose_ls_port_is_dead(self):
+        process = {"pid": 321, "kind": "cli", "csrf_token": "",
+                   "extension_port": None, "extension_csrf_token": None}
+        with mock.patch.object(USAGE, "_antigravity_listening_ports", return_value=[51213]), \
+                mock.patch.object(USAGE, "_antigravity_port_open", return_value=False):
+            saved = USAGE._antigravity_attach_credentials([process], {321: ("stale-token", 54570)})
+        self.assertEqual(process["csrf_token"], "")
+        self.assertEqual(saved, {})
+
+        with mock.patch.object(USAGE, "_antigravity_listening_ports", return_value=[51213]), \
+                mock.patch.object(USAGE, "_antigravity_port_open", return_value=True):
+            saved = USAGE._antigravity_attach_credentials([process], {321: ("fresh-token", 51213)})
+        self.assertEqual(process["csrf_token"], "fresh-token")
+        self.assertEqual(process["ls_port"], 51213)
+        self.assertEqual(saved["321"], {"token": "fresh-token", "port": 51213})
+
+    def test_antigravity_daemon_file_supplies_token_and_ports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            daemon = Path(tmp, "daemon")
+            daemon.mkdir()
+            Path(daemon, "ls_fixture.json").write_text(json.dumps({
+                "pid": 4321, "httpsPort": 63041, "httpPort": 63042,
+                "csrfToken": "daemon-token",
+            }), encoding="utf-8")
+            with mock.patch.object(USAGE, "ANTIGRAVITY_DAEMON_DIRS", (str(daemon),)), \
+                    mock.patch.object(USAGE, "_antigravity_pid_alive", return_value=True), \
+                    mock.patch.object(USAGE, "_antigravity_listening_ports",
+                                      return_value=[63041, 63042]):
+                entries = USAGE._antigravity_daemon_credentials()
+                processes = USAGE._antigravity_merge_daemon_processes([], entries)
+                endpoints = USAGE._antigravity_endpoints(processes[0])
+
+        self.assertEqual(entries[0]["token"], "daemon-token")
+        self.assertEqual(processes[0]["pid"], 4321)
+        self.assertEqual(processes[0]["csrf_token"], "daemon-token")
+        self.assertIn(("https", 63041, "daemon-token", True), endpoints)
+        self.assertIn(("http", 63042, "daemon-token", True), endpoints)
+
+    def test_antigravity_daemon_file_with_dead_pid_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            daemon = Path(tmp, "daemon")
+            daemon.mkdir()
+            Path(daemon, "ls_fixture.json").write_text(json.dumps({
+                "pid": 4321, "httpsPort": 63041, "csrfToken": "daemon-token",
+            }), encoding="utf-8")
+            with mock.patch.object(USAGE, "ANTIGRAVITY_DAEMON_DIRS", (str(daemon),)), \
+                    mock.patch.object(USAGE, "_antigravity_pid_alive", return_value=False):
+                entries = USAGE._antigravity_daemon_credentials()
+                processes = USAGE._antigravity_merge_daemon_processes([], entries)
+
+        self.assertEqual(entries, [])
+        self.assertEqual(processes, [])
+
+    def test_antigravity_endpoints_ignore_dead_ls_port(self):
+        process = {"pid": 9, "csrf_token": "token", "ls_port": 54570,
+                   "ports": [51213], "daemon_ports": []}
+        endpoints = USAGE._antigravity_endpoints(process)
+        self.assertEqual({port for _scheme, port, _csrf, _required in endpoints}, {51213})
+        self.assertIn(("https", 51213, "token", True), endpoints)
+
+        unknown = {"pid": 9, "csrf_token": "token", "ls_port": 54570, "ports": []}
+        endpoints = USAGE._antigravity_endpoints(unknown)
+        self.assertIn(54570, {port for _scheme, port, _csrf, _required in endpoints})
+
+    def test_antigravity_fetch_keeps_other_processes_after_csrf_rejection(self):
+        process = {"pid": 777, "csrf_token": "bad-token", "ports": [63040]}
+        endpoints = [("http", 63040, "bad-token", True),
+                     ("https", 63040, "bad-token", True)]
+        with tempfile.TemporaryDirectory() as tmp:
+            self.isolate_cache(Path(tmp))
+            Path(USAGE.ANTIGRAVITY_CREDENTIALS_CACHE).write_text(json.dumps({
+                "credentials": {
+                    "777": {"token": "bad-token", "port": 63040},
+                    "888": {"token": "other-token", "port": 63041},
+                }
+            }), encoding="utf-8")
+            with mock.patch.object(USAGE, "_antigravity_running_processes",
+                                   return_value=[process]), \
+                    mock.patch.object(USAGE, "_antigravity_endpoints",
+                                      return_value=endpoints), \
+                    mock.patch.object(USAGE, "_antigravity_request",
+                                      side_effect=[OSError("SSL record layer failure"),
+                                                   RuntimeError("HTTP 401")]):
+                with self.assertRaises(RuntimeError) as raised:
+                    USAGE.fetch_antigravity_quota()
+            saved = json.loads(
+                Path(USAGE.ANTIGRAVITY_CREDENTIALS_CACHE).read_text(encoding="utf-8"))
+
+        self.assertIn("HTTP 401", str(raised.exception))
+        self.assertNotIn("777", saved["credentials"])
+        self.assertIn("888", saved["credentials"])
+
     def test_antigravity_fetch_fallback_on_http_or_ssl_error(self):
         process = {"pid": 888, "csrf_token": "valid-token"}
         endpoints = [

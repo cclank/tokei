@@ -292,6 +292,13 @@ QWENWORK_QUOTA_CACHE = _writable_path("qwenwork_quota_cache.json")
 PROVIDER_QUOTA_CACHE = _writable_path("provider_quota_cache.json")
 ANTIGRAVITY_SCAN_CACHE = _writable_path("antigravity_scan_cache.json")
 ANTIGRAVITY_CREDENTIALS_CACHE = _writable_path("antigravity_credentials.json")
+# IDE 会把语言服务器的 pid / 端口 / CSRF 写进 daemon/ls_*.json；CLI 目前不写。
+# 命令行走不通时靠这些文件兜底，读到之后仍要校验 pid 活着、端口真的在听。
+ANTIGRAVITY_DAEMON_DIRS = (
+    os.path.join(HOME, ".gemini", "antigravity", "daemon"),
+    os.path.join(HOME, ".gemini", "antigravity-ide", "daemon"),
+    os.path.join(HOME, ".gemini", "antigravity-backup", "daemon"),
+)
 
 # 每 1M token 美元单价。基准价来自 OpenRouter,外置在 pricing.json(由 --update-prices 同步);
 # pricing_overrides.json 做本地修正(write1h / 别名 / 缺漏),一键更新不覆盖它。
@@ -8863,6 +8870,148 @@ def _discover_antigravity_credentials(processes=None):
     return discovered
 
 
+def _antigravity_pid_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or _IS_WINDOWS:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _antigravity_port_open(port):
+    """端口上有没有活着的进程在听。只用来否掉过期 LS 地址,不做服务识别。"""
+    import socket
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return False
+    if not 0 < port <= 65535:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+def _antigravity_daemon_credentials():
+    """IDE 的 daemon 发现文件里有 pid/端口/CSRF;命令行拿不到 token 时用它兜底。"""
+    found = []
+    for directory in ANTIGRAVITY_DAEMON_DIRS:
+        for path in glob.glob(os.path.join(directory, "ls_*.json")):
+            data = _load_json(path, {})
+            if not isinstance(data, dict):
+                continue
+            pid = _provider_integer(data.get("pid"))
+            token = data.get("csrfToken")
+            if not pid or not isinstance(token, str) or not token:
+                continue
+            if not _antigravity_pid_alive(pid):
+                continue
+            ports = [port for port in (_provider_integer(data.get("httpsPort")),
+                                       _provider_integer(data.get("httpPort")))
+                     if port]
+            found.append({"pid": pid, "token": token, "ports": ports, "path": path})
+    return found
+
+
+def _antigravity_merge_daemon_processes(processes, daemons):
+    """daemon 文件里 pid 还活着且端口在听的进程,即使 ps 没认出来也补进列表。"""
+    by_pid = {proc["pid"]: proc for proc in processes}
+    for entry in daemons:
+        pid = entry["pid"]
+        proc = by_pid.get(pid)
+        if proc is None:
+            if not _antigravity_pid_alive(pid):
+                continue
+            listening = _antigravity_listening_ports(pid)
+            live_ports = [port for port in entry["ports"] if port in listening]
+            if not live_ports:
+                continue
+            proc = {
+                "pid": pid, "kind": "ide", "csrf_token": "",
+                "extension_port": None, "extension_csrf_token": None,
+                "ports": listening, "daemon_ports": live_ports,
+            }
+            processes.append(proc)
+            by_pid[pid] = proc
+        if not proc.get("csrf_token"):
+            proc["csrf_token"] = entry["token"]
+        if not proc.get("daemon_ports"):
+            proc["daemon_ports"] = entry["ports"]
+    return processes
+
+
+def _antigravity_attach_credentials(processes, discovered):
+    """把发现的 token 挂到进程上;LS 端口已经没了的旧 token 直接丢弃。"""
+    candidates = {}
+    for proc in processes:
+        token, port = discovered.get(proc["pid"], discovered.get(0, (None, None)))
+        if token and not proc.get("csrf_token"):
+            candidates[proc["pid"]] = (token, port)
+    # 没有候选 token 就不必为每个进程跑一次 lsof;端点那边用到时会自己补。
+    if candidates:
+        for proc in processes:
+            if proc.get("ports") is None:
+                proc["ports"] = _antigravity_listening_ports(proc["pid"])
+        live_ports = set()
+        for proc in processes:
+            live_ports.update(proc.get("ports") or [])
+        for proc in processes:
+            token, port = candidates.get(proc["pid"], (None, None))
+            if not token:
+                continue
+            stale = bool(port) and port not in live_ports and not _antigravity_port_open(port)
+            if stale:
+                continue
+            proc["csrf_token"] = token
+            if port:
+                proc["ls_port"] = port
+    saved = {}
+    for proc in processes:
+        if proc.get("csrf_token"):
+            saved[str(proc["pid"])] = {
+                "token": proc["csrf_token"], "port": proc.get("ls_port")}
+    return saved
+
+
+def _antigravity_drop_credentials(pid):
+    """token 被服务端判无效时只删这一条,别把别的进程(比如 IDE)的凭据一起清掉。"""
+    try:
+        root = _load_json(ANTIGRAVITY_CREDENTIALS_CACHE, {})
+        credentials = root.get("credentials") if isinstance(root, dict) else None
+        if not isinstance(credentials, dict):
+            return
+        if credentials.pop(str(pid), None) is None:
+            return
+        _atomic_write_json(ANTIGRAVITY_CREDENTIALS_CACHE, {
+            "credentials": credentials,
+            "updated": int(datetime.now().timestamp()),
+        })
+    except OSError:
+        pass
+
+
+def _antigravity_error_priority(error):
+    """401/403 是凭据问题,比 SSL/连接错误更值得往上抛。"""
+    text = str(error or "")
+    if "HTTP 401" in text or "HTTP 403" in text:
+        return 3
+    if isinstance(error, TimeoutError) or "timed out" in text.lower():
+        return 2
+    return 1
+
+
 def _antigravity_running_processes(now_epoch=None):
     if _antigravity_scan_recently_empty(now_epoch):
         return []
@@ -8879,28 +9028,20 @@ def _antigravity_running_processes(now_epoch=None):
         except (OSError, subprocess.SubprocessError):
             return []
     processes = _antigravity_process_infos(output)
+    daemons = _antigravity_daemon_credentials()
+    if daemons:
+        processes = _antigravity_merge_daemon_processes(processes, daemons)
     if processes:
         discovered = _discover_antigravity_credentials(processes)
-        credentials_to_save = {}
-        for proc in processes:
-            token, port = discovered.get(proc["pid"], discovered.get(0, (None, None)))
-            if token and not proc.get("csrf_token"):
-                proc["csrf_token"] = token
-            if port and not proc.get("ls_port"):
-                proc["ls_port"] = port
-            if proc.get("csrf_token"):
-                credentials_to_save[str(proc["pid"])] = {
-                    "token": proc["csrf_token"],
-                    "port": proc.get("ls_port"),
-                }
-        if credentials_to_save:
-            try:
-                _atomic_write_json(ANTIGRAVITY_CREDENTIALS_CACHE, {
-                    "credentials": credentials_to_save,
-                    "updated": int(now_epoch if now_epoch is not None else datetime.now().timestamp()),
-                })
-            except OSError:
-                pass
+        credentials_to_save = _antigravity_attach_credentials(processes, discovered)
+        # 每次扫描都整份重写,顺手把已经退出的进程凭据清掉。
+        try:
+            _atomic_write_json(ANTIGRAVITY_CREDENTIALS_CACHE, {
+                "credentials": credentials_to_save,
+                "updated": int(now_epoch if now_epoch is not None else datetime.now().timestamp()),
+            })
+        except OSError:
+            pass
     _record_antigravity_scan(bool(processes), now_epoch)
     return processes
 
@@ -8933,9 +9074,15 @@ def _antigravity_endpoints(process):
         for token in (process.get("extension_csrf_token"), csrf):
             if token is not None:
                 endpoints.append(("http", extension_port, token, True))
-    ports = list(_antigravity_listening_ports(process["pid"]))
+    ports = process.get("ports")
+    ports = list(ports if ports is not None else _antigravity_listening_ports(process["pid"]))
+    for port in process.get("daemon_ports") or []:
+        if port not in ports:
+            ports.insert(0, port)
     ls_port = process.get("ls_port")
-    if ls_port and ls_port not in ports:
+    # 拿不到监听表(Windows / 没有 lsof)时保留旧行为;拿到了就只信真实在听的端口,
+    # 否则环境里残留的旧 LS 地址会被一遍遍重试,真正的 401 反而被 SSL 错误盖住。
+    if ls_port and ls_port not in ports and not ports:
         ports.insert(0, ls_port)
     for port in ports:
         endpoints.append(("http", port, csrf, requires_csrf))
@@ -9066,6 +9213,7 @@ def fetch_antigravity_quota():
         cached = _cached_provider_quota("antigravity", marker, _PROVIDER_QUOTA_TTL)
         if cached:
             return cached
+        process_error = None
         for endpoint in endpoints:
             try:
                 summary_payload = _antigravity_request(
@@ -9082,16 +9230,23 @@ def fetch_antigravity_quota():
                     _save_provider_quota_cache("antigravity", marker, quota)
                     return quota
             except Exception as error:
-                last_error = error
+                if process_error is None or (
+                        _antigravity_error_priority(error)
+                        > _antigravity_error_priority(process_error)):
+                    process_error = error
+        if process_error is not None:
+            # 只有服务端明确说凭据无效才丢弃;SSL/超时说明不了 token 好坏。
+            if _antigravity_error_priority(process_error) >= 3:
+                _antigravity_drop_credentials(process.get("pid"))
+            if last_error is None or (
+                    _antigravity_error_priority(process_error)
+                    > _antigravity_error_priority(last_error)):
+                last_error = process_error
         fallback = _cached_provider_quota(
             "antigravity", marker, _PROVIDER_QUOTA_FALLBACK_TTL, stale=True)
         if fallback:
             return fallback
     if last_error:
-        try:
-            os.remove(ANTIGRAVITY_CREDENTIALS_CACHE)
-        except OSError:
-            pass
         raise last_error
     return {}
 

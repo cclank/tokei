@@ -132,7 +132,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 - Cursor 与 z.ai 的账号级统计在 Dashboard 中单独展示；Grok Bot 本地快照没有 Token 字段，因此官方模型用量直接并入“模型用量”，额度仅在 Grok Bot 主卡片展示
 - 开启多设备同步后，Grok Bot 的官方 Token、模型、费用和额度汇总会进入同步快照；界面采用时间最新的一份账号数据，不会按设备重复相加
 - Grok Bot 额度按实时状态过期；已采集的 Token、模型和费用按日期长期保留，后续成功查询只更新对应日期，不会因授权或网络暂时失效而清空
-- Antigravity 额度只连接已运行客户端的 `127.0.0.1` language server，不会自动启动客户端
+- Antigravity 额度只连接已运行客户端的 `127.0.0.1` language server，不会自动启动客户端；CSRF 凭据取自进程环境或 IDE 的 `daemon/ls_*.json`，端口已失效的旧凭据会被丢弃
 - 这 5 个 Provider 的额度与账号标签只保存在本机缓存，不写入多设备 Git 同步快照
 - 其他联网操作包括检查/下载更新，以及手动更新模型价格表
 - CodeBuddy 只读取本地 `~/.codebuddy/projects` 会话 JSONL；不读取 auth、local storage、trace、日志或会话正文，也不会发起账户额度请求

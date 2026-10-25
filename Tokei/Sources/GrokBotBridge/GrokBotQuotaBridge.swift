@@ -414,16 +414,10 @@ public enum GrokBotQuotaBridge {
         allowInteraction: Bool,
         returnKeychainItem: Bool
     ) -> KeychainSecret? {
-        var previousInteraction = DarwinBoolean(false)
-        let interactionStatus = SecKeychainGetUserInteractionAllowed(&previousInteraction)
-        if !allowInteraction, interactionStatus == errSecSuccess {
-            SecKeychainSetUserInteractionAllowed(false)
-        }
-        defer {
-            if !allowInteraction, interactionStatus == errSecSuccess {
-                SecKeychainSetUserInteractionAllowed(previousInteraction.boolValue)
-            }
-        }
+        // macOS 26：已废弃的 SecKeychainSetUserInteractionAllowed(false) 会让紧随其后的
+        // SecItemCopyMatching 返回 errSecAuthFailed(-25293)，即使当前可执行文件已在该
+        // 钥匙串项的 ACL 中。抑制系统弹窗改由下方 LAContext.interactionNotAllowed +
+        // kSecUseAuthenticationUI 负责，两者对 SecItemCopyMatching 已足够。
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,

@@ -16,6 +16,11 @@ struct QuotaDetailCheck {
         }
         let json = #"{"tool":"claude","start":900,"end":1100,"used_pct":25,"tokens":100,"devices":{"synthetic":100},"approx":true,"current":true}"#
         let legacy = try JSONDecoder().decode(QuotaCycle.self, from: Data(json.utf8))
+        expect(legacy.window == nil && !legacy.isMonthly, "legacy weekly cycle without window")
+        let monthly = try JSONDecoder().decode(QuotaCycle.self, from: Data(String(json.dropLast()).appending(#","window":"month","cost":12.5}"#).utf8))
+        expect(monthly.isMonthly && monthly.costLabel == "$12.50", "monthly window preserves cost")
+        let monthlyRoundTrip = try JSONDecoder().decode(QuotaCycle.self, from: JSONEncoder().encode(monthly))
+        expect(monthlyRoundTrip.window == "month", "monthly window survives cache round trip")
         expect(legacy.cost == nil && legacy.costLabel == nil && legacy.projectedCost == nil, "legacy missing cost")
         let null = try JSONDecoder().decode(QuotaCycle.self, from: Data(String(json.dropLast()).appending(#","cost":null}"#).utf8))
         expect(null.cost == nil, "null cost compatibility")

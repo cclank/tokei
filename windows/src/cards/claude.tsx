@@ -22,6 +22,7 @@ import { ModelDisclosure, type ModelRow } from "../ui/models";
 import { fs, T, Theme } from "../ui/theme";
 import type { CardContext, CardSpec } from "./spec";
 import { quotaState, recentUsageHint } from "./shared";
+import { CycleSpendRow } from "./CycleSpendRow";
 
 export const EMPTY_CLAUDE_RANGE: ClaudeRange = { hit: 0, in: 0, out: 0, cr: 0, cw: 0, cost: 0, models: [], sessions: 0 };
 
@@ -114,7 +115,10 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
           <ThinDivider />
           {c.q5 != null && <QuotaRow title={L("5h 剩余")} pct={100 - c.q5} reset={c.q5_reset} tint={Theme.claude} stale={c.q5_stale === true} />}
           {c.q7 != null && (
-            <QuotaRow title={L("周 · 全部剩余")} pct={100 - c.q7} reset={c.q7_reset} tint={Theme.claude} stale={c.q7_stale === true} />
+            <>
+              <QuotaRow title={L("周 · 全部剩余")} pct={100 - c.q7} reset={c.q7_reset} tint={Theme.claude} stale={c.q7_stale === true} />
+              <CycleSpendRow payload={ctx.quotaDetail} tool="claude" reset={c.q7_reset} />
+            </>
           )}
           {c.qf != null && (
             <QuotaRow title={L("周 · Fable 剩余")} pct={100 - c.qf} reset={c.qf_reset} tint={Theme.orange} stale={c.qf_stale === true} />

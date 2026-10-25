@@ -169,13 +169,13 @@ struct QuotaHistoryView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    // MARK: - 周额度消耗
+    // MARK: - 额度周期消耗
 
     private var cycleSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             cycleHeader
             if detail.payload == nil {
-                Card(tint: Theme.codex) { cyclePlaceholder(L("正在读取周额度…")) }
+                Card(tint: Theme.codex) { cyclePlaceholder(L("正在读取额度周期…")) }
             } else if visibleCycleTools.isEmpty {
                 Card(tint: Theme.codex) {
                     cyclePlaceholder(L("所有订阅的额度重置时间都拿不到，定位不了周期"))
@@ -199,7 +199,7 @@ struct QuotaHistoryView: View {
     private var cycleHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(L("一个周额度用了多少"))
+                Text(L("一个额度周期用了多少"))
                     .font(.system(size: Theme.fontSize(14), weight: .bold))
                     .foregroundStyle(Theme.tPrimary)
                 Text(cycleSubtitle)
@@ -266,7 +266,7 @@ struct QuotaHistoryView: View {
             return L("Claude Code 还没有周额度卡片：可打开 Claude Desktop 的 Usage 页面，")
                 + L("或在设置的「隐私与额度」开启 Claude Code CLI 额度查询。")
         case "grok":
-            return L("Grok 还没有周额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。")
+            return L("Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。")
         default:
             return L("Codex 还没有周额度卡片：跑一次 codex 让它刷新额度读数。")
         }
@@ -275,7 +275,8 @@ struct QuotaHistoryView: View {
     private func cycleCard(_ cycle: QuotaCycle) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(L("%@ 周额度", cycleName(cycle.tool)))
+                Text(cycle.isMonthly ? L("%@ 月额度", cycleName(cycle.tool))
+                     : L("%@ 周额度", cycleName(cycle.tool)))
                     .font(.system(size: Theme.fontSize(12), weight: .bold))
                     .foregroundStyle(cycleTint(cycle.tool))
                 Spacer()
@@ -372,7 +373,7 @@ struct QuotaHistoryView: View {
         compactTitle: Bool
     ) -> some View {
         let peak = max(cycles.map(\.tokens).max() ?? 1, 1)
-        let uneven = cycles.contains { $0.durationDays < 6.5 }
+        let uneven = cycles.contains { !$0.isMonthly && $0.durationDays < 6.5 }
         let expanded = expandedCycleHistory.contains(tool)
         let visibleCycles = expanded
             ? cycles

@@ -1378,9 +1378,7 @@ struct PanelView: View {
                 // 总剩余：同一周额度池。分产品 usagePercent 是该产品在池内的占用占比，不是独立额度剩余。
                 quotaRow(title: title, pct: 100 - pct, reset: g.reset,
                          tint: Theme.grok, stale: g.stale == true)
-                if g.window != "month" {
-                    cycleSpendRow("grok", reset: g.reset)
-                }
+                cycleSpendRow("grok", reset: g.reset)
                 // 周期结束后，分产品占比说的是上一个周期，不再列出
                 ForEach(periodEnded ? [] : g.products.filter { $0.pct != nil }) { product in
                     if let used = product.pct {
@@ -2643,8 +2641,8 @@ struct PanelView: View {
                       : (reset != nil ? L("%@ 后重置", Fmt.countdown(reset)) : ""))
     }
 
-    /// 周额度行下面的「从上次重置到现在花了多少」。数据来自额度曲线页同一份周期统计，
-    /// 已合并所有设备；周期已经翻篇（还没刷到新周期）时不显示，免得把上周的钱算到这周。
+    /// 额度行下面的「从上次重置到现在花了多少」。数据来自额度曲线页同一份周期统计，
+    /// 已合并所有设备；周期已经翻篇（还没刷到新周期）时不显示，免得算上旧周期的钱。
     @ViewBuilder
     func cycleSpendRow(_ tool: String, reset: Int?) -> some View {
         if let cycle = cycleDetail.payload?.currentCycle(for: tool, endingAt: reset),
@@ -2670,7 +2668,7 @@ struct PanelView: View {
                     .foregroundStyle(Theme.tTertiary)
                     .fixedSize()
             }
-            .help(Fmt.reset(cycle.start) + " → " + L("上次周额度重置到现在，所有设备合计，按 API 价折算"))
+            .help(Fmt.reset(cycle.start) + " → " + L("上次额度重置到现在，所有设备合计，按 API 价折算"))
         }
     }
 

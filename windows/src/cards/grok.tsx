@@ -3,6 +3,7 @@
 // Grok Bot 的官方额度授权在 Mac 上靠钥匙串原生助手（重新授权提示 grokBotReauthorizePrompt），
 // Windows 使用 DPAPI 集成脚本；授权入口在设置页，JSON 里的额度和用量照常画。
 import * as Fmt from "../lib/fmt";
+import { CycleSpendRow } from "./CycleSpendRow";
 import { L } from "../lib/i18n";
 import { rangeLabel } from "../lib/store";
 import { getRange, totalTokens, type PerfStat, type RangeKey, type Ranges, type TokenModelStat, type TokenUsageRange, type Usage } from "../lib/types";
@@ -294,6 +295,7 @@ function GrokCard({ ctx }: { ctx: CardContext }) {
             tint={Theme.grok}
             stale={g.stale === true}
           />
+          <CycleSpendRow payload={ctx.quotaDetail} tool="grok" reset={g.reset} />
           {products.map((product) => (
             <GrokProductShareRow
               key={product.name}

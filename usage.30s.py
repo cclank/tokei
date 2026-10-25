@@ -7489,6 +7489,26 @@ def _windows_native_bridge():
     return _WINDOWS_NATIVE_BRIDGE
 
 
+def _windows_process_alive(pid):
+    # Windows 上 os.kill(pid, 0) 会结束进程；只查询进程状态。
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == 5
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value == 259)
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def _grok_bot_helper_running(state):
     pid, started = state.get("pid"), state.get("started")
     if not isinstance(pid, int) or not isinstance(started, (int, float)):
@@ -7496,23 +7516,7 @@ def _grok_bot_helper_running(state):
     if _time.time() - started > _GROK_BOT_HELPER_MAX_RUNTIME:
         return False
     if _IS_WINDOWS:
-        # Windows 上 os.kill(pid, 0) 会结束进程；只查询进程状态。
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel.OpenProcess(0x1000, False, pid)
-        if not handle:
-            return ctypes.get_last_error() == 5
-        try:
-            code = wintypes.DWORD()
-            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value == 259)
-        finally:
-            kernel.CloseHandle(handle)
+        return _windows_process_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -8876,8 +8880,10 @@ def _antigravity_pid_alive(pid):
         pid = int(pid)
     except (TypeError, ValueError):
         return False
-    if pid <= 0 or _IS_WINDOWS:
+    if pid <= 0:
         return False
+    if _IS_WINDOWS:
+        return _windows_process_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -8932,13 +8938,15 @@ def _antigravity_merge_daemon_processes(processes, daemons):
     for entry in daemons:
         pid = entry["pid"]
         proc = by_pid.get(pid)
-        if proc is None:
-            if not _antigravity_pid_alive(pid):
-                continue
+        if not _antigravity_pid_alive(pid):
+            continue
+        listening = proc.get("ports") if proc is not None else None
+        if listening is None:
             listening = _antigravity_listening_ports(pid)
-            live_ports = [port for port in entry["ports"] if port in listening]
-            if not live_ports:
-                continue
+        live_ports = [port for port in entry["ports"] if port in listening]
+        if not live_ports:
+            continue
+        if proc is None:
             proc = {
                 "pid": pid, "kind": "ide", "csrf_token": "",
                 "extension_port": None, "extension_csrf_token": None,
@@ -8946,10 +8954,12 @@ def _antigravity_merge_daemon_processes(processes, daemons):
             }
             processes.append(proc)
             by_pid[pid] = proc
+        else:
+            proc["ports"] = listening
         if not proc.get("csrf_token"):
             proc["csrf_token"] = entry["token"]
         if not proc.get("daemon_ports"):
-            proc["daemon_ports"] = entry["ports"]
+            proc["daemon_ports"] = live_ports
     return processes
 
 

@@ -26,6 +26,7 @@ import { ModelDisclosure, tokenModelRows } from "../ui/models";
 import { fill, fs, rgba, T, Theme } from "../ui/theme";
 import { recentUsageHint } from "./shared";
 import type { CardContext, CardSpec } from "./spec";
+import { CycleSpendRow } from "./CycleSpendRow";
 
 export const EMPTY_CODEX_RANGE: CodexRange = { hit: 0, in: 0, cached: 0, out: 0, reason: 0, cost: 0, sessions: 0, models: [] };
 
@@ -135,7 +136,10 @@ function CodexCard({ ctx }: { ctx: CardContext }) {
       )}
       {hasQuota && <ThinDivider />}
       {x.p5 != null && <QuotaRow title={L("5h 剩余")} pct={100 - x.p5} reset={x.r5} tint={Theme.codex} stale={x.p5_stale === true} />}
-      {x.pw != null && <QuotaRow title={L("周剩余")} pct={100 - x.pw} reset={x.rw} tint={Theme.codex} stale={x.pw_stale === true} />}
+      {x.pw != null && <>
+        <QuotaRow title={L("周剩余")} pct={100 - x.pw} reset={x.rw} tint={Theme.codex} stale={x.pw_stale === true} />
+        <CycleSpendRow payload={ctx.quotaDetail} tool="codex" reset={x.rw} />
+      </>}
       {reserveQuota?.used_percent != null && (
         <QuotaRow
           title={L("Reserve 剩余")}

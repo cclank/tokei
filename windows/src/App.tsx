@@ -7,6 +7,7 @@ import { call, inTauri } from "./lib/collector";
 import { currentLanguage, L } from "./lib/i18n";
 import { pushTrayMenu } from "./lib/native";
 import { getPref, usePrefsVersion } from "./lib/prefs";
+import { loadQuotaDetail, useQuotaDetail } from "./lib/quotaDetail";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
 import { hideQuickPanel, isQuickSurface, openMainWindow } from "./lib/surface";
@@ -170,7 +171,15 @@ function cardName(spec: CardSpec) {
 
 function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: RangeKey) => void; copy: Copy }) {
   const { usage, error, refreshing, previewing } = useUsageStore();
-  usePrefsVersion();
+  const detail = useQuotaDetail();
+  const prefsVersion = usePrefsVersion();
+  useEffect(() => {
+    // 首批完整用量到达后再读周期缓存和统计，共用刷新去重，不阻塞首屏或预览。
+    if (usage && !refreshing && !previewing &&
+        ((getPref("showClaude", true) && usage.claude.q7 != null) ||
+         (getPref("showCodex", true) && usage.codex.pw != null) ||
+         (getPref("showGrok", true) && usage.grok?.pct != null))) loadQuotaDetail(false, isQuickSurface);
+  }, [usage, refreshing, previewing, prefsVersion]);
   if (!usage) {
     return (
       <div style={{ height: 90, display: "grid", placeItems: "center", color: T.secondary, fontSize: fs(12) }}>
@@ -185,7 +194,7 @@ function CardsPage({ range, setRange, copy }: { range: RangeKey; setRange: (k: R
       </div>
     );
   }
-  const ctx: CardContext = { usage, range, rangeLabel: rangeLabel(range), refreshing, previewing, pref: getPref };
+  const ctx: CardContext = { usage, range, rangeLabel: rangeLabel(range), refreshing, previewing, pref: getPref, quotaDetail: detail.payload };
   const visible = CARDS.filter((spec) => getPref(spec.visibleKey, spec.visibleDefault));
   const shown = visible.filter((spec) => safe(() => spec.active(ctx), false));
   const ordered = sortedUsageCards(shown, usage, range);

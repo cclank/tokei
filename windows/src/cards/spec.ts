@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { RangeKey, Usage } from "../lib/types";
 import type { RGB } from "../ui/theme";
+import type { QuotaDetailPayload } from "../lib/quotaDetail";
 
 export interface CardContext {
   usage: Usage;
@@ -13,6 +14,7 @@ export interface CardContext {
   /** 正在刷新：空态要能分辨「刷新中」和「真的没有」。 */
   refreshing: boolean;
   previewing?: boolean;
+  quotaDetail?: QuotaDetailPayload | null;
   /** 读界面偏好（与 Mac 版 @AppStorage 同名的键）。 */
   pref: <T>(key: string, fallback: T) => T;
 }

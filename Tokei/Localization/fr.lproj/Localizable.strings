@@ -61,7 +61,6 @@
 "Grok 本地日志" = "Journaux locaux Grok";
 "Grok 本地缓存" = "Cache local Grok";
 "Grok 网页聊天" = "Chat web Grok";
-"Grok 还没有周额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。" = "Aucune carte de quota hebdomadaire Grok : connectez-vous sur grok.com une fois pour capturer la lecture.";
 "Kimi Code 本地登录态" = "Session locale Kimi Code";
 "Kimi Code 的登录态很快到期,过期后 Tokei 不再查询官方额度,也不会代它刷新。在 Kimi Code 里发一条消息即可让它自行刷新,额度随后恢复更新。" = "La session Kimi Code expire bientôt. Après expiration, Tokei cesse d'interroger le quota officiel. Envoyez un message dans Kimi Code pour rafraîchir.";
 "Kimi 订阅" = "Abonnement Kimi";
@@ -79,7 +78,6 @@
 "· %@ 天活跃" = "· %@ jours actifs";
 "≈成本" = "≈Coût";
 "≈成本未计入没有公开价的模型：%@" = "Le coût ≈ exclut les modèles sans prix public : %@";
-"一个周额度用了多少" = "Quota hebdomadaire consommé";
 "上周" = "Sem. passée";
 "上次更新 %@" = "Dernière mise à jour %@";
 "上次读到 · %@" = "Dernière lecture · %@";
@@ -349,7 +347,6 @@
 "正在安装" = "Installation en cours";
 "正在开始记录额度轨迹" = "Début de l'enregistrement de l'historique des quotas";
 "正在检查" = "Vérification en cours";
-"正在读取周额度…" = "Lecture du quota hebdomadaire…";
 "每天用了多少额度" = "Quota utilisé par jour";
 "每百万 token 的输入 / 输出单价，读 = 缓存读" = "Prix entrée / sortie par million de tokens ; cache = lecture du cache";
 "沉睡" = "En veille";

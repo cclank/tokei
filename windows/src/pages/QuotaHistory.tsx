@@ -5,7 +5,7 @@ import { L } from "../lib/i18n";
 import { usePrefsVersion } from "../lib/prefs";
 import { quotaHistoryPointsSince, useQuotaHistory } from "../lib/quotaHistory";
 import { useUsageStore } from "../lib/store";
-import { Card, HStack, Spacer, VStack } from "../ui/kit";
+import { Card, HStack, VStack } from "../ui/kit";
 import { fs, T } from "../ui/theme";
 import { dayKey, MiniSegmented } from "./quotaHistory/chartKit";
 import { CycleSection } from "./quotaHistory/CycleSection";
@@ -75,16 +75,17 @@ function Controls({
 }) {
   const daily = showsDailyTokens(span);
   return (
-    <HStack gap={10}>
-      <VStack gap={2}>
+    <HStack gap={10} style={{ flexWrap: "wrap" }}>
+      <VStack gap={2} style={{ flex: "1 0 170px" }}>
         <span style={{ fontSize: fs(14), fontWeight: 700, color: T.primary, whiteSpace: "nowrap" }}>{L("额度轨迹")}</span>
         <span style={{ fontSize: fs(9.5), color: T.tertiary }}>{daily ? L("按天聚合 · 真实 token 消耗") : L("按分钟聚合 · 剩余额度")}</span>
       </VStack>
-      <Spacer />
-      {!daily && (
-        <MiniSegmented width={164} value={tool} onChange={setTool} options={QUOTA_HISTORY_TOOLS.map((value) => ({ value, label: value }))} />
-      )}
-      <MiniSegmented width={216} value={span} onChange={setSpan} options={SPANS.map((value) => ({ value, label: spanLabel(value) }))} />
+      <HStack gap={10} style={{ flexWrap: "wrap" }}>
+        {!daily && (
+          <MiniSegmented width={164} value={tool} onChange={setTool} options={QUOTA_HISTORY_TOOLS.map((value) => ({ value, label: value }))} />
+        )}
+        <MiniSegmented width={216} value={span} onChange={setSpan} options={SPANS.map((value) => ({ value, label: spanLabel(value) }))} />
+      </HStack>
     </HStack>
   );
 }

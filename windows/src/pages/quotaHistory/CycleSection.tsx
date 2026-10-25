@@ -1,4 +1,4 @@
-// 「一个周额度用了多少」：当前周期 + 过去几个周期（Mac 版 QuotaHistoryView 的 cycleSection）。
+// 「一个额度周期用了多少」：当前周期 + 过去几个周期（Mac 版 QuotaHistoryView 的 cycleSection）。
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import * as Fmt from "../../lib/fmt";
@@ -6,7 +6,7 @@ import { data, L } from "../../lib/i18n";
 import { Card, HStack, Spacer, VStack } from "../../ui/kit";
 import { fs, rgba, T, Theme, type RGB } from "../../ui/theme";
 import { MiniSegmented, MONO, oneLine, ROUNDED, WidestOf } from "./chartKit";
-import { cycleDurationDays, deviceBreakdown, projectedTotal, type QuotaCycle, type QuotaDetailSnapshot } from "./detail";
+import { cycleCostLabel, cycleDurationDays, deviceBreakdown, projectedCost, projectedTotal, type QuotaCycle, type QuotaDetailSnapshot } from "../../lib/quotaDetail";
 
 const COLLAPSED_CYCLE_LIMIT = 8;
 /** 有周期数据的工具按固定顺序排，免得刷新一次卡片就换个位置。 */
@@ -39,7 +39,7 @@ function missingHint(tool: string): string {
     case "claude":
       return L("Claude Code 还没有周额度卡片：可打开 Claude Desktop 的 Usage 页面，") + L("或在设置的「隐私与额度」开启 Claude Code CLI 额度查询。");
     case "grok":
-      return L("Grok 还没有周额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。");
+      return L("Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。");
     default:
       return L("Codex 还没有周额度卡片：跑一次 codex 让它刷新额度读数。");
   }
@@ -79,11 +79,13 @@ function CycleProgress({ used, tint }: { used: number; tint: RGB }) {
 function CycleCard({ cycle }: { cycle: QuotaCycle }) {
   const tint = cycleTint(cycle.tool);
   const projected = projectedTotal(cycle);
+  const cost = cycleCostLabel(cycle);
+  const estimate = projectedCost(cycle);
   const breakdown = deviceBreakdown(cycle);
   return (
     <VStack gap={9}>
       <HStack gap={8} align="baseline">
-        <span style={{ fontSize: fs(12), fontWeight: 700, color: rgba(tint), whiteSpace: "nowrap" }}>{L("%@ 周额度", cycleName(cycle.tool))}</span>
+        <span style={{ fontSize: fs(12), fontWeight: 700, color: rgba(tint), whiteSpace: "nowrap" }}>{L(cycle.window === "month" ? "%@ 月额度" : "%@ 周额度", cycleName(cycle.tool))}</span>
         <Spacer />
         <span style={{ fontSize: fs(9.5), color: T.tertiary, whiteSpace: "nowrap" }}>{L("%@ 后回满", Fmt.countdown(cycle.end))}</span>
       </HStack>
@@ -97,7 +99,10 @@ function CycleCard({ cycle }: { cycle: QuotaCycle }) {
             </span>
             <span style={{ fontSize: fs(10), color: T.tertiary }}>tokens</span>
           </HStack>
-          <span style={{ fontSize: fs(9.5), fontFamily: MONO, color: T.tertiary }}>{Fmt.grouped(cycle.tokens)}</span>
+          <HStack gap={6}>
+            {cost != null && <span title={L("按 API 价估算；缺少完整明细时，周期首尾按 token 占比分摊")} style={{ fontSize: fs(11), fontWeight: 600, fontFamily: MONO, color: T.secondary, whiteSpace: "nowrap" }}>≈ {cost}</span>}
+            <span style={{ fontSize: fs(9.5), fontFamily: MONO, color: T.tertiary }}>{Fmt.grouped(cycle.tokens)}</span>
+          </HStack>
         </VStack>
         <Spacer />
         {projected != null && (
@@ -106,6 +111,7 @@ function CycleCard({ cycle }: { cycle: QuotaCycle }) {
             <span style={{ fontSize: fs(17), fontWeight: 700, fontFamily: ROUNDED, color: T.secondary, whiteSpace: "nowrap" }}>
               {Fmt.human(projected)}
             </span>
+            {estimate != null && <span style={{ fontSize: fs(10), fontFamily: MONO, color: T.tertiary, whiteSpace: "nowrap" }}>≈ ${estimate.toFixed(0)}</span>}
           </VStack>
         )}
       </HStack>
@@ -133,7 +139,7 @@ function CompletedCycles({
 }) {
   const tint = cycleTint(tool);
   const peak = Math.max(Math.max(...cycles.map((cycle) => cycle.tokens), 1), 1);
-  const uneven = cycles.some((cycle) => cycleDurationDays(cycle) < 6.5);
+  const uneven = cycles.some((cycle) => cycle.window !== "month" && cycleDurationDays(cycle) < 6.5);
   const visible = expanded ? cycles : cycles.slice(0, COLLAPSED_CYCLE_LIMIT);
   const hiddenCount = Math.max(0, cycles.length - COLLAPSED_CYCLE_LIMIT);
   // 按最宽的「用到100%」留列宽：译文（使用率 100%）更长，写死宽度会截断
@@ -267,7 +273,7 @@ export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
     <VStack gap={10}>
       <HStack gap={10} align="baseline">
         <VStack gap={2}>
-          <span style={{ fontSize: fs(14), fontWeight: 700, color: T.primary }}>{L("一个周额度用了多少")}</span>
+          <span style={{ fontSize: fs(14), fontWeight: 700, color: T.primary }}>{L("一个额度周期用了多少")}</span>
           <span style={{ fontSize: fs(9.5), color: T.tertiary }}>{subtitle}</span>
         </VStack>
         <Spacer />
@@ -282,7 +288,7 @@ export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
       </HStack>
       {!payload ? (
         <Card tint={Theme.codex}>
-          <CyclePlaceholder text={L("正在读取周额度…")} />
+          <CyclePlaceholder text={L("正在读取额度周期…")} />
         </Card>
       ) : visibleTools.length === 0 ? (
         <Card tint={Theme.codex}>

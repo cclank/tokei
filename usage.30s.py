@@ -36,6 +36,7 @@
 #                (assistant message 自带 usage + costUsd,按 message.id 去重;
 #                 inputTokens 含 cached,与 Codex 同口径)
 
+import calendar
 import os
 import sys
 import glob
@@ -18394,8 +18395,8 @@ def _load_dashboard_cache():
     return cache
 
 
-# ---------- 周额度消耗 ----------
-# 一个周期 = 两次「余量 100%」之间,起点取 resets_at - 7天。
+# ---------- 额度周期消耗 ----------
+# 一个周期 = 两次「余量 100%」之间,起点取 resets_at 往前一周或一个日历月。
 # 实测:resets_at 会不定期重锚(观测到的间隔有 0.75 / 2.1 / 7.0 天),所以历史边界
 # 推不出来,只能观测一次记一次 —— 见 _QUOTA_ANCHOR_FILE。
 # 周期边界落在半天,日级账本切不出来,所以整日部分取账本(权威,不受 CLI 清理旧日志
@@ -18408,7 +18409,7 @@ _QUOTA_ANCHOR_FILE = os.path.join(HOME, ".tokei", "quota_cycles.json")
 # resets_in_seconds 是整秒截断的,同一个锚点读出来会有几秒抖动。
 _QUOTA_ANCHOR_JITTER = 120
 _QUOTA_CYCLE_MIN_USED_PCT = 2
-# 有周额度窗口的三个工具 → 日表里的短键。
+# 有额度周期的三个工具 → 日表里的短键。
 _QUOTA_TOOLS = (("claude", "c"), ("codex", "x"), ("grok", "g"))
 
 
@@ -18681,8 +18682,9 @@ def _quota_window_tokens(devices, tool, key, start, end, self_events):
 
 
 def _quota_tool_reading(source, tool):
-    """从一份 payload/同步快照里取 (used_pct, reset_epoch, 读数时间);取不到返回 None。"""
+    """从一份 payload/同步快照里取 (used_pct, reset_epoch, 读数时间, window);取不到返回 None。"""
     data = (source or {}).get(tool) or {}
+    window = "week"
     if tool == "claude":
         if data.get("q7_stale"):
             return None
@@ -18692,15 +18694,15 @@ def _quota_tool_reading(source, tool):
             return None
         used, reset, updated = data.get("pw"), data.get("rw"), data.get("q_updated")
     else:
-        # Grok 也可能是月套餐,月窗口长度不定又没有数据可验证,先只认周。
-        if data.get("stale") or data.get("window") != "week":
+        window = data.get("window")
+        if data.get("stale") or window not in ("week", "month"):
             return None
         used, reset, updated = data.get("pct"), data.get("reset"), data.get("q_updated")
     if not isinstance(reset, (int, float)):
         reset = _iso_to_epoch(reset)
     if not isinstance(reset, (int, float)) or reset <= 0:
         return None
-    return used, int(reset), int(updated or 0)
+    return used, int(reset), int(updated or 0), window
 
 
 def _load_quota_anchors():
@@ -18730,13 +18732,14 @@ def _save_quota_anchors(anchors):
                 pass
 
 
-def _record_quota_anchor(anchors, tool, reset, used, now, confirmed_reset=False):
+def _record_quota_anchor(anchors, tool, reset, used, now, confirmed_reset=False, window="week"):
     """记下一次额度读数。同一个锚点只留一条,used 取见过的最大值。
 
     额度从有消耗的旧窗口回到 0%,同时 reset 前移到新窗口,已经足以确认提前重置。
     后续空闲时 reset 继续漂移不会连开新周期:只有紧邻的上一锚点有真实消耗时
     才确认这次 0% 重置。
     """
+    window = window if window in ("week", "month") else "week"
     used = float(used or 0)
     rows = anchors.setdefault(tool, [])
     previous = [
@@ -18751,18 +18754,22 @@ def _record_quota_anchor(anchors, tool, reset, used, now, confirmed_reset=False)
          latest_previous.get("max_used", 0) >= _QUOTA_CYCLE_MIN_USED_PCT)
     )
     for row in rows:
-        if abs(int(row.get("reset", 0)) - reset) <= _QUOTA_ANCHOR_JITTER:
+        if (row.get("window", "week") == window and
+                abs(int(row.get("reset", 0)) - reset) <= _QUOTA_ANCHOR_JITTER):
             changed = (
+                row.get("window") != window or
                 used > row.get("max_used", 0) or
                 now > row.get("last_seen", 0) or
                 (confirmed_reset and not row.get("confirmed_reset"))
             )
+            row["window"] = window
             row["max_used"] = max(row.get("max_used", 0), used)
             row["last_seen"] = max(row.get("last_seen", 0), now)
             if confirmed_reset:
                 row["confirmed_reset"] = True
             return changed
-    row = {"reset": reset, "first_seen": now, "last_seen": now, "max_used": used}
+    row = {"reset": reset, "first_seen": now, "last_seen": now, "max_used": used,
+           "window": window}
     if confirmed_reset:
         row["confirmed_reset"] = True
     rows.append(row)
@@ -18790,18 +18797,29 @@ def _merge_quota_anchors(anchors, incoming):
                 anchors, tool, int(reset),
                 used if isinstance(used, (int, float)) else 0,
                 int(seen) if isinstance(seen, (int, float)) else 0,
-                confirmed_reset=row.get("confirmed_reset") is True)
+                confirmed_reset=row.get("confirmed_reset") is True,
+                window=row.get("window", "week") if row.get("window") in ("week", "month") else "week")
     return anchors
 
 
-def _quota_anchor_cycles(anchors, tool, span, limit, now):
-    """→ [(start, end, max_used, 是否进行中)]，最新的排最前。
+def _quota_cycle_start(reset, window="week"):
+    """按窗口回推起点:月窗口保留本地时刻,超出上个月的日子取月末。"""
+    if window != "month":
+        return reset - _QUOTA_WEEK_HOURS * 3600
+    local = datetime.fromtimestamp(reset)
+    year, month = (local.year, local.month - 1) if local.month > 1 else (local.year - 1, 12)
+    day = min(local.day, calendar.monthrange(year, month)[1])
+    return int(local.replace(year=year, month=month, day=day).timestamp())
+
+
+def _quota_anchor_cycles(anchors, tool, limit, now):
+    """→ [(start, end, max_used, 是否进行中, window)]，最新的排最前。
 
     按 reset 排序而不是按观测顺序:陈旧的会话记录偶尔会抢赢新记录,
     照观测顺序切会切出负时长的区间。排序后每段时长天然为正。
     """
     rows = sorted(anchors.get(tool) or [], key=lambda r: int(r.get("reset", 0)))
-    # 窗口空着的时候 reset 会一直跟着 now+7d 漂,那不是真周期。真实消耗和
+    # 窗口空着的时候 reset 会一直跟着当前时间往后漂,那不是真周期。真实消耗和
     # 「旧窗口有消耗后回到 0%」两种证据都能确认周期;没有证据时只展示最新读数。
     rows = [
         row for row in rows
@@ -18809,19 +18827,31 @@ def _quota_anchor_cycles(anchors, tool, span, limit, now):
         row.get("confirmed_reset") is True
     ] or rows[-1:]
 
+    # 月末账单日会被短月截到月底;相邻月锚点足够接近时,沿用实际重置边界。
+    starts = []
+    for index, row in enumerate(rows):
+        start = _quota_cycle_start(int(row["reset"]), row.get("window", "week"))
+        if index > 0 and row.get("window") == "month":
+            previous = rows[index - 1]
+            previous_reset = int(previous["reset"])
+            if previous.get("window") == "month" and abs(previous_reset - start) <= 3 * 86400:
+                start = previous_reset
+        starts.append(start)
+
     cycles = []
     for index, row in enumerate(rows):
         reset = int(row["reset"])
-        start = reset - span
+        window = "month" if row.get("window") == "month" else "week"
+        start = starts[index]
         if index + 1 < len(rows):
-            end = min(reset, int(rows[index + 1]["reset"]) - span)
+            end = min(reset, starts[index + 1])
         else:
             end = reset
         if end > start:
             # 读数断了就不会再有新锚点,最后一条也可能早已过期 —— 那是历史,不是进行中。
             # 但「进行中」仍只能是最后一条:多标一条会被前端当成当前卡片,另一条就没了。
             current = index + 1 == len(rows) and reset > now
-            cycles.append((start, end, row.get("max_used", 0), current))
+            cycles.append((start, end, row.get("max_used", 0), current, window))
     return cycles[-limit:][::-1]
 
 
@@ -18840,7 +18870,8 @@ def _quota_cycle_specs(payload, devices, peer_anchors, now):
         for _name, _tools, snapshot, _daily in devices:
             reading = _quota_tool_reading(snapshot if snapshot else payload, tool)
             if reading:
-                dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now)
+                dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now,
+                                              window=reading[3])
     if dirty:
         _save_quota_anchors(anchors)
     for incoming in peer_anchors:
@@ -18885,20 +18916,19 @@ def build_quota_detail():
     payload, cache = _quota_detail_inputs()
     now = int(datetime.now().timestamp())
     devices, peer_anchors = _quota_device_ledgers()
-    span = _QUOTA_WEEK_HOURS * 3600
     charted, missing, anchors = _quota_cycle_specs(payload, devices, peer_anchors, now)
 
     planned = []
     for tool in charted:
-        for start, end, used, current in _quota_anchor_cycles(
-                anchors, tool, span, _QUOTA_CYCLE_HISTORY, now):
-            planned.append((tool, start, end, used, current))
+        for start, end, used, current, window in _quota_anchor_cycles(
+                anchors, tool, _QUOTA_CYCLE_HISTORY, now):
+            planned.append((tool, start, end, used, current, window))
 
-    codex_spans = [(s, e) for tool, s, e, _u, _c in planned if tool == "codex"]
+    codex_spans = [(s, e) for tool, s, e, _u, _c, _w in planned if tool == "codex"]
     keys = dict(_QUOTA_TOOLS)
     events = {}
     cycles = []
-    for tool, start, end, used, current in planned:
+    for tool, start, end, used, current, window in planned:
         if tool not in events:
             # Grok 没有带时间戳的事件缓存,只能靠账本的 hours。
             events[tool] = (_quota_claude_events(cache) if tool == "claude"
@@ -18908,6 +18938,7 @@ def build_quota_detail():
             devices, tool, keys[tool], start, end, events[tool])
         cycles.append({
             "tool": tool,
+            "window": window,
             "start": start,
             "end": end,
             "used_pct": used,

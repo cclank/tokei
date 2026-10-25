@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import time
+from datetime import datetime
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,7 +17,66 @@ def _anchor(reset, used, seen=0):
     return {"reset": reset, "first_seen": seen, "last_seen": seen, "max_used": used}
 
 
+class QuotaCycleStartTests(unittest.TestCase):
+    def test_month_starts_at_the_same_local_time_in_the_previous_calendar_month(self):
+        cases = [
+            (datetime(2026, 11, 20, 10, 15, 30), datetime(2026, 10, 20, 10, 15, 30)),
+            (datetime(2026, 1, 20, 10), datetime(2025, 12, 20, 10)),
+            (datetime(2026, 3, 31, 10), datetime(2026, 2, 28, 10)),
+            (datetime(2024, 3, 31, 10), datetime(2024, 2, 29, 10)),
+        ]
+        for reset, expected in cases:
+            with self.subTest(reset=reset):
+                self.assertEqual(USAGE._quota_cycle_start(int(reset.timestamp()), "month"),
+                                 int(expected.timestamp()))
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "需要可切换本地时区")
+    def test_month_keeps_local_time_across_daylight_saving_change(self):
+        try:
+            with mock.patch.dict(os.environ, {"TZ": "America/New_York"}):
+                time.tzset()
+                reset = int(datetime(2026, 3, 20, 10).timestamp())
+                expected = int(datetime(2026, 2, 20, 10).timestamp())
+                self.assertEqual(USAGE._quota_cycle_start(reset, "month"), expected)
+        finally:
+            time.tzset()
+
+
+class QuotaToolReadingTests(unittest.TestCase):
+    def test_grok_accepts_week_and_month_but_rejects_unknown_windows(self):
+        for window in ("week", "month", "day", "unknown", None):
+            with self.subTest(window=window):
+                reading = USAGE._quota_tool_reading({"grok": {
+                    "pct": 54.0, "reset": 6 * WEEK, "q_updated": 5 * WEEK, "window": window,
+                }}, "grok")
+                self.assertEqual(reading, (54.0, 6 * WEEK, 5 * WEEK, window)
+                                 if window in ("week", "month") else None)
+
+    def test_claude_and_codex_always_use_week(self):
+        for tool, fields in (("claude", {"q7": 30, "q7_reset": 6 * WEEK}),
+                             ("codex", {"pw": 30, "rw": 6 * WEEK})):
+            with self.subTest(tool=tool):
+                reading = USAGE._quota_tool_reading({tool: dict(fields, window="month")}, tool)
+                self.assertEqual(reading, (30, 6 * WEEK, 0, "week"))
+
+
 class MergeQuotaAnchorsTests(unittest.TestCase):
+    def test_peer_window_is_preserved_and_missing_or_invalid_window_defaults_to_week(self):
+        for window in ("month", "week", None, "day", ["month"]):
+            with self.subTest(window=window):
+                row = _anchor(2000, 8.0)
+                if window is not None:
+                    row["window"] = window
+                anchors = USAGE._merge_quota_anchors({}, {"grok": [row]})
+                self.assertEqual(anchors["grok"][0]["window"],
+                                 window if window in ("week", "month") else "week")
+
+    def test_different_windows_with_the_same_reset_remain_separate(self):
+        anchors = {"grok": [_anchor(2000, 8.0)]}
+        USAGE._merge_quota_anchors(anchors, {"grok": [dict(_anchor(2000, 12.0), window="month")]})
+        self.assertEqual(len(anchors["grok"]), 2)
+        self.assertEqual(anchors["grok"][1]["window"], "month")
+
     def test_same_window_seen_on_two_machines_collapses_into_one_row(self):
         anchors = {"codex": [_anchor(1000, 30.0, seen=600)]}
         USAGE._merge_quota_anchors(anchors, {"codex": [
@@ -61,9 +122,76 @@ class MergeQuotaAnchorsTests(unittest.TestCase):
 
 
 class AnchorCyclesTests(unittest.TestCase):
+    def test_month_anchor_starts_one_calendar_month_before_reset(self):
+        reset = int(datetime(2026, 11, 20, 10).timestamp())
+        start = int(datetime(2026, 10, 20, 10).timestamp())
+        anchors = {"grok": [dict(_anchor(reset, 40.0), window="month")]}
+        self.assertEqual(USAGE._quota_anchor_cycles(anchors, "grok", 8, start + 60),
+                         [(start, reset, 40.0, True, "month")])
+
+    def test_month_end_billing_cycles_join_at_observed_resets(self):
+        boundaries = [int(value.timestamp()) for value in (
+            datetime(2026, 2, 28, 10), datetime(2026, 3, 31, 10),
+            datetime(2026, 4, 30, 10), datetime(2026, 5, 31, 10),
+        )]
+        anchors = {"grok": [dict(_anchor(reset, 40.0), window="month")
+                            for reset in boundaries[1:]]}
+        cycles = USAGE._quota_anchor_cycles(anchors, "grok", 8, boundaries[-1] - 60)
+        chronological = cycles[::-1]
+        self.assertEqual([(cycle[0], cycle[1]) for cycle in chronological],
+                         list(zip(boundaries, boundaries[1:])))
+        for previous, current in zip(chronological, chronological[1:]):
+            self.assertEqual(previous[1], current[0])
+
+    def test_only_nearby_monthly_resets_adjust_the_calendar_start(self):
+        reset = int(datetime(2026, 5, 20, 10).timestamp())
+        calendar_start = int(datetime(2026, 4, 20, 10).timestamp())
+        for previous_window in ("month", "week"):
+            for offset in (-4, -3, 3, 4):
+                with self.subTest(previous_window=previous_window, offset=offset):
+                    previous_reset = calendar_start + offset * 86400
+                    anchors = {"grok": [dict(_anchor(previous_reset, 40.0), window=previous_window),
+                                        dict(_anchor(reset, 20.0), window="month")]}
+                    cycles = USAGE._quota_anchor_cycles(anchors, "grok", 8, reset - 60)
+                    expected = (previous_reset if previous_window == "month" and abs(offset) <= 3
+                                else calendar_start)
+                    self.assertEqual(cycles[0][0], expected)
+
+    def test_legacy_anchor_still_uses_seven_days(self):
+        anchors = {"grok": [_anchor(6 * WEEK, 40.0)]}
+        self.assertEqual(USAGE._quota_anchor_cycles(anchors, "grok", 8, 5 * WEEK),
+                         [(5 * WEEK, 6 * WEEK, 40.0, True, "week")])
+
+    def test_mixed_windows_use_the_next_anchors_window_to_clip_the_previous_cycle(self):
+        cases = [
+            ("week", datetime(2026, 11, 10, 10), "month", datetime(2026, 12, 5, 10)),
+            ("month", datetime(2026, 11, 20, 10), "week", datetime(2026, 11, 25, 10)),
+        ]
+        for window, old, next_window, new in cases:
+            with self.subTest(window=window):
+                old_reset, new_reset = int(old.timestamp()), int(new.timestamp())
+                old_start = USAGE._quota_cycle_start(old_reset, window)
+                new_start = USAGE._quota_cycle_start(new_reset, next_window)
+                anchors = {"grok": [dict(_anchor(old_reset, 40.0), window=window),
+                                    dict(_anchor(new_reset, 20.0), window=next_window)]}
+                cycles = USAGE._quota_anchor_cycles(anchors, "grok", 8, new_start + 60)
+                self.assertEqual(cycles, [(new_start, new_reset, 20.0, True, next_window),
+                                          (old_start, min(old_reset, new_start), 40.0, False, window)])
+
+    def test_idle_monthly_reset_drift_does_not_open_another_cycle(self):
+        old = int(datetime(2026, 10, 20, 10).timestamp())
+        first_zero = int(datetime(2026, 11, 5, 10).timestamp())
+        now = int(datetime(2026, 10, 5, 11).timestamp())
+        anchors = {"grok": [dict(_anchor(old, 58.0), window="month")]}
+        USAGE._record_quota_anchor(anchors, "grok", first_zero, 0.0, now, window="month")
+        USAGE._record_quota_anchor(anchors, "grok", first_zero + 3600, 0.0, now, window="month")
+        cycles = USAGE._quota_anchor_cycles(anchors, "grok", 8, now)
+        self.assertEqual(len(cycles), 2)
+        self.assertEqual(cycles[0][0], USAGE._quota_cycle_start(first_zero, "month"))
+
     def test_latest_window_still_running_is_marked_current(self):
         anchors = {"codex": [_anchor(5 * WEEK, 40.0), _anchor(6 * WEEK, 20.0)]}
-        cycles = USAGE._quota_anchor_cycles(anchors, "codex", WEEK, 8, 6 * WEEK - 1)
+        cycles = USAGE._quota_anchor_cycles(anchors, "codex", 8, 6 * WEEK - 1)
         self.assertEqual(len(cycles), 2)
         self.assertTrue(cycles[0][3])
         self.assertFalse(cycles[1][3])
@@ -71,7 +199,7 @@ class AnchorCyclesTests(unittest.TestCase):
     def test_latest_window_already_over_is_history_not_current(self):
         # 读数断了就不会再有新锚点,最后一条也会过期 —— 别再摆成「进行中」。
         anchors = {"codex": [_anchor(5 * WEEK, 40.0), _anchor(6 * WEEK, 20.0)]}
-        cycles = USAGE._quota_anchor_cycles(anchors, "codex", WEEK, 8, 6 * WEEK + 1)
+        cycles = USAGE._quota_anchor_cycles(anchors, "codex", 8, 6 * WEEK + 1)
         self.assertEqual(len(cycles), 2)
         self.assertFalse(any(c[3] for c in cycles))
 
@@ -79,7 +207,7 @@ class AnchorCyclesTests(unittest.TestCase):
         # 重锚会留下两条 reset 都在未来的锚点。面板只认第一条 current,
         # 多标一条另一条就既不在当前卡片也不在历史里了。
         anchors = {"codex": [_anchor(6 * WEEK, 40.0), _anchor(6 * WEEK + 3600, 20.0)]}
-        cycles = USAGE._quota_anchor_cycles(anchors, "codex", WEEK, 8, 5 * WEEK)
+        cycles = USAGE._quota_anchor_cycles(anchors, "codex", 8, 5 * WEEK)
         self.assertEqual(sum(1 for c in cycles if c[3]), 1)
         self.assertTrue(cycles[0][3])
         self.assertEqual(cycles[0][0], 6 * WEEK + 3600 - WEEK)
@@ -93,7 +221,7 @@ class AnchorCyclesTests(unittest.TestCase):
             anchors, "codex", new_reset, 0.0, new_reset - WEEK + 60
         )
         cycles = USAGE._quota_anchor_cycles(
-            anchors, "codex", WEEK, 8, new_reset - WEEK + 60
+            anchors, "codex", 8, new_reset - WEEK + 60
         )
 
         self.assertTrue(anchors["codex"][-1]["confirmed_reset"])
@@ -116,7 +244,7 @@ class AnchorCyclesTests(unittest.TestCase):
             anchors, "codex", drifted_reset, 0.0, drifted_reset - WEEK
         )
         cycles = USAGE._quota_anchor_cycles(
-            anchors, "codex", WEEK, 8, drifted_reset - WEEK
+            anchors, "codex", 8, drifted_reset - WEEK
         )
 
         self.assertTrue(anchors["codex"][-2]["confirmed_reset"])
@@ -135,7 +263,7 @@ class AnchorCyclesTests(unittest.TestCase):
         }]})
 
         cycles = USAGE._quota_anchor_cycles(
-            anchors, "codex", WEEK, 8, reset - WEEK
+            anchors, "codex", 8, reset - WEEK
         )
 
         self.assertTrue(anchors["codex"][0]["confirmed_reset"])
@@ -151,7 +279,7 @@ class AnchorCyclesTests(unittest.TestCase):
         }
 
         cycles = USAGE._quota_anchor_cycles(
-            anchors, "codex", WEEK, USAGE._QUOTA_CYCLE_HISTORY, 20 * WEEK
+            anchors, "codex", USAGE._QUOTA_CYCLE_HISTORY, 20 * WEEK
         )
 
         self.assertEqual(len(cycles), 12)
@@ -196,6 +324,12 @@ class CycleSpecsTests(unittest.TestCase):
         self.assertEqual(charted, ["grok"])
         self.assertEqual([r["reset"] for r in saved["grok"]], [6 * WEEK])
 
+    def test_monthly_reading_is_persisted_with_its_window(self):
+        charted, _missing, _anchors, saved = self._run(
+            {"grok": {"pct": 54.0, "reset": 6 * WEEK, "window": "month"}}, [], 5 * WEEK)
+        self.assertEqual(charted, ["grok"])
+        self.assertEqual(saved["grok"][0]["window"], "month")
+
     def test_tool_with_neither_reading_nor_history_is_reported_missing(self):
         charted, missing, _anchors, _saved = self._run({}, [], 6 * WEEK)
         self.assertEqual(charted, [])
@@ -222,6 +356,25 @@ class DeviceLedgerAnchorTests(unittest.TestCase):
         # 自己那份快照是本地锚点的副本,再并一遍就是自己跟自己对账。
         self.assertEqual(len(peer_anchors), 1)
         self.assertEqual([r["reset"] for r in peer_anchors[0]["codex"]], [5 * WEEK])
+
+
+class QuotaDetailWindowTests(unittest.TestCase):
+    def test_detail_outputs_each_cycles_window_with_tokens_and_cost(self):
+        reset = int(datetime(2026, 11, 20, 10).timestamp())
+        anchors = {"grok": [dict(_anchor(reset, 40.0), window="month")],
+                   "codex": [_anchor(reset, 20.0)]}
+        tools = {"grok": {"2026-10-21": {"in": 400, "cost": 8.0}}}
+        devices = [("peer", tools, {}, USAGE._quota_daily_from_tools(tools))]
+        with mock.patch.object(USAGE, "_quota_detail_inputs", return_value=({}, {})), \
+             mock.patch.object(USAGE, "_quota_device_ledgers", return_value=(devices, [])), \
+             mock.patch.object(USAGE, "_quota_cycle_specs", return_value=(["grok", "codex"], [], anchors)):
+            result = USAGE.build_quota_detail()
+        cycles = {cycle["tool"]: cycle for cycle in result["cycles"]}
+        self.assertEqual(cycles["grok"]["window"], "month")
+        self.assertEqual(cycles["grok"]["start"], int(datetime(2026, 10, 20, 10).timestamp()))
+        self.assertEqual(cycles["grok"]["tokens"], 400)
+        self.assertEqual(cycles["grok"]["cost"], 8.0)
+        self.assertEqual(cycles["codex"]["window"], "week")
 
 
 class QuotaWindowCostTests(unittest.TestCase):

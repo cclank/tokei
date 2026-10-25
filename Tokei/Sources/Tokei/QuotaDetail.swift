@@ -12,9 +12,10 @@ struct QuotaDailyPoint: Codable, Identifiable {
     var total: Int { c + x + g }
 }
 
-/// 一个周额度周期 = 两次「余量 100%」之间。token 已合并所有设备。
+/// 一个额度周期 = 两次「余量 100%」之间。token 已合并所有设备。
 struct QuotaCycle: Codable, Identifiable {
     var tool: String
+    var window: String?
     var start: Int
     var end: Int
     var used_pct: Double?
@@ -26,8 +27,9 @@ struct QuotaCycle: Codable, Identifiable {
     var current: Bool
 
     var id: String { "\(tool)-\(start)" }
+    var isMonthly: Bool { window == "month" }
 
-    /// 重锚会把周期截短,所以长度不一定是 7 天 —— 照实标出来,别当成整周比较。
+    /// 重锚会把周期截短,月窗口也有长短 —— 照实标出来。
     var durationDays: Double { Double(end - start) / 86400 }
 
     /// 一个满额度大约值多少 token —— 按当前进度外推。太早期外推没意义。

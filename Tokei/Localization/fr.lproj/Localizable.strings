@@ -519,4 +519,8 @@
 "按 API 价估算；缺少完整明细时，周期首尾按 token 占比分摊" = "Estimé aux tarifs API ; les extrémités du cycle sont réparties selon les tokens si les détails complets manquent";
 "这个周期约花了 %@" = "Environ %@ sur ce cycle";
 "本周期已花" = "Ce cycle";
-"上次周额度重置到现在，所有设备合计，按 API 价折算" = "Depuis la dernière réinitialisation du quota hebdomadaire, tous appareils confondus, aux tarifs API";
+"%@ 月额度" = "Quota mensuel %@";
+"上次额度重置到现在，所有设备合计，按 API 价折算" = "Depuis la dernière réinitialisation du quota, tous appareils confondus, aux tarifs API";
+"正在读取额度周期…" = "Lecture des cycles de quota…";
+"一个额度周期用了多少" = "Quota consommé sur un cycle";
+"Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。" = "Aucune carte de quota Grok : connectez-vous sur grok.com une fois pour que Tokei puisse relever le quota.";

@@ -1,5 +1,6 @@
 """MiniMax request matching, generation timing and durable cache upgrades."""
 import copy
+from contextlib import closing
 from datetime import datetime
 import json
 from pathlib import Path
@@ -21,7 +22,7 @@ class MiniMaxRateAccuracyTests(unittest.TestCase):
         self.start = int(datetime.now().replace(hour=8, minute=0, second=0,
                                                 microsecond=0).timestamp() * 1000)
         self.day = datetime.fromtimestamp(self.start / 1000).date().isoformat()
-        with sqlite3.connect(self.home.db) as connection:
+        with closing(sqlite3.connect(self.home.db)) as connection, connection:
             connection.execute("""CREATE TABLE local_runtime_message_rows (
                 id INTEGER PRIMARY KEY, session_id TEXT, turn_id TEXT,
                 role TEXT, created_at_ms INTEGER, data_json TEXT)""")
@@ -40,7 +41,7 @@ class MiniMaxRateAccuracyTests(unittest.TestCase):
             usage = {"input_tokens": 100, "output_tokens": out, "cache_read": 0}
         usage = dict(usage, **timing)
         data = json.dumps({"usage": usage}) if raw is None else raw
-        with sqlite3.connect(self.home.db) as connection:
+        with closing(sqlite3.connect(self.home.db)) as connection, connection:
             connection.execute("INSERT INTO local_runtime_message_rows "
                                "(session_id, turn_id, role, created_at_ms, data_json) "
                                "VALUES (?, ?, ?, ?, ?)",
@@ -174,7 +175,7 @@ class MiniMaxRateAccuracyTests(unittest.TestCase):
 
     def test_malformed_json_does_not_discard_other_valid_request_timings(self):
         self.request(turn="bad", out=100)
-        with sqlite3.connect(self.home.db) as connection:
+        with closing(sqlite3.connect(self.home.db)) as connection, connection:
             connection.execute("UPDATE local_runtime_message_rows SET data_json='{' WHERE turn_id='bad'")
         self.request(turn="ok", decode_duration_ms=10000, request_duration_ms=12000)
         perf, day = self.raw()
@@ -185,7 +186,7 @@ class MiniMaxRateAccuracyTests(unittest.TestCase):
     def test_invalid_timing_values_cannot_inflate_generation_speed(self):
         for value in (True, -1, 10 ** 400, "10000", {}, []):
             with self.subTest(value=value):
-                with sqlite3.connect(self.home.db) as connection:
+                with closing(sqlite3.connect(self.home.db)) as connection, connection:
                     connection.execute("DELETE FROM local_runtime_token_usage")
                     connection.execute("DELETE FROM local_runtime_message_rows")
                 self.request(end=60, decode_duration_ms=value, request_duration_ms=12000)

@@ -19184,21 +19184,24 @@ def _save_quota_anchors(anchors):
                 pass
 
 
+_QUOTA_ANCHOR_LOCK = threading.Lock()
+
+
 def _with_quota_anchor_lock(fn):
     def locked(*args, **kwargs):
-        try:
-            import fcntl
-        except ImportError:
-            return fn(*args, **kwargs)
-        lock_path = _QUOTA_ANCHOR_FILE + ".lock"
-        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            return fn(*args, **kwargs)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+        # 主刷新和详情采集会同时更新同一份历史；线程和独立进程都必须串行读改写。
+        with _QUOTA_ANCHOR_LOCK:
+            lock_path = _QUOTA_ANCHOR_FILE + ".lock"
+            os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                _lock_file(fd)
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    _unlock_file(fd)
+            finally:
+                os.close(fd)
     return locked
 
 

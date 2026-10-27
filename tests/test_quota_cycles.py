@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -387,6 +389,48 @@ class RefreshQuotaAnchorsTests(unittest.TestCase):
                 for future in futures:
                     future.result()
             self.assertEqual(USAGE._load_quota_anchors()["codex"][0]["max_used"], 100)
+
+    def test_another_collector_waits_for_the_history_write_before_merging(self):
+        code = """
+import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location('tokei_quota_worker', sys.argv[1])
+usage = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(usage)
+usage._QUOTA_ANCHOR_FILE = sys.argv[2]
+print('ready', flush=True)
+usage._record_local_quota_readings({'codex': {'pw': 100, 'rw': int(sys.argv[3])}},
+                                 int(sys.argv[4]))
+"""
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+                USAGE, "_QUOTA_ANCHOR_FILE", os.path.join(tmp, "cycles.json")):
+            fd = os.open(USAGE._QUOTA_ANCHOR_FILE + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            process = None
+            locked = False
+            try:
+                USAGE._lock_file(fd)
+                locked = True
+                process = subprocess.Popen(
+                    [sys.executable, "-c", code, USAGE.__file__, USAGE._QUOTA_ANCHOR_FILE,
+                     str(6 * WEEK), str(5 * WEEK)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=0.2)
+                USAGE._save_quota_anchors({"codex": [_anchor(6 * WEEK, 75)]})
+                USAGE._unlock_file(fd)
+                locked = False
+                _stdout, stderr = process.communicate(timeout=15)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(USAGE._load_quota_anchors()["codex"][0]["max_used"], 100)
+            finally:
+                if locked:
+                    USAGE._unlock_file(fd)
+                os.close(fd)
+                if process is not None:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate()
 
 
 class HistoryQuotaPeakTests(unittest.TestCase):

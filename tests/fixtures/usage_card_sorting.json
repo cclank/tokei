@@ -24,7 +24,12 @@
     "minimax": {"ranges": {"today": {"in": 100, "cr": 200, "out": 3, "reason": 4}}},
     "kimicode": {"ranges": {"today": {"tokens": 25, "in": 10, "out": 10, "reason": 5}, "week": {"tokens": 9999, "in": 3, "out": 3, "reason": 2}}},
     "devin": {"ranges": {"today": {"tokens": 700}}},
-    "qwenwork": {"remaining": 9999999}
+    "qwenwork": {"remaining": 9999999},
+    "copilot": {"ranges": {
+      "today": {"tokens": 999999, "in": 50000, "cr": 40000, "cw": 10000, "out": 120, "reason": 30, "credits": 5000},
+      "week": {"out": 400, "reason": 50},
+      "yesterday": {"credits": 10000}
+    }}
   },
   "cases": [
     {"id": "claude", "range": "today", "tokens": 175},
@@ -53,13 +58,19 @@
     {"id": "zed", "range": "today", "tokens": 0},
     {"id": "qwenwork", "range": "today", "tokens": 0},
     {"id": "unknown", "range": "today", "tokens": 0},
-    {"id": "claude", "range": "all", "tokens": 111}
+    {"id": "claude", "range": "all", "tokens": 111},
+    {"id": "copilot", "range": "today", "tokens": 150},
+    {"id": "copilot", "range": "week", "tokens": 450},
+    {"id": "copilot", "range": "yesterday", "tokens": 0}
   ],
   "orders": [
     {"range": "today", "ids": ["zed", "qwenwork", "claude", "codex", "cursor", "devin", "grok-bot", "grok"], "expected": ["codex", "cursor", "devin", "grok-bot", "claude", "zed", "qwenwork", "grok"]},
     {"range": "week", "ids": ["zed", "claude", "codex", "grok-bot", "grok"], "expected": ["grok-bot", "claude", "codex", "grok", "zed"]},
     {"range": "today", "ids": ["hermes", "qodercli_cn", "qodercli"], "expected": ["hermes", "qodercli_cn", "qodercli"]},
     {"range": "yesterday", "ids": ["grok-bot", "claude", "codex"], "expected": ["grok-bot", "claude", "codex"]},
-    {"range": "today", "ids": ["zed", "claude", "codex"], "expected": ["codex", "claude", "zed"]}
+    {"range": "today", "ids": ["zed", "claude", "codex"], "expected": ["codex", "claude", "zed"]},
+    {"range": "today", "ids": ["zed", "copilot", "claude", "codex", "grok"], "expected": ["codex", "claude", "copilot", "zed", "grok"]},
+    {"range": "week", "ids": ["copilot", "codex", "claude", "grok"], "expected": ["claude", "codex", "copilot", "grok"]},
+    {"range": "yesterday", "ids": ["zed", "copilot", "claude"], "expected": ["zed", "copilot", "claude"]}
   ]
 }

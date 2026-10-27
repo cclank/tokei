@@ -67,13 +67,15 @@ class PopoverPlacementTests(unittest.TestCase):
     def test_open_panel_follows_the_status_item_when_its_width_changes(self):
         """面板开着时在设置里切到「仅图标」，菜单栏按钮变窄、图标挪了位置，箭头却还指着原处。
 
-        跟着状态栏窗口的 didMove 只换定位矩形：实测在改宽度的同一轮里设置不生效，
-        而重新 show 会让 NSPopover 重挑屏幕和锚点（issue #97）。
+        跟着状态栏窗口的 didMove 更新独立锚点，保留自动隐藏菜单栏之前的纵向位置。
+        直接挂到系统按钮上会在菜单栏收起时把整个面板带到屏幕边缘。
         """
         app_source = (ROOT / "Tokei/Sources/Tokei/main.swift").read_text()
 
         self.assertIn("NSWindow.didMoveNotification", app_source)
-        self.assertIn("self.popover.positioningRect = button.bounds", app_source)
+        self.assertIn("self.popoverAnchor.update(from: button)", app_source)
+        self.assertNotIn("self.popover.positioningRect = button.bounds", app_source)
+        self.assertEqual(app_source.count("of: anchorView, preferredEdge: .minY"), 2)
         # 打开面板、换宽页重新挂上两处之后都要接着跟踪
         self.assertEqual(app_source.count("followAnchorWindow(of: "), 2)
         self.assertEqual(app_source.count("popover.show(relativeTo: "), 2, "跟随不能靠重新 show")

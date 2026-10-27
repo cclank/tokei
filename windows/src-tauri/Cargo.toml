@@ -1,6 +1,6 @@
 [package]
 name = "tokei"
-version = "1.0.47"
+version = "1.0.48"
 description = "Tokei — AI 编码工具用量监控（Windows 版）"
 authors = ["cclank"]
 edition = "2021"

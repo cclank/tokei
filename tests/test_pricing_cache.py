@@ -13,6 +13,13 @@ except ImportError:
 
 
 class PricingCacheTests(unittest.TestCase):
+    def setUp(self):
+        # These tests isolate the directory update; official-source tests live
+        # in test_auto_pricing and use their own bounded public-page fixtures.
+        patch = mock.patch.object(USAGE, "_update_openai_prices", return_value=None)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     @staticmethod
     def response(prompt="0.000001"):
         return io.BytesIO(json.dumps({
@@ -246,6 +253,91 @@ class PricingCacheTests(unittest.TestCase):
         self.assertEqual(review["pref"], "GPT-5.5")
         self.assertAlmostEqual(USAGE._codex_estimated_cost("codex-auto-review", 100_000, 0, 0),
                                review["pin"] / 10)
+
+    def test_terra_61_uses_its_official_price_with_old_or_missing_catalogs(self):
+        """New installs and existing user price files must both recognize Terra 6.1."""
+        official = {"in": 1.0, "out": 5.0, "cache_read": 0.05, "cache_write": 1.25}
+        existing_models, _ = USAGE._merge_pricing_overrides({"models": {
+            "openai/gpt-6.1-sol": {"in": 2.0, "out": 10.0, "cache_read": 0.1},
+        }})
+        for catalog in ({}, {"openai/gpt-6.1-terra": {
+            "in": 2.0, "out": 12.0, "cache_read": 0.2, "cache_write": 2.5,
+        }}):
+            with mock.patch.object(USAGE, "_PRICING_DB", catalog), \
+                 mock.patch.object(USAGE, "_OV_MODELS", existing_models), \
+                 mock.patch.object(USAGE, "_CATALOG_INDEX", None):
+                for model in ("gpt-6.1-terra", "openai/gpt-6.1-terra", "GPT-6.1 Terra"):
+                    with self.subTest(catalog=catalog, model=model):
+                        self.assertEqual(USAGE._pricing_id(model), "openai/gpt-6.1-terra")
+                        self.assertEqual(USAGE._model_identity_id(model), "openai/gpt-6.1-terra")
+                        self.assertEqual(USAGE._raw_price(model), official)
+                        row = USAGE._format_token_models(
+                            {model: {"in": 100_000, "cost": 0.1}},
+                            price_model=USAGE._codex_price_model)[0]
+                        self.assertEqual(row["name"], "GPT-6.1 Terra")
+                        self.assertEqual((row["pin"], row["pout"], row["pcr"]), (1.0, 5.0, 0.05))
+                        self.assertIsNone(row["pref"])
+
+    def test_terra_61_costs_include_cached_input_and_long_context_boundary(self):
+        # Official Standard API USD / 1M tokens, verified 2026-10-27:
+        # <=272K: 1 / 5 / 0.05; >272K: 2 / 7.5 / 0.10.
+        # Reasoning tokens are already included in output.
+        for inp, cached, out, expected in (
+            (100_000, 0, 0, 0.1),
+            (100_000, 80_000, 10_000, 0.074),
+            (272_000, 200_000, 10_000, 0.132),
+            (272_001, 200_000, 10_000, 0.239002),
+            (400_000, 300_000, 10_000, 0.305),
+        ):
+            with self.subTest(inp=inp, cached=cached, out=out):
+                self.assertAlmostEqual(USAGE._codex_estimated_cost("gpt-6.1-terra", inp, cached, out), expected)
+
+    def test_new_terra_price_reprices_warm_events_without_changing_tokens(self):
+        previous = json.loads(json.dumps(USAGE._PRICING_EFFECTIVE))
+        previous.pop("openai/gpt-6.1-terra", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_cache = Path(tmp) / "scan-cache.json"
+            scan_cache.write_text(json.dumps({
+                "v": USAGE._SCAN_CACHE_VERSION,
+                "_pricing_fingerprint": "before-terra-61",
+                "_pricing_effective": previous,
+                "_pricing_aliases": USAGE._OV_ALIASES,
+                "codex": {"kept": True},
+            }), encoding="utf-8")
+            # Two requests span the long-context threshold. The original rollout
+            # is absent; repricing must use compact cached events and keep TTFT.
+            events = [
+                ["2026-10-27T08:00:00+00:00", "2026-10-27", None, None, None, None,
+                 100_000, 80_000, 10_000, 4_000, 0.0, "gpt-6.1-terra", None, 100.0, 1.5],
+                ["2026-10-27T08:05:00+00:00", "2026-10-27", None, None, None, None,
+                 400_000, 300_000, 10_000, 3_000, 0.0, "openai/gpt-6.1-terra", None, 50.0, 2.0],
+            ]
+            with mock.patch.object(USAGE, "_SCAN_CACHE_FILE", str(scan_cache)):
+                loaded = USAGE._load_scan_cache()
+                self.assertEqual(loaded["codex"], {"kept": True})
+                self.assertIn("openai/gpt-6.1-terra", loaded["_pricing_changed_models"])
+                self.assertNotIn("openai/gpt-5.6-terra", loaded["_pricing_changed_models"])
+                path = str(Path(tmp) / "removed-rollout.jsonl")
+                size = USAGE._codex_write_event_cache(path, events)
+                old_days = {}
+                with mock.patch.object(USAGE, "_codex_estimated_cost", return_value=9.0):
+                    for event in events:
+                        USAGE._codex_add_event(old_days, event)
+                entry = {"event_count": len(events), "event_cache_size": size,
+                         "active_model": "gpt-6.1-terra", "drop_count": 0,
+                         "canonical": True, "days": old_days, "deduped_days": old_days}
+                self.assertTrue(USAGE._reprice_codex_event_caches(
+                    {path: entry}, loaded["_pricing_changed_models"]))
+                self.assertEqual(list(USAGE._iter_codex_cached_events(path)), events)
+                day = entry["days"]["2026-10-27"]
+                self.assertAlmostEqual(day["cost"], 0.379)
+                for field in ("in", "cached", "out", "reason", "models", "hours", "model_hours", "perf"):
+                    if field == "models":
+                        for name, model in old_days["2026-10-27"]["models"].items():
+                            self.assertEqual({k: v for k, v in day[field][name].items() if k != "cost"},
+                                             {k: v for k, v in model.items() if k != "cost"})
+                    else:
+                        self.assertEqual(day[field], old_days["2026-10-27"][field])
 
     def test_unlisted_models_use_the_previous_version_of_their_line(self):
         """价目表里没有的沿用同一版本线上一个版本的价：先找同档位，再找基础款。"""

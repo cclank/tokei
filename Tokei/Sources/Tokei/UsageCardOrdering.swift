@@ -39,6 +39,9 @@ enum UsageCardOrdering {
             return r.in + r.out + r.cr + r.cw
         case "devin": return u.devin.ranges.get(range).totalTokens
         case "minimax": return u.minimax.ranges.get(range).totalTokens
+        case "copilot":
+            let r = u.copilot.ranges.get(range)
+            return r.out + r.reason
         case "musecode":
             let r = u.musecode.ranges.get(range)
             return r.in + r.out + r.cr + r.cw

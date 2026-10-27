@@ -660,6 +660,99 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual([row["used_pct"] for row in quota["windows"]], [0.0, 10.0, None, None])
         self.assertFalse(quota["windows"][2]["usage_known"])
 
+    def test_antigravity_argon_weekly_is_separate_from_shared_gemini(self):
+        quota = USAGE._normalize_antigravity_quota_summary({"groups": [
+            {"displayName": "Gemini 4 Argon", "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly",
+                 "remainingFraction": 0, "resetTime": "2027-01-15T00:00:00Z"},
+            ]},
+            {"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "gemini-weekly", "remainingFraction": 0.9},
+                {"bucketId": "gemini-5h", "remainingFraction": 0.8},
+            ]},
+        ]})
+        rows = quota["windows"]
+        self.assertEqual(len(rows), 5)
+        self.assertEqual([row["used_pct"] for row in rows[:2]], [10.0, 20.0])
+        self.assertEqual(rows[-1]["id"], "antigravity-gemini-argon-weekly")
+        self.assertEqual(rows[-1]["title"], "Gemini 4 Argon 周")
+        self.assertEqual(rows[-1]["used_pct"], 100.0)
+        self.assertTrue(rows[-1]["usage_known"])
+        self.assertEqual(rows[-1]["window_minutes"], 10080)
+        self.assertIsNotNone(rows[-1]["reset"])
+
+    def test_antigravity_argon_exhaustion_does_not_slow_other_model_queries(self):
+        now = 1_800_000_000
+        quota = USAGE._normalize_antigravity_quota_summary({"groups": [
+            {"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "gemini-weekly", "remainingFraction": 0.9},
+                {"bucketId": "gemini-5h", "remainingFraction": 0.8},
+            ]},
+            {"displayName": "Gemini 4 Argon", "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly",
+                 "remainingFraction": 0, "resetTime": now + 86400},
+            ]},
+        ]})
+        with tempfile.TemporaryDirectory() as tmp:
+            self.isolate_cache(Path(tmp))
+            USAGE._save_provider_quota_cache("antigravity", "argon-fixture", quota,
+                                            fetched_at=now - 500)
+            self.assertIsNone(USAGE._cached_provider_quota(
+                "antigravity", "argon-fixture", max_age=60, now_epoch=now))
+            self.assertIsNone(USAGE._latest_cached_provider_quota(
+                "antigravity", max_age=60, now_epoch=now))
+
+    def test_antigravity_argon_preserves_unknown_full_and_disabled_states(self):
+        for fields, expected in [
+            ({"remainingFraction": 1}, 0.0),
+            ({"remaining": {"remainingFraction": 0.25}}, 75.0),
+            ({}, None),
+            ({"remainingFraction": "invalid"}, None),
+        ]:
+            with self.subTest(fields=fields):
+                quota = USAGE._normalize_antigravity_quota_summary({"groups": [
+                    {"displayName": "Gemini 4 Argon", "buckets": [
+                        {"bucketId": "gemini-argon-wtu-weekly", **fields},
+                    ]},
+                ]})
+                row = quota["windows"][-1]
+                self.assertEqual(row["used_pct"], expected)
+                self.assertEqual(row["usage_known"], expected is not None)
+                self.assertEqual(row["scope"], "model")
+                self.assertTrue(all(r["used_pct"] is None for r in quota["windows"][:4]))
+        quota = USAGE._normalize_antigravity_quota_summary({"groups": [
+            {"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "gemini-weekly", "remainingFraction": 1},
+            ]},
+            {"displayName": "Gemini 4 Argon", "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "disabled": True,
+                 "remainingFraction": 0},
+            ]},
+        ]})
+        self.assertEqual(len(quota["windows"]), 4)
+
+    def test_antigravity_argon_refreshes_cached_four_window_summary(self):
+        process = {"pid": 123, "csrf_token": "local-token"}
+        endpoints = [("https", 64123, "local-token", True)]
+        summary = {"groups": [{"displayName": "Gemini 4 Argon", "buckets": [
+            {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly",
+             "remainingFraction": 1},
+        ]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.isolate_cache(Path(tmp))
+            marker = USAGE._provider_credential_marker(
+                "antigravity", "quota-summary-v3", process["pid"], process["csrf_token"], endpoints)
+            USAGE._save_provider_quota_cache("antigravity", marker, {
+                "available": True, "windows": [{"id": "antigravity-gemini-weekly"}],
+            })
+            with mock.patch.object(USAGE, "_antigravity_running_processes", return_value=[process]), \
+                    mock.patch.object(USAGE, "_antigravity_endpoints", return_value=endpoints), \
+                    mock.patch.object(USAGE, "_antigravity_request", side_effect=[summary, {}]) as request:
+                quota = USAGE.fetch_antigravity_quota()
+        self.assertEqual(quota["windows"][-1]["id"], "antigravity-gemini-argon-weekly")
+        self.assertEqual(quota["windows"][-1]["used_pct"], 0.0)
+        self.assertEqual(request.call_count, 2)
+
     def test_antigravity_summary_failure_keeps_stale_groups_not_model_rows(self):
         process = {"pid": 123, "csrf_token": "local-token"}
         endpoints = [("https", 64123, "local-token", True)]

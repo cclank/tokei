@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=6
+# TOKEI_COLLECTOR_REVISION=7
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -13,7 +13,7 @@
 # 不读取或解密账号凭据 (config qwenwork_quota_enabled 或 TOKEI_QWENWORK_QUOTA=1)。
 # Cursor / Zed / Sub2API / z.ai 额度默认关闭；开启卡片后才复用本机登录态或 Keychain
 # API Key 查询对应官方/自托管接口。Antigravity 额度只探测已运行的 127.0.0.1 服务。
-# --update-prices 仍只在用户显式触发时更新价格表。
+# 价格目录与 OpenAI 官方公开价格默认在后台每天核对；不上传本地模型、日志或凭据。
 #   Claude Code: ~/.claude/projects/<proj>/<session>.jsonl  (assistant 行 message.usage,增量)
 #   Codex:       ~/.codex/{sessions,archived_sessions}/**/rollout-*.jsonl[.zst] (token_count 事件,含额度;
 #                官方 legacy_to_paginated_v1 迁移会把旧 rollout 压缩成 .jsonl.zst)
@@ -285,6 +285,9 @@ def _writable_path(name):
 
 PRICING_FILE = _writable_path("pricing.json")
 OVERRIDES_FILE = _writable_path("pricing_overrides.json")
+OFFICIAL_PRICING_FILE = os.path.join(_USER_DIR, "pricing_official.json")
+PRICING_UPDATE_STATE = os.path.join(_USER_DIR, "pricing_update_state.json")
+_OPENAI_PRICING_URL = "https://developers.openai.com/api/docs/pricing.md"
 CODEX_QUOTA_CACHE = _writable_path("codex_quota_cache.json")
 CODEX_RESET_CARDS_CACHE = _writable_path("codex_reset_cards_cache.json")
 CLAUDE_QUOTA_CACHE = _writable_path("claude_quota_cache.json")
@@ -327,6 +330,7 @@ _DEFAULT_PRICES = {
     "openai/gpt-6-astra":            {"in": 10.0,  "out": 50.0, "cache_read": 1.0,    "cache_write": 12.5},
     "openai/gpt-6-sol":              {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
     "openai/gpt-6.1-sol":            {"in": 2.0,   "out": 10.0, "cache_read": 0.1,    "cache_write": 2.5},
+    "openai/gpt-6.1-terra":          {"in": 1.0,   "out": 5.0,  "cache_read": 0.05,   "cache_write": 1.25},
     "openai/gpt-6-luna":             {"in": 0.1,   "out": 0.5,  "cache_read": 0.01,   "cache_write": 0.125},
     "qwen/qwen3.8-max":              {"in": 2.0,   "out": 6.0,  "cache_read": 0.25,   "cache_write": 2.5},
     "qwen/qwen3.7-max":              {"in": 1.25,  "out": 3.75, "cache_read": 0.25,   "cache_write": 1.5625},
@@ -421,13 +425,35 @@ def _load_json(path, default):
 
 _PRICING_DB = _load_json(PRICING_FILE, {}).get("models", {})
 
+
+def _valid_price_number(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0 <= value < 1_000_000)
+
+
+def _load_official_pricing():
+    payload = _load_json(OFFICIAL_PRICING_FILE, {})
+    models = payload.get("models", {}) if isinstance(payload, dict) else {}
+    if not isinstance(models, dict):
+        return {}
+    return {model: price for model, price in models.items()
+            if isinstance(model, str) and model.startswith("openai/")
+            and isinstance(price, dict) and price.get("source") == _OPENAI_PRICING_URL
+            and all(_valid_price_number(price.get(k)) for k in ("in", "out", "cache_read"))
+            and ("cache_write" not in price or _valid_price_number(price["cache_write"]))
+            and price["in"] > 0 and price["out"] > 0}
+
+
+_OFFICIAL_PRICING_DB = _load_official_pricing()
+
 # 已安装版本会保留用户自己的 pricing_overrides.json。关键官方修正也随脚本内置，
 # 这样升级后立即生效；用户仍可覆盖单价，已确认的官方别名保持固定映射。
 _BUILTIN_OVERRIDE_MODELS = {
-    # OpenAI Standard API rates, verified 2026-09-23 (gpt-6.1-sol 2026-09-30):
+    # OpenAI Standard API rates, verified 2026-09-23 (Sol 6.1 09-30, Terra 6.1 10-27):
     # https://developers.openai.com/api/docs/pricing
     **{model: dict(_DEFAULT_PRICES[model]) for model in (
-        "openai/gpt-6-astra", "openai/gpt-6-sol", "openai/gpt-6.1-sol", "openai/gpt-6-luna",
+        "openai/gpt-6-astra", "openai/gpt-6-sol", "openai/gpt-6.1-sol",
+        "openai/gpt-6.1-terra", "openai/gpt-6-luna",
     )},
     "openai/gpt-5.6-sol": {
         "in": 4.0, "out": 20.0, "cache_read": 0.4, "cache_write": 5.0,
@@ -442,13 +468,23 @@ _BUILTIN_OVERRIDE_ALIASES = {
 }
 
 
-def _merge_pricing_overrides(overrides):
+def _merge_pricing_overrides(overrides, official=None):
     overrides = overrides if isinstance(overrides, dict) else {}
     user_models = overrides.get("models")
     user_aliases = overrides.get("aliases")
-    models = dict(_BUILTIN_OVERRIDE_MODELS)
+    official = _OFFICIAL_PRICING_DB if official is None else official
+    fields = ("in", "out", "cache_read", "cache_write")
+    models = {model: dict(price) for model, price in _BUILTIN_OVERRIDE_MODELS.items()}
+    for model, price in official.items():
+        models[model] = {**models.get(model, {}),
+                         **{key: price[key] for key in fields if key in price}}
     if isinstance(user_models, dict):
-        models.update(user_models)
+        for model, price in user_models.items():
+            # 安装时复制的内置默认值允许被新核实的官方价更新；真正的自定义值仍优先。
+            if model in official and price == _BUILTIN_OVERRIDE_MODELS.get(model):
+                continue
+            if isinstance(price, dict):
+                models[model] = {**models.get(model, {}), **price}
     aliases = dict(user_aliases) if isinstance(user_aliases, dict) else {}
     aliases.update(_BUILTIN_OVERRIDE_ALIASES)
     return models, aliases
@@ -465,20 +501,25 @@ _CLAUDE_LONG_PROMPT_TIERS = {
 }
 
 
-def _effective_pricing_map(catalog=None):
+def _effective_pricing_map(catalog=None, overrides=None, official=None):
     fields = ("in", "out", "cache_read", "cache_write", "write1h")
     catalog = catalog if isinstance(catalog, dict) else _PRICING_DB
-    model_ids = set(_DEFAULT_PRICES) | set(catalog) | set(_OV_MODELS)
+    overrides = _OV_MODELS if overrides is None else overrides
+    official = _OFFICIAL_PRICING_DB if official is None else official
+    model_ids = set(_DEFAULT_PRICES) | set(catalog) | set(overrides)
     result = {}
     for model in model_ids:
         value = dict(_DEFAULT_PRICES.get(model, {}))
         value.update(catalog.get(model, {}))
-        value.update(_OV_MODELS.get(model, {}))
+        value.update(overrides.get(model, {}))
         result[model] = {field: value.get(field, 0.0) for field in fields}
         # 分档规则也算价格的一部分：规则变了，缓存里这个模型的成本要跟着重算。
         tier = _CLAUDE_LONG_PROMPT_TIERS.get(model)
         if tier:
             result[model]["long_prompt"] = list(tier)
+        profile = official.get(model, {}).get("long_context")
+        if profile:
+            result[model]["long_context"] = profile
     return result
 
 
@@ -1237,6 +1278,7 @@ def _load_scan_cache():
                         pending.add(model)
             else:
                 pending.update(_BUILTIN_REPRICE_MODELS)
+                pending.update(_OFFICIAL_PRICING_DB)
                 multipliers.update(_BUILTIN_REPRICE_MULTIPLIERS)
             previous_aliases = c.get("_pricing_aliases")
             if isinstance(previous_aliases, dict):
@@ -2252,6 +2294,7 @@ def _format_token_models(models, include_prices=True, price_model=None):
             price_id = None
         elif price_model is not None:
             price_id = price_model(model_id) if model_id else None
+            price_id = _pricing_id(price_id) or price_id
         else:
             price_id = _pricing_id(model_id) if model_id else None
         p = _raw_price(price_id) if price_id else {
@@ -3564,7 +3607,20 @@ def _codex_price_model(model):
 
 
 def _codex_estimated_cost(model, inp, cached, out):
-    base = _raw_price(_codex_price_model(model))
+    priced_model = _codex_price_model(model)
+    base = _raw_price(priced_model)
+    price_id = _pricing_id(priced_model)
+    profile = _OFFICIAL_PRICING_DB.get(price_id, {}).get("long_context")
+    overrides = _OVERRIDES if isinstance(_OVERRIDES, dict) else {}
+    custom_models = overrides.get("models")
+    custom = custom_models.get(price_id) if isinstance(custom_models, dict) else None
+    if (isinstance(profile, dict)
+            and (custom is None or custom == _BUILTIN_OVERRIDE_MODELS.get(price_id))
+            and isinstance(profile.get("threshold"), int) and 0 < profile["threshold"] <= 10_000_000
+            and all(_valid_price_number(profile.get(k)) for k in ("in", "out", "cache_read"))):
+        tier = profile if inp > profile["threshold"] else base
+        return ((inp - cached) * tier["in"] + cached * tier["cache_read"]
+                + out * tier["out"]) / 1e6
     high_context = inp > 272_000
     input_price = base["in"] * (2 if high_context else 1)
     output_price = base["out"] * (1.5 if high_context else 1)
@@ -6840,6 +6896,9 @@ def _provider_quota_exhausted_reset_at(quota, now_epoch=None):
     for window in quota.get("windows") or []:
         if not isinstance(window, dict):
             continue
+        # A model-specific limit must not slow polling for other usable models.
+        if window.get("scope") == "model":
+            continue
         used = _provider_number(window.get("used_pct"))
         reset_epoch = _provider_number(window.get("reset"))
         # Another window may reset before the exhausted window does.
@@ -9145,7 +9204,9 @@ def _normalize_antigravity_quota_summary(payload, updated=None):
         if not isinstance(group, dict):
             continue
         display = str(group.get("displayName") or "").lower()
-        if "gemini" in display:
+        if "gemini" in display and "argon" in display:
+            family = "gemini-argon"
+        elif "gemini" in display:
             family = "gemini"
         elif any(name in display for name in ("claude", "gpt", "third")):
             family = "3p"
@@ -9165,21 +9226,27 @@ def _normalize_antigravity_quota_summary(payload, updated=None):
                 continue
             buckets.setdefault(f"{family}-{cadence_id}", bucket)
     rows = []
-    # Match the official shared quota groups, never individual model variants.
-    # Missing windows stay unknown; a model quota cannot stand in for a week.
+    # Keep shared quotas separate from explicitly reported model quota groups.
+    # Missing windows stay unknown; a model quota cannot stand in for a shared one.
     if buckets:
-        for bucket_id, title, minutes in _ANTIGRAVITY_QUOTA_WINDOWS:
+        windows = list(_ANTIGRAVITY_QUOTA_WINDOWS)
+        if "gemini-argon-weekly" in buckets:
+            windows.append(("gemini-argon-weekly", "Gemini 4 Argon 周", 10080))
+        for bucket_id, title, minutes in windows:
             bucket = buckets.get(bucket_id, {})
             # Connect JSON flattens the oneof; older clients wrap `remaining`.
             remaining = _antigravity_remaining(bucket)
             if remaining is None:
                 remaining = _antigravity_remaining(bucket.get("remaining"))
-            rows.append(_provider_window(
+            row = _provider_window(
                 "antigravity-" + bucket_id, title,
                 (1 - remaining) * 100 if remaining is not None else None,
                 bucket.get("resetTime"), minutes,
                 "暂时无法读取" if remaining is None else None,
-                usage_known=remaining is not None))
+                usage_known=remaining is not None)
+            if bucket_id == "gemini-argon-weekly":
+                row["scope"] = "model"
+            rows.append(row)
     return {
         "available": bool(rows),
         "plan": None, "account": None, "windows": rows, "details": [],
@@ -9219,7 +9286,7 @@ def fetch_antigravity_quota():
         if not endpoints:
             continue
         marker = _provider_credential_marker(
-            "antigravity", "quota-summary-v3", process.get("pid"),
+            "antigravity", "quota-summary-v4", process.get("pid"),
             process.get("csrf_token"), endpoints)
         cached = _cached_provider_quota("antigravity", marker, _PROVIDER_QUOTA_TTL)
         if cached:
@@ -13380,7 +13447,7 @@ def scan_devin(bounds, cache):
 
 # ---------- MiniMax Code ----------
 # 桌面端的本地运行时库：~/.minimax/v2/sqlite/runtime-state.sqlite。
-# local_runtime_token_usage 每轮对话一行，四个桶并列相加（raw 里的
+# local_runtime_token_usage 每次模型调用一行，四个桶并列相加（raw 里的
 # totalTokens = input + output + cacheRead + cacheWrite），托管登录下
 # cost_usd 恒为 0。model 列目前是空的，真实模型只出现在按小时轮转的
 # observability 日志里：
@@ -13389,8 +13456,10 @@ def scan_devin(bounds, cache):
 #
 # 日志会被轮转删掉，所以对上号的结果按行号区间压缩存进扫描缓存（runs），
 # 日志没了模型也不丢；还没等到库里那一行的 turn 暂存在 pending 里。
-# 2：附上每轮回复的计时（首字延迟、生成时间）。
-_MINIMAX_SCAN_VERSION = 2
+# 2：附上回复计时。3：按会话、轮次和 Token 桶逐次匹配，旧计时标注含等待。
+_MINIMAX_SCAN_VERSION = 3
+# 只更新速率解析时不升级 Token/费用口径，避免覆盖本地数据清理前的账本高水位。
+_MINIMAX_LEDGER_VERSION = 2
 _MINIMAX_LOG_MARKER = b"llm_response_identifiers"
 _MINIMAX_PENDING_TTL = 2 * 24 * 3600
 
@@ -13482,35 +13551,134 @@ def _minimax_run_lookup(runs, through):
     return lookup
 
 
-def _minimax_turn_timing(connection, tables):
-    """turn_id → (回复写入时刻 ms, 生成耗时 ms, 请求总耗时 ms)。
+def _minimax_perf_ms(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return value if math.isfinite(value) and value >= 0 else None
+        except OverflowError:
+            pass
+    return None
 
-    只认一轮里只有一条助手回复的：一轮里调了好几次模型（中间夹着工具），
-    用量是整轮合计，拿写入时刻减请求时刻会把工具时间也算进去。
+
+def _minimax_usage_fingerprint(values):
+    try:
+        if all(isinstance(value, (int, float)) and not isinstance(value, bool)
+               and math.isfinite(value) and value >= 0 and int(value) == value
+               for value in values):
+            return tuple(int(value) for value in values)
+    except OverflowError:
+        pass
+    return None
+
+
+def _minimax_request_timings(connection, tables, rows):
+    """用量行 id → (回复写入、生成耗时、请求总耗时、可用落盘时间)。
+
+    同一轮包含多次模型调用；用会话、轮次和四个 Token 桶匹配各自的回复。
+    Token 桶重复时只接受不重叠的请求时间窗口；旧消息没保存 Token 桶时，
+    仅单次调用、单条回复可回退。配对不明确时不猜，不重复使用同一条计时。
     """
     import sqlite3
+    from collections import Counter, defaultdict
+
     if "local_runtime_message_rows" not in tables:
         return {}
     columns = {row[1] for row in connection.execute(
         "PRAGMA table_info(local_runtime_message_rows)")}
-    if not {"role", "turn_id", "created_at_ms", "data_json"} <= columns:
+    if not {"session_id", "role", "turn_id", "created_at_ms", "data_json"} <= columns:
         return {}
-    timing, counts = {}, {}
+
+    messages, legacy = defaultdict(list), {}
+    message_counts = Counter()
+    tool_turns = set()
     try:
-        for turn_id, created_ms, decode_ms, request_ms in connection.execute("""
-                SELECT turn_id, created_at_ms,
-                       json_extract(data_json, '$.usage.decode_duration_ms'),
-                       json_extract(data_json, '$.usage.request_duration_ms')
+        for session_id, turn_id, created_ms, raw in connection.execute("""
+                SELECT session_id, turn_id, created_at_ms,
+                       CASE WHEN json_valid(data_json)
+                            THEN json_extract(data_json, '$.usage', '$.tool_calls') END
                 FROM local_runtime_message_rows WHERE role = 'assistant'"""):
-            if not turn_id:
+            if not session_id or not turn_id:
                 continue
-            counts[turn_id] = counts.get(turn_id, 0) + 1
-            timing[turn_id] = (created_ms if isinstance(created_ms, (int, float)) else None,
-                               decode_ms if isinstance(decode_ms, (int, float)) else None,
-                               request_ms if isinstance(request_ms, (int, float)) else None)
+            turn = (session_id, turn_id)
+            message_counts[turn] += 1
+            try:
+                usage, tool_calls = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if tool_calls:
+                tool_turns.add(turn)
+            if usage is None:
+                usage = {}
+            if not isinstance(usage, dict):
+                continue
+            timing = tuple(_minimax_perf_ms(value) for value in (
+                created_ms, usage.get("decode_duration_ms"), usage.get("request_duration_ms")))
+            fields = ("input_tokens", "output_tokens", "cache_read", "cache_write")
+            if not any(field in usage for field in fields):
+                legacy[turn] = timing
+                continue
+            fingerprint = _minimax_usage_fingerprint((usage.get("input_tokens"),
+                usage.get("output_tokens"), usage.get("cache_read", 0), usage.get("cache_write", 0)))
+            if fingerprint is not None:
+                messages[turn + (fingerprint,)].append(timing)
     except sqlite3.Error:
         return {}
-    return {turn: value for turn, value in timing.items() if counts[turn] == 1}
+
+    requests, turn_requests = defaultdict(list), defaultdict(list)
+    for row in rows:
+        if not row[1] or not row[2]:
+            continue
+        turn = (row[1], row[2])
+        turn_requests[turn].append(row)
+        fingerprint = _minimax_usage_fingerprint((row[5], row[6], row[8] or 0, row[9] or 0))
+        if fingerprint is not None:
+            requests[turn + (fingerprint,)].append(row)
+
+    timings, windows = {}, {}
+    for key, group in requests.items():
+        candidates = messages.get(key, [])
+        if len(group) == len(candidates) == 1:
+            timings[group[0][0]] = candidates[0]
+            continue
+        if not candidates:
+            continue
+        turn = key[:2]
+        if turn not in windows:
+            starts = Counter(value for row in turn_requests[turn]
+                             if (value := _minimax_perf_ms(row[4])) is not None)
+            ordered = sorted(starts)
+            windows[turn] = {value: ordered[index + 1] if index + 1 < len(ordered) else math.inf
+                             for index, value in enumerate(ordered) if starts[value] == 1}
+        for row in group:
+            start = _minimax_perf_ms(row[4])
+            end = windows[turn].get(start)
+            if end is None:
+                continue
+            matching = [candidate for candidate in candidates
+                        if candidate[0] is not None and start < candidate[0] <= end]
+            if len(matching) == 1:
+                timings[row[0]] = matching[0]
+
+    for turn, timing in legacy.items():
+        if message_counts[turn] == 1 and len(turn_requests[turn]) == 1:
+            timings[turn_requests[turn][0][0]] = timing
+    single_requests = {group[0][0] for turn, group in turn_requests.items()
+                       if len(group) == 1 and message_counts[turn] == 1 and turn not in tool_turns}
+    return {row_id: (*timing, row_id in single_requests) for row_id, timing in timings.items()}
+
+
+def _minimax_request_timing(timing, started_ms):
+    end_ms, decode_ms, request_ms, allow_persistence = timing
+    if decode_ms is not None and decode_ms > 0 and (request_ms is None or request_ms >= decode_ms):
+        return (decode_ms / 1000,
+                (request_ms - decode_ms) / 1000 if request_ms is not None else None, False)
+    if request_ms is not None and request_ms > 0:
+        return request_ms / 1000, None, True
+    start = _minimax_perf_ms(started_ms)
+    # completed message 可能等工具执行完才落盘；旧多轮记录无法还原各次模型结束时刻。
+    if allow_persistence and end_ms is not None and start is not None and end_ms > start:
+        return (end_ms - start) / 1000, None, True
+    return None
 
 
 def _scan_minimax_database(path, pending, runs, through):
@@ -13526,6 +13694,8 @@ def _scan_minimax_database(path, pending, runs, through):
     connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
+        # 运行中的客户端会继续写入；用量和消息必须读自同一份数据库快照。
+        connection.execute("BEGIN")
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         if "local_runtime_token_usage" not in tables:
@@ -13565,7 +13735,7 @@ def _scan_minimax_database(path, pending, runs, through):
             FROM local_runtime_token_usage
             ORDER BY id ASC
         """).fetchall()
-        turn_timing = _minimax_turn_timing(connection, tables)
+        request_timings = _minimax_request_timings(connection, tables, rows)
     finally:
         connection.close()
 
@@ -13613,7 +13783,8 @@ def _scan_minimax_database(path, pending, runs, through):
         if stamp is None:
             continue
         try:
-            created = datetime.fromtimestamp(stamp).astimezone()
+            # 这里只取本机日期和小时，fromtimestamp 已完成本地时区转换。
+            created = datetime.fromtimestamp(stamp)
         except (OSError, OverflowError, ValueError):
             continue
         if not model:
@@ -13630,19 +13801,15 @@ def _scan_minimax_database(path, pending, runs, through):
 
         day_key = created.date().isoformat()
         day = days.setdefault(day_key, _empty_token_day())
-        day["_cost_version"] = _MINIMAX_SCAN_VERSION
+        day["_cost_version"] = _MINIMAX_LEDGER_VERSION
         _add_token_usage(day, inp, out, cache_read, cache_write, reason, cost, display_model)
-        timing = turn_timing.get(row[2])
+        timing = request_timings.get(row[0])
         if timing:
-            end_ms, decode_ms, request_ms = timing
-            if decode_ms and request_ms and request_ms >= decode_ms:
-                # 新版客户端直接记了生成耗时和请求总耗时
+            duration = _minimax_request_timing(timing, ts)
+            if duration:
+                seconds, ttft, includes_wait = duration
                 _perf_add(day.setdefault("perf", {}), display_model, out + reason,
-                          decode_ms / 1000, (request_ms - decode_ms) / 1000)
-            elif end_ms and isinstance(ts, (int, float)) and end_ms > ts:
-                # 旧版只有回复写入时间：从用量行的请求时刻算起，端到端
-                _perf_add(day.setdefault("perf", {}), display_model, out + reason,
-                          (end_ms - ts) / 1000)
+                          seconds, ttft, includes_wait=includes_wait)
         project = session_projects.get(session_id)
         if project:
             bucket = day.setdefault("projects", {}).setdefault(
@@ -16506,6 +16673,7 @@ def compute(local_only=False):
     if errors:
         result["_errors"] = errors
     _recalc_costs(result)
+    _record_local_quota_readings(result)
     return result
 
 
@@ -16716,19 +16884,32 @@ def _write_configured_sync_snapshot(d):
     return _write_sync_snapshot(sync_dir, device_id, snapshot)
 
 
+def _pricing_metadata():
+    catalog = _load_json(PRICING_FILE, {})
+    verified = _load_json(OFFICIAL_PRICING_FILE, {})
+    meta = catalog.get("_meta") if isinstance(catalog, dict) else None
+    official = verified.get("_meta") if isinstance(verified, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    official = official if isinstance(official, dict) else {}
+    return {"updated_at": meta.get("updated_at", ""), "count": meta.get("count", 0),
+            "official_source": official.get("source"),
+            "official_verified_at": official.get("verified_at"),
+            "official_count": official.get("count", 0)}
+
+
 def main_json():
     d = compute(local_only="--local-only" in sys.argv)
-    meta = _load_json(PRICING_FILE, {}).get("_meta", {})
-    d["_pricing"] = {"updated_at": meta.get("updated_at", ""), "count": meta.get("count", 0)}
+    d["_pricing"] = _pricing_metadata()
     print(json.dumps(d, ensure_ascii=False))
     if "--no-sync-snapshot" not in sys.argv:
         _write_configured_sync_snapshot(d)
+    if "--local-only" not in sys.argv:
+        _schedule_pricing_refresh(d)
 
 
 def write_sync_snapshot():
     d = compute()
-    meta = _load_json(PRICING_FILE, {}).get("_meta", {})
-    d["_pricing"] = {"updated_at": meta.get("updated_at", ""), "count": meta.get("count", 0)}
+    d["_pricing"] = _pricing_metadata()
     # 账本随快照进同步仓:异地备份,本地账本丢失时可自愈恢复
     ledger = _load_ledger()
     if ledger.get("tools"):
@@ -16742,6 +16923,7 @@ def write_sync_snapshot():
 
 def main():
     d = compute()
+    _schedule_pricing_refresh(d)
     c, x = d["claude"], d["codex"]
     ct = c["ranges"]["today"]
     xt = x["ranges"]["today"]
@@ -16961,25 +17143,35 @@ def _record_pricing_changes(models):
     _with_scan_cache_lock(mark)()
 
 
-def update_prices():
-    """显式联网:拉 OpenRouter /api/v1/models,刷新 pricing.json(不动 overrides)。"""
+def _update_catalog_prices():
+    """更新公开目录；本地覆盖与已核实的官方价独立保存。"""
     import urllib.request
     try:
         with urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=30) as r:
-            data = json.load(r)["data"]
+            raw = r.read(10 * 1024 * 1024 + 1)
+            if len(raw) > 10 * 1024 * 1024:
+                raise ValueError("pricing catalog is too large")
+            data = json.loads(raw)["data"]
+            if not isinstance(data, list) or not data:
+                raise ValueError("empty pricing catalog")
     except Exception as e:
         print(f"更新失败:{e}", file=sys.stderr)
         return 1
 
     def mtok(pr, k):
         try:
-            return round(float(pr.get(k) or 0) * 1e6, 6)
+            value = round(float(pr.get(k) or 0) * 1e6, 6)
+            return value if _valid_price_number(value) else 0.0
         except (TypeError, ValueError):
             return 0.0
 
     models = {}
     for m in data:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
+            continue
         pr = m.get("pricing") or {}
+        if not isinstance(pr, dict):
+            continue
         if not mtok(pr, "prompt") and not mtok(pr, "completion"):
             continue                              # 跳过无价(免费/路由占位)条目
         entry = {"in": mtok(pr, "prompt"), "out": mtok(pr, "completion"),
@@ -16990,6 +17182,9 @@ def update_prices():
             if isinstance(value, str) and value.strip():
                 entry[field] = value.strip()
         models[m["id"]] = entry
+    if not models:
+        print("更新失败:目录中没有有效价格", file=sys.stderr)
+        return 1
     active_count = len(models)
     old_models = _load_json(PRICING_FILE, {}).get("models", {})
     retained_count = 0
@@ -17013,12 +17208,258 @@ def update_prices():
                          "active_count": active_count,
                          "retained_count": retained_count},
                "models": models}
-    with open(PRICING_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=1, sort_keys=True)
+    _atomic_write_json(PRICING_FILE, payload)
     _record_pricing_changes(changed_models)
     suffix = f"，保留 {retained_count} 个历史模型" if retained_count else ""
     print(f"已更新 {active_count} 个在线模型{suffix} → {PRICING_FILE}")
     return 0
+
+
+def _parse_openai_prices(markdown):
+    """只读取官方 Standard 表，避免混入 Batch / Fast 的折扣或倍数。"""
+    start = markdown.find("### Standard pricing data")
+    end = markdown.find("### Batch pricing data", start)
+    if start < 0 or end < 0:
+        raise ValueError("OpenAI Standard pricing section not found")
+    if not re.search(r"Prices per (?:1M|1,000,000) tokens", markdown[:start], re.IGNORECASE):
+        raise ValueError("OpenAI pricing unit is not per million tokens")
+    threshold_match = re.search(r"Short context:\s*≤\s*([\d.]+)\s*([KM]?)\s+input tokens", markdown)
+    threshold = (int(float(threshold_match[1]) * {"": 1, "K": 1000, "M": 1_000_000}[threshold_match[2]])
+                 if threshold_match else None)
+    headers, models = [], {}
+
+    def dollars(value):
+        match = re.fullmatch(r"\$([\d,]+(?:\.\d+)?)", value.strip())
+        if not match:
+            return None
+        price = float(match[1].replace(",", ""))
+        return price if _valid_price_number(price) else None
+
+    for line in markdown[start:end].splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if cells[0].lower() == "model":
+            headers = [re.sub(r"[^a-z0-9]", "", cell.lower()) for cell in cells]
+            continue
+        if not headers or len(headers) != len(cells):
+            continue
+        model = re.fullmatch(r"((?:gpt-\d|o\d)[a-z0-9.-]*)(?:\s+\([^|]+\))?", cells[0])
+        if not model:
+            continue
+        values = dict(zip(headers, cells))
+        long_table = "shortcontextinput" in values
+        prefix = "shortcontext" if long_table else ""
+        pin, pout = dollars(values.get(prefix + "input", "")), dollars(values.get(prefix + "output", ""))
+        if pin is None or pout is None or pin <= 0 or pout <= 0:
+            continue
+        cache_cell = values.get(prefix + "cachedinput", "")
+        cache_read = 0.0 if cache_cell in ("-", "—") else dollars(cache_cell)
+        write_cell = values.get(prefix + "30mwrite", "-")
+        cache_write = 0.0 if write_cell in ("-", "—") else dollars(write_cell)
+        if cache_read is None or cache_write is None:
+            continue
+        price = {"in": pin, "out": pout,
+                 "cache_read": cache_read, "cache_write": cache_write}
+        if long_table and dollars(values.get("longcontextinput", "")) is not None:
+            if threshold is None or not 0 < threshold <= 10_000_000:
+                raise ValueError("OpenAI long-context threshold not found")
+            long_out = dollars(values.get("longcontextoutput", ""))
+            long_cache_cell = values.get("longcontextcachedinput", "")
+            long_cache = 0.0 if long_cache_cell in ("-", "—") else dollars(long_cache_cell)
+            if long_out is None or long_out <= 0 or long_cache is None:
+                continue
+            price["long_context"] = {
+                "threshold": threshold, "in": dollars(values["longcontextinput"]), "out": long_out,
+                "cache_read": long_cache,
+            }
+        models["openai/" + model[1]] = price
+    if len(models) < 3:
+        raise ValueError("OpenAI pricing table is incomplete")
+    return models
+
+
+def _fetch_openai_prices():
+    import urllib.request
+    from urllib.parse import urlsplit
+    request = urllib.request.Request(_OPENAI_PRICING_URL, headers={
+        "User-Agent": "Tokei/1.0 (public pricing check)", "Accept": "text/markdown"})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        if urlsplit(response.geturl()).hostname != "developers.openai.com":
+            raise ValueError("unexpected pricing source redirect")
+        raw = response.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("official pricing page is too large")
+    return _parse_openai_prices(raw.decode("utf-8"))
+
+
+def _update_openai_prices():
+    fetched = _fetch_openai_prices()
+    if not fetched:
+        raise ValueError("empty official pricing table")
+    now = int(_time.time())
+    old = _load_official_pricing()
+    models = dict(old)
+    for model, price in fetched.items():
+        models[model] = dict(price, source=_OPENAI_PRICING_URL, verified_at=now)
+    overrides, _ = _merge_pricing_overrides(_OVERRIDES, official=models)
+    effective = _effective_pricing_map(overrides=overrides, official=models)
+    changed = {model for model in set(_PRICING_EFFECTIVE) | set(effective)
+               if _PRICING_EFFECTIVE.get(model) != effective.get(model)}
+    _atomic_write_json(OFFICIAL_PRICING_FILE, {
+        "_meta": {"source": _OPENAI_PRICING_URL, "verified_at": now, "count": len(fetched)},
+        "models": models})
+    _record_pricing_changes(changed)
+    print(f"已核对 {len(fetched)} 个 OpenAI 官方模型价格")
+
+
+_PRICING_REFRESH_INTERVAL = 24 * 3600
+_PRICING_RETRY_INTERVAL = 3600
+_PRICING_NEW_MODEL_INTERVAL = 300
+
+
+def _pricing_refresh_due(state, unknown=(), now=None):
+    now = _time.time() if now is None else now
+    state = state if isinstance(state, dict) else {}
+
+    def recent(value, ttl):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and -300 <= now - value < ttl)
+
+    if recent(state.get("last_attempt"), _PRICING_NEW_MODEL_INTERVAL):
+        return False
+    if state.get("errors") and recent(state.get("last_attempt"), _PRICING_RETRY_INTERVAL):
+        return False
+    if any(not recent(state.get(key), _PRICING_REFRESH_INTERVAL)
+           for key in ("catalog_checked_at", "openai_checked_at")):
+        return True
+    if not _OFFICIAL_PRICING_DB:
+        return True
+    signature = hashlib.sha256("\n".join(sorted(unknown)).encode()).hexdigest()
+    if state.get("unknown_signature") == signature:
+        return False
+    return bool(set(unknown) - set(state.get("checked_models") or []))
+
+
+def _pricing_update_lock():
+    """价格下载使用独立的非阻塞锁，避免拖慢用量扫描。"""
+    path = PRICING_UPDATE_STATE + ".lock"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if _IS_WINDOWS:
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def update_prices(auto=False):
+    global PRICING_FILE
+    if auto:
+        # 开发目录里的脚本也只更新用户缓存，不改 Git 跟踪的发布基准价目表。
+        PRICING_FILE = os.path.join(_USER_DIR, "pricing.json")
+    fd = _pricing_update_lock()
+    if auto:
+        # 父进程写完排队状态才释放锁；后台进程允许短暂等它，界面不等待。
+        for _ in range(20):
+            if fd is not None:
+                break
+            _time.sleep(0.05)
+            fd = _pricing_update_lock()
+    if fd is None:
+        print("价格核对已在后台进行")
+        return 0
+    try:
+        state = _load_json(PRICING_UPDATE_STATE, {})
+        state = state if isinstance(state, dict) else {}
+        pending = state.pop("pending_models", [])
+        if auto and not _pricing_refresh_due(state, pending):
+            state["scheduled_at"] = 0
+            _atomic_write_json(PRICING_UPDATE_STATE, state)
+            return 0
+        state.update(last_attempt=int(_time.time()), scheduled_at=0, errors=[])
+        _atomic_write_json(PRICING_UPDATE_STATE, state)
+        success = False
+        for source, update in (("catalog", _update_catalog_prices), ("openai", _update_openai_prices)):
+            try:
+                if update() not in (None, 0):
+                    raise ValueError("source update failed")
+                state[source + "_checked_at"] = int(_time.time())
+                success = True
+            except Exception as error:
+                state["errors"].append(source)
+                print(f"{source} 价格核对失败，保留已有价格: {type(error).__name__}", file=sys.stderr)
+        state["checked_models"] = sorted(set(state.get("checked_models") or []) | set(pending))[-256:]
+        state["unknown_signature"] = hashlib.sha256("\n".join(sorted(pending)).encode()).hexdigest()
+        _atomic_write_json(PRICING_UPDATE_STATE, state)
+        return 0 if success else 1
+    finally:
+        _unlock_file(fd)
+        os.close(fd)
+
+
+def _schedule_pricing_refresh(usage):
+    """完整采集结束后后台核价，两端共用；本地预览不联网，不等下载。"""
+    try:
+        return _start_pricing_refresh(usage)
+    except (OSError, TypeError, ValueError):
+        return False   # 核价状态写不了也不影响用量结果和首屏。
+
+
+def _start_pricing_refresh(usage):
+    if os.environ.get("TOKEI_AUTO_PRICING", "").lower() in ("0", "false", "off"):
+        return False
+    config = _load_json(os.path.join(_USER_DIR, "config.json"), {})
+    if isinstance(config, dict) and config.get("auto_pricing_enabled") is False:
+        return False
+    unknown = set()
+    for tool in usage.values():
+        if not isinstance(tool, dict):
+            continue
+        ranges = tool.get("ranges")
+        today = ranges.get("today") if isinstance(ranges, dict) else None
+        for model in (today.get("models") or []) if isinstance(today, dict) else []:
+            if not isinstance(model, dict):
+                continue
+            name = model.get("model_id") or model.get("name")
+            if isinstance(name, str) and not _is_exact_match(name):
+                unknown.add(hashlib.sha256(name.lower().encode()).hexdigest())
+    state = _load_json(PRICING_UPDATE_STATE, {})
+    if not _pricing_refresh_due(state, unknown):
+        return False
+    fd = _pricing_update_lock()
+    if fd is None:
+        return False
+    try:
+        state = _load_json(PRICING_UPDATE_STATE, {})
+        state = state if isinstance(state, dict) else {}
+        now = _time.time()
+        scheduled = state.get("scheduled_at", 0)
+        if (isinstance(scheduled, (int, float)) and -300 <= now - scheduled < 600
+                or not _pricing_refresh_due(state, unknown, now)):
+            return False
+        process = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--auto-update-prices"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True, start_new_session=not _IS_WINDOWS, **_NO_WINDOW)
+        _atomic_write_json(PRICING_UPDATE_STATE, dict(state, scheduled_at=now,
+            pending_models=sorted(unknown), pid=process.pid))
+        return True
+    except OSError:
+        _atomic_write_json(PRICING_UPDATE_STATE, dict(state, last_attempt=int(_time.time()),
+                                                    scheduled_at=0, errors=["launch"]))
+        return False
+    finally:
+        _unlock_file(fd)
+        os.close(fd)
 
 
 def _scan_local_models():
@@ -18416,6 +18857,7 @@ _QUOTA_CYCLE_HISTORY = 52
 _QUOTA_WEEK_HOURS = 7 * 24
 _QUOTA_SELF_DEVICE = "本机"
 _QUOTA_ANCHOR_FILE = os.path.join(HOME, ".tokei", "quota_cycles.json")
+_QUOTA_HISTORY_FILE = os.path.join(HOME, ".tokei", "quota_history.json")
 # resets_in_seconds 是整秒截断的,同一个锚点读出来会有几秒抖动。
 _QUOTA_ANCHOR_JITTER = 120
 _QUOTA_CYCLE_MIN_USED_PCT = 2
@@ -18742,6 +19184,38 @@ def _save_quota_anchors(anchors):
                 pass
 
 
+def _with_quota_anchor_lock(fn):
+    def locked(*args, **kwargs):
+        try:
+            import fcntl
+        except ImportError:
+            return fn(*args, **kwargs)
+        lock_path = _QUOTA_ANCHOR_FILE + ".lock"
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            return fn(*args, **kwargs)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+    return locked
+
+
+@_with_quota_anchor_lock
+def _record_local_quota_readings(payload, now=None):
+    """每次主刷新都保存周期读数，详情页关着时也能记住耗尽和回满。"""
+    now = int(datetime.now().timestamp()) if now is None else now
+    anchors = _load_quota_anchors()
+    dirty = False
+    for tool, _key in _QUOTA_TOOLS:
+        reading = _quota_tool_reading(payload, tool)
+        if reading:
+            dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now, window=reading[3])
+    if dirty:
+        _save_quota_anchors(anchors)
+
+
 def _record_quota_anchor(anchors, tool, reset, used, now, confirmed_reset=False, window="week"):
     """记下一次额度读数。同一个锚点只留一条,used 取见过的最大值。
 
@@ -18865,6 +19339,59 @@ def _quota_anchor_cycles(anchors, tool, limit, now):
     return cycles[-limit:][::-1]
 
 
+def _load_quota_history_points():
+    try:
+        with open(_QUOTA_HISTORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("version") == 1 and isinstance(data.get("points"), list):
+            return data["points"]
+    except (OSError, ValueError):
+        pass
+    return []
+
+
+def _reconcile_quota_anchor_peaks(anchors, boundaries, now):
+    """用已有分钟快照补齐漏采的历史峰值，只抬高已知周期，不推测缺失读数。"""
+    points = _load_quota_history_points()
+    if not points:
+        return False
+    span = _QUOTA_WEEK_HOURS * 3600
+    fields = {"claude": "claudeWeekRemaining", "codex": "codexWeekRemaining"}
+    dirty = False
+    for tool, field in fields.items():
+        samples = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            timestamp, remaining = point.get("timestamp"), point.get(field)
+            if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or type(remaining) not in (int, float) or not math.isfinite(remaining)
+                    or not 0 <= remaining <= 100):
+                continue
+            samples.append((timestamp, 100 - remaining))
+        for start, end, _used, _current, window in _quota_anchor_cycles(
+                boundaries, tool, _QUOTA_CYCLE_HISTORY, now):
+            if window != "week":
+                continue
+            reset = start + span
+            # peer 提供边界可避免跨周期归错；只补本机已有的锚点，不把 peer 的账回写。
+            own = next((row for row in anchors.get(tool, [])
+                        if abs(int(row["reset"]) - reset) <= _QUOTA_ANCHOR_JITTER), None)
+            if own is None:
+                continue
+            observed = [(timestamp, used) for timestamp, used in samples
+                        if start <= timestamp < min(end, now + 1)]
+            if not observed:
+                continue
+            peak = max(used for _timestamp, used in observed)
+            if peak > own.get("max_used", 0):
+                own["max_used"] = peak
+                own["last_seen"] = max(own.get("last_seen", 0), max(t for t, _u in observed))
+                dirty = True
+    return dirty
+
+
+@_with_quota_anchor_lock
 def _quota_cycle_specs(payload, devices, peer_anchors, now):
     """→ (能切出周期的工具, 一条锚点都没有的工具, 锚点表)，顺便把这次读到的锚点落盘。
 
@@ -18882,6 +19409,10 @@ def _quota_cycle_specs(payload, devices, peer_anchors, now):
             if reading:
                 dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now,
                                               window=reading[3])
+    boundaries = {tool: [dict(row) for row in rows] for tool, rows in anchors.items()}
+    for incoming in peer_anchors:
+        _merge_quota_anchors(boundaries, incoming)
+    dirty |= _reconcile_quota_anchor_peaks(anchors, boundaries, now)
     if dirty:
         _save_quota_anchors(anchors)
     for incoming in peer_anchors:
@@ -19277,6 +19808,8 @@ if __name__ == "__main__":
         for _stream in (sys.stdout, sys.stderr):
             if hasattr(_stream, "reconfigure"):
                 _stream.reconfigure(encoding="utf-8", errors="replace")
+    if "--auto-update-prices" in sys.argv:
+        sys.exit(update_prices(auto=True))
     if "--update-prices" in sys.argv:
         sys.exit(update_prices())
     if "--update-unknown" in sys.argv:

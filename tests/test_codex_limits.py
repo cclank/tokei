@@ -18,6 +18,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "usage.30s.py"
 _SANDBOX_HOME = tempfile.mkdtemp(prefix="tokei-test-home-")
 os.environ["HOME"] = _SANDBOX_HOME
 os.environ["USERPROFILE"] = _SANDBOX_HOME
+os.environ.setdefault("TOKEI_AUTO_PRICING", "0")
 atexit.register(shutil.rmtree, _SANDBOX_HOME, True)
 
 SPEC = importlib.util.spec_from_file_location("tokei_usage", SCRIPT)

@@ -31,6 +31,7 @@ export function cardTokens(id: string, usage: Usage, range: RangeKey): number {
     case "zai": return totalTokens(at(stat?.usage, range));
     case "grok": return r.usage_available ? (r.tokens ?? 0) : 0;
     case "grok-bot": return totalTokens(at(stat?.quota?.usage, range));
+    case "copilot": return (r.out ?? 0) + (r.reason ?? 0);
     case "qoder": return codexTokens(r);
     case "qoderwork":
     case "qodercli":

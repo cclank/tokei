@@ -72,6 +72,7 @@
 "Cursor 模型" = "Cursor models";
 "Cursor 账号" = "Cursor account";
 "Gemini 周" = "Gemini weekly";
+"Gemini 4 Argon 周" = "Gemini 4 Argon weekly";
 "GitHub 已同步" = "GitHub synced";
 "Grok Bot 额度查询" = "Grok Bot quota lookup";
 "Grok Build / 本机 CLI 编程消耗，占用本周统一额度池的比例。" = "Grok Build / local CLI coding usage, as a share of this week's unified quota pool.";
@@ -126,6 +127,9 @@
 "今日" = "Today";
 "从上次额度回满算到下次回满" = "From last quota reset to next reset";
 "价格表" = "Price table";
+"价格核对已在后台进行" = "Price verification is already running in the background";
+"已核对 %@ 个 OpenAI 官方模型价格" = "Verified official prices for %@ OpenAI models";
+"%@ 价格核对失败，保留已有价格: %@" = "%@ price verification failed; keeping existing prices: %@";
 "任务" = "Tasks";
 "会话" = "Sessions";
 "会话额度" = "Session quota";
@@ -299,7 +303,7 @@
 "开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。" = "When enabled, uses Grok Bot's own login session to query official quota and tokens, cached for 5 min. Confirm the system prompt once on first use; a dedicated read-only helper keeps the authorization so restarts and upgrades need no re-confirmation. Login tokens stay in helper memory only.";
 "开放 API（api.x.ai）" = "Public API (api.x.ai)";
 "当前展示最近一次成功结果；登录态或网络恢复后会自动刷新。" = "Showing the last successful result; refreshes automatically once login or network recovers.";
-"当前时间范围内还没有检测到额度下降" = "No quota drop detected in this range yet";
+"当前时间范围内还没有检测到明显额度变化" = "No significant quota change detected in this range yet";
 "当前版本 %@" = "Current version %@";
 "当前组织" = "Current organization";
 "当前范围无可分享的用量" = "No shareable usage in this range";
@@ -339,7 +343,7 @@
 "数据面板" = "Dashboard";
 "无匹配项目" = "No matching projects";
 "无限期" = "No expiry";
-"日均" = "Daily avg";
+"日均成本" = "Daily avg cost";
 "日期" = "Date";
 "日限额" = "Daily limit";
 "日额度" = "Daily quota";
@@ -367,6 +371,11 @@
 "最大区间下降" = "Largest range drop";
 "最近一次 · %@" = "Latest · %@";
 "最近额度变化" = "Recent quota changes";
+"最近回满" = "Latest refill to 100%";
+"最近回升" = "Latest quota recovery";
+"回满" = "Refilled to 100%";
+"回升" = "Recovered";
+"查看曲线" = "View chart";
 "月" = "Month";
 "月剩余" = "Month remaining";
 "月额度" = "Monthly quota";
@@ -583,63 +592,27 @@
 "（当前范围无可复制的用量）" = "(No copyable usage in this range)";
 "仅输出" = "Output only";
 
-"本机总输出" = "Local total output";
-"近 %@ 秒" = "Last %@ s";
-"等待采样…" = "Waiting for samples…";
-"本机所有已采集任务的新增输出（含推理）÷ 实际经过时间，最多统计最近 60 秒。并发任务相加，不受日期、卡片显隐或多设备切换影响。基于日志落盘，可能延迟；不含输入、缓存和云端账号用量。" = "New output (including reasoning) across collected local tasks divided by wall time, over up to 60 seconds. Concurrent tasks add together, independent of date, card visibility or device scope. Based on persisted logs, so updates may lag. Excludes input, cache and cloud account usage.";
-
-"额外重置动态" = "Extra reset updates";
-"上次检查：无待生效公告" = "Last check: no pending announcement";
-"暂无待生效公告" = "No pending announcement";
-"最近：%@" = "Latest: %@";
-"按预计时间应已生效，尚未确认" = "Expected to be effective; not confirmed";
-"下一次尚未公布，不预测固定周期" = "Next reset unannounced; no fixed schedule";
-"刷新失败，显示上次记录" = "Refresh failed; showing the last record";
-"来源检查有延迟，等待更新" = "Source checks delayed; awaiting an update";
-"检查 %@" = "Checked %@";
-"原帖 ↗" = "Post ↗";
-"重置动态暂不可用" = "Reset updates unavailable";
-"正在读取重置公告…" = "Loading reset announcements…";
-"AIHOT 整理 · 非官方 · %@" = "AIHOT · Unofficial · %@";
-"重置卡发放" = "Reset credits issued";
-"额度重置" = "Quota reset";
-"重置公告" = "Reset announcement";
-"上次公告状态，待重新核实" = "Previous announcement; awaiting verification";
-"已确认生效，以账户显示为准" = "Confirmed; check your account for availability";
-"正在进行，等待完成确认" = "In progress; awaiting completion";
-"距预计开始还有 %@" = "Estimated start in %@";
-"处于预计时段，等待确认" = "Within the estimated window; awaiting confirmation";
-"已过预计时间，等待确认" = "Past the estimate; awaiting confirmation";
-"已宣布，具体时间待定" = "Announced; timing not specified";
-"公告状态待核实，请查看原文" = "Unverified status; see the original post";
-"预计 %@" = "Estimated %@";
-"预计不晚于 %@" = "Estimated by %@";
-"适用：%@" = "Eligibility: %@";
-"原帖未说明" = "Not specified in the post";
-"发卡后需自行使用，余额以 Codex 为准" = "Redeem credits yourself; see Codex for your balance";
-"确认帖 %@ · 非精确到账时间" = "Confirmed %@ · not the exact credit time";
-"核实到账日期：%@（来源时区 UTC+8）" = "Receipt verified: %@ (source time zone UTC+8)";
-"来源已核实到账，具体日期未定" = "Receipt verified by the source; exact date unknown";
-
-"Codex 额外重置动态" = "Codex extra reset updates";
-"默认开启，可随时关闭。每 10 分钟从 AIHOT 获取公开重置公告，不发送登录凭据或用量。预计时间仅供参考，不预测未公布的下一次重置；个人额度以 Codex 为准。" = "On by default; can be disabled at any time. Fetch public reset announcements from AIHOT every 10 minutes, without sending credentials or usage. Times are estimates; unannounced resets are not predicted. Check Codex for your personal quota.";
-
-"网络请求失败（%@），将自动重试" = "Network request failed (%@); retrying automatically";
-"来源返回 HTTP %@，将自动重试" = "Source returned HTTP %@; retrying automatically";
-"来源响应无效，将自动重试" = "Invalid source response; retrying automatically";
-"公告数据格式异常，将自动重试" = "Invalid announcement data; retrying automatically";
-
-/* Windows 与性能指标 */
+/* Windows 主窗口与托盘快捷面板 */
 "打开主窗口" = "Open main window";
 "快捷面板" = "Quick panel";
 "主窗口" = "Main window";
 "点击托盘图标" = "Tray icon click";
 "关闭快捷面板" = "Close quick panel";
+
+// Windows 平台额度说明
+
+// Windows 旧界面词条兼容
+"日均" = "Daily avg";
+"当前时间范围内还没有检测到额度下降" = "No quota drop detected in this range yet";
+
+// Windows 原生隐私与额度
 "开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用请点击“授权 Grok Bot”；授权在重启和升级后保留。登录 Token 仅在辅助进程内存中使用。" = "When enabled, queries official quota and tokens using Grok Bot’s own login session, cached for 5 minutes. Click “Authorize Grok Bot” on first use; authorization survives restarts and upgrades. Login tokens stay in helper-process memory only.";
 "此授权功能仅在 Windows 应用中可用。" = "This authorization feature is only available in the Windows app.";
 "Grok Bot 的登录凭据格式暂不支持，请更新 Tokei。" = "This Grok Bot credential format is not supported yet. Please update Tokei.";
+
 "上次数据 %@" = "Previous data %@";
 "额度更新中…" = "Updating quotas…";
+
 "平均输出速度（含等待）" = "Avg output speed (incl. wait)";
 "平均速度（含等待）" = "Avg speed (incl. wait)";
 "输出 token 总数 ÷ 记录耗时；%@ 个请求中，%@ 个包含首字等待，无法还原纯生成速度" = "Total output tokens ÷ recorded duration; of %@ requests, %@ include first-token wait, so pure generation speed is unavailable";

@@ -6,6 +6,7 @@ from datetime import datetime
 import unittest
 from pathlib import Path
 from unittest import mock
+from concurrent.futures import ThreadPoolExecutor
 
 from test_codex_limits import USAGE
 
@@ -334,6 +335,116 @@ class CycleSpecsTests(unittest.TestCase):
         charted, missing, _anchors, _saved = self._run({}, [], 6 * WEEK)
         self.assertEqual(charted, [])
         self.assertEqual(missing, ["claude", "codex", "grok"])
+
+
+class RefreshQuotaAnchorsTests(unittest.TestCase):
+    def test_main_refresh_preserves_monthly_window_without_opening_detail(self):
+        reset = int(datetime(2026, 11, 20, 10).timestamp())
+        now = int(datetime(2026, 10, 25, 10).timestamp())
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+                USAGE, "_QUOTA_ANCHOR_FILE", os.path.join(tmp, "cycles.json")):
+            USAGE._record_local_quota_readings(
+                {"grok": {"pct": 25, "reset": reset, "window": "month"}}, now)
+            anchors = USAGE._load_quota_anchors()
+        self.assertEqual(anchors["grok"][0]["window"], "month")
+        cycles = USAGE._quota_anchor_cycles(anchors, "grok", 8, now)
+        self.assertEqual(cycles[0][0], int(datetime(2026, 10, 20, 10).timestamp()))
+        self.assertEqual(cycles[0][4], "month")
+
+    def test_exhaustion_is_preserved_when_no_detail_page_was_opened(self):
+        old_reset = 6 * WEEK
+        new_reset = old_reset + 2 * 86400
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+                USAGE, "_QUOTA_ANCHOR_FILE", os.path.join(tmp, "cycles.json")):
+            for used, reset, now in ((75, old_reset, 5 * WEEK),
+                                     (100, old_reset, new_reset - WEEK - 60),
+                                     (0, new_reset, new_reset - WEEK)):
+                USAGE._record_local_quota_readings(
+                    {"codex": {"pw": used, "rw": reset}}, now)
+            anchors = USAGE._load_quota_anchors()
+            cycles = USAGE._quota_anchor_cycles(anchors, "codex", 8, new_reset - WEEK)
+        self.assertEqual(len(cycles), 2)
+        self.assertEqual(cycles[1][2], 100)
+        self.assertEqual(cycles[0][2], 0)
+        self.assertTrue(cycles[0][3])
+        self.assertEqual(cycles[1][1], new_reset - WEEK)
+
+    def test_stale_main_readings_do_not_change_the_peak(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+                USAGE, "_QUOTA_ANCHOR_FILE", os.path.join(tmp, "cycles.json")):
+            USAGE._record_local_quota_readings({"codex": {"pw": 75, "rw": 6 * WEEK}}, 5 * WEEK)
+            USAGE._record_local_quota_readings(
+                {"codex": {"pw": 100, "rw": 6 * WEEK, "pw_stale": True}}, 5 * WEEK + 60)
+            self.assertEqual(USAGE._load_quota_anchors()["codex"][0]["max_used"], 75)
+
+    def test_concurrent_refreshes_cannot_replace_a_higher_peak(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+                USAGE, "_QUOTA_ANCHOR_FILE", os.path.join(tmp, "cycles.json")):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(USAGE._record_local_quota_readings,
+                                      {"codex": {"pw": used, "rw": 6 * WEEK}}, 5 * WEEK)
+                           for used in (100, 75)]
+                for future in futures:
+                    future.result()
+            self.assertEqual(USAGE._load_quota_anchors()["codex"][0]["max_used"], 100)
+
+
+class HistoryQuotaPeakTests(unittest.TestCase):
+    def test_existing_minute_history_repairs_the_completed_cycle_and_survives_pruning(self):
+        old_reset, new_reset = 6 * WEEK, 6 * WEEK + 2 * 86400
+        boundary = new_reset - WEEK
+        anchors = {"codex": [_anchor(old_reset, 75), _anchor(new_reset, 23)]}
+        points = [
+            {"timestamp": boundary - 3600, "codexWeekRemaining": 0},
+            {"timestamp": boundary + 60, "codexWeekRemaining": 100},
+            {"timestamp": boundary + 3600, "codexWeekRemaining": 77},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            anchor_path, history_path = Path(tmp, "cycles.json"), Path(tmp, "history.json")
+            anchor_path.write_text(json.dumps({"anchors": anchors}))
+            history_path.write_text(json.dumps({"version": 1, "points": points}))
+            with mock.patch.object(USAGE, "_QUOTA_ANCHOR_FILE", str(anchor_path)), \
+                 mock.patch.object(USAGE, "_QUOTA_HISTORY_FILE", str(history_path)):
+                _charted, _missing, repaired = USAGE._quota_cycle_specs(
+                    {}, [(USAGE._QUOTA_SELF_DEVICE, {}, None, {})], [], boundary + 7200)
+                cycles = USAGE._quota_anchor_cycles(repaired, "codex", 8, boundary + 7200)
+                self.assertEqual(cycles[1][2], 100)
+                self.assertEqual(cycles[0][2], 23)
+                self.assertEqual(cycles[1][1], boundary)
+                history_path.write_text(json.dumps({"version": 1, "points": []}))
+                saved = USAGE._load_quota_anchors()
+                self.assertEqual(saved["codex"][0]["max_used"], 100)
+                self.assertEqual(USAGE._quota_anchor_cycles(saved, "codex", 8, boundary + 7200)[1][2], 100)
+
+    def test_partial_observations_never_invent_exhaustion(self):
+        anchors = {"codex": [_anchor(6 * WEEK, 70)]}
+        with mock.patch.object(USAGE, "_load_quota_history_points", return_value=[
+            {"timestamp": 5 * WEEK + 60, "codexWeekRemaining": 25},
+        ]):
+            self.assertTrue(USAGE._reconcile_quota_anchor_peaks(anchors, anchors, 5 * WEEK + 120))
+        self.assertEqual(anchors["codex"][0]["max_used"], 75)
+
+    def test_peer_boundary_prevents_attributing_the_next_cycles_exhaustion_to_local_history(self):
+        old, peer_reset, current = 6 * WEEK, 6 * WEEK + 86400, 7 * WEEK
+        local = {"codex": [_anchor(old, 75), _anchor(current, 23)]}
+        boundaries = {"codex": local["codex"] + [_anchor(peer_reset, 80)]}
+        with mock.patch.object(USAGE, "_load_quota_history_points", return_value=[
+            {"timestamp": peer_reset - WEEK + 3600, "codexWeekRemaining": 0},
+        ]):
+            self.assertFalse(USAGE._reconcile_quota_anchor_peaks(local, boundaries, current - WEEK + 7200))
+        self.assertEqual([r["max_used"] for r in local["codex"]], [75, 23])
+
+    def test_invalid_missing_and_future_readings_do_not_fabricate_a_peak(self):
+        anchors = {"codex": [_anchor(6 * WEEK, 75)]}
+        with mock.patch.object(USAGE, "_load_quota_history_points", return_value=[
+            None, {}, {"timestamp": 5 * WEEK + 60},
+            {"timestamp": 5 * WEEK + 60, "codexWeekRemaining": False},
+            {"timestamp": 5 * WEEK + 60, "codexWeekRemaining": -1},
+            {"timestamp": 5 * WEEK + 60, "codexWeekRemaining": float("nan")},
+            {"timestamp": 6 * WEEK + 60, "codexWeekRemaining": 0},
+        ]):
+            self.assertFalse(USAGE._reconcile_quota_anchor_peaks(anchors, anchors, 5 * WEEK + 120))
+        self.assertEqual(anchors["codex"][0]["max_used"], 75)
 
 
 class DeviceLedgerAnchorTests(unittest.TestCase):

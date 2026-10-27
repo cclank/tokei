@@ -298,7 +298,8 @@ class BridgeTests(unittest.TestCase):
         thread.start()
         try:
             url = f"http://127.0.0.1:{server.server_address[1]}/quota"
-            with mock.patch.object(B, "CLAUDE_URL", url):
+            with mock.patch.object(B, "CLAUDE_URL", url), \
+                 mock.patch("urllib.request.getproxies", return_value={}):
                 with self.assertRaises(urllib.error.HTTPError):
                     B.request_json(url, {"Authorization": "Bearer fixture-only"})
             self.assertEqual(visits, ["/quota"])

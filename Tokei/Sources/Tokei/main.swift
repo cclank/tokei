@@ -6,7 +6,6 @@ import ServiceManagement
 
 final class Store: ObservableObject {
     @Published var usage: Usage?
-    @Published var localOutputThroughput = LocalOutputThroughput()
     @Published var localUsage: Usage?
     @Published var allDevicesUsage: Usage?
     @Published var lastUpdated: String = L("加载中…")
@@ -83,9 +82,6 @@ final class Store: ObservableObject {
 
     func refresh(prewarmQuotaDetail: Bool = false) {
         guard !offline else { return }
-        CodexResetMonitor.shared.refresh(enabled:
-            CodexResetMonitor.isEnabled() &&
-            UserDefaults.standard.object(forKey: "showCodex") as? Bool != false)
         quotaDetailPrewarmPending = quotaDetailPrewarmPending || prewarmQuotaDetail
         if refreshInFlight {
             refreshPending = true
@@ -138,7 +134,6 @@ final class Store: ObservableObject {
             self.lastRefreshDuration = Date().timeIntervalSince(startedAt)
             self.retryCount = 0
             self.loadError = nil
-            self.localOutputThroughput.observe(local.localOutputCounters)
             self.localUsage = local
             var allDevices = local
             if self.syncEnabled {
@@ -300,7 +295,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     static let visibleRefreshInterval: TimeInterval = 10
     var globalMouseMonitor: Any?
     weak var popoverAnchorButton: NSStatusBarButton?
+    private let popoverAnchor = PopoverAnchor()
     private var anchorWindowObservers: [NSObjectProtocol] = []
+    private var anchorSpaceObserver: NSObjectProtocol?
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -527,22 +524,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.isVisible = true
     }
 
-    /// 面板开着时菜单栏按钮变宽变窄（在设置里切到「仅图标」、额度数字位数变了），状态栏
-    /// 窗口会挪到新位置，弹窗却还挂在打开时的位置，箭头就指到了旁边的图标上。
-    ///
-    /// 等窗口挪完再把定位矩形换成按钮的新范围：不重新 show、不改尺寸——那两样会让
-    /// NSPopover 重挑屏幕和锚点，外接显示器的全屏 Space 下会把面板甩到别处（issue #97）。
-    /// 实测在改宽度的同一轮里设置没用，状态栏窗口要晚一拍才挪，所以跟着它的 didMove 走。
+    /// 独立透明窗口提供稳定锚点，菜单栏自动收起时面板继续留在原位。
+    /// 按钮宽度变化仍跟随横向位置；切换 Space 或原屏幕被移除时关闭面板。
     private func followAnchorWindow(of button: NSStatusBarButton) {
-        anchorWindowObservers.forEach(NotificationCenter.default.removeObserver)
-        anchorWindowObservers = []
+        stopFollowingAnchorWindow()
         guard let window = button.window else { return }
         anchorWindowObservers = [NSWindow.didMoveNotification, NSWindow.didResizeNotification].map { name in
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
                 [weak self, weak button] _ in
                 guard let self, let button, self.popover.isShown else { return }
-                self.popover.positioningRect = button.bounds
+                self.popoverAnchor.update(from: button)
             }
+        }
+        anchorWindowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.popover.isShown, let frame = self.popoverAnchor.screenFrame,
+                  !NSScreen.screens.contains(where: { $0.frame == frame }) else { return }
+            self.popover.performClose(nil)
+        })
+        anchorSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.popover.performClose(nil)
+        }
+    }
+
+    private func stopFollowingAnchorWindow() {
+        anchorWindowObservers.forEach(NotificationCenter.default.removeObserver)
+        anchorWindowObservers = []
+        if let anchorSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(anchorSpaceObserver)
+            self.anchorSpaceObserver = nil
         }
     }
 
@@ -604,10 +617,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            guard popoverAnchor.update(from: b), let anchorView = popoverAnchor.view else { return }
             store.refresh(prewarmQuotaDetail: true)
             updatePanelLayout(for: b)
             popover.contentSize = panelLayout.contentSize
-            popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+            popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             followAnchorWindow(of: b)
         }
@@ -619,10 +633,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// 只有 PanelLayoutContext 判断宽度真的变了才会走到这里；切页签、刷新数据、宽版用户
     /// 换页都不经过这里，画布照旧固定，不会重新挑选屏幕和锚点（issue #97）。
     private func refitPanelForPage() {
-        guard popover.isShown, let button = popoverAnchorButton ?? statusItem.button else { return }
+        guard popover.isShown, let button = popoverAnchorButton ?? statusItem.button,
+              let anchorView = popoverAnchor.view else { return }
         updatePanelLayout(for: button)
         popover.contentSize = panelLayout.contentSize
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
         followAnchorWindow(of: button)
     }
 
@@ -679,6 +694,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         store.popoverVisible = false
+        stopFollowingAnchorWindow()
+        popoverAnchor.close()
     }
 }
 
@@ -731,16 +748,6 @@ enum Shot {
         OffscreenRender.suppressTips = true
         defer { OffscreenRender.suppressTips = false }
         MainActor.assumeIsolated {
-            if let idx = CommandLine.arguments.firstIndex(of: "--reset-feed"),
-               CommandLine.arguments.count > idx + 1 {
-                do {
-                    let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[idx + 1]))
-                    CodexResetMonitor.shared.usePreview(try CodexResetFeed.decode(data))
-                    PanelView.showCodexResetForShot = true
-                } catch {
-                    fputs("Tokei --reset-feed: \(error)\n", stderr)
-                }
-            }
             let store = Store(offline: isOffline)
             store.usage = usage
             store.lastUpdated = L("预览")

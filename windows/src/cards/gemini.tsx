@@ -3,7 +3,7 @@
 // ProviderQuotaStat）画在同一张卡的下半部分，只在有本地用量时出现（与 Mac 版一致）。
 import * as Fmt from "../lib/fmt";
 import { L } from "../lib/i18n";
-import { getRange, type PerfStat, type Ranges } from "../lib/types";
+import { getRange, modelPerf, type PerfStat, type Ranges } from "../lib/types";
 import { CardHead, CostHeadline, metric, MetricGrid, perfMetrics, ThinDivider, VStack, type Metric } from "../ui/kit";
 import { ModelDisclosure, type ModelRow } from "../ui/models";
 import { Theme } from "../ui/theme";
@@ -67,7 +67,7 @@ function GeminiCard({ ctx }: { ctx: CardContext }) {
   ];
   if (r.thoughts > 0) extra.push(metric("brain", L("推理"), Fmt.human(r.thoughts)));
   extra.push(...perfMetrics(r.perf));
-  // Mac 版 geminiRows：缓存读放 tokCR，thoughts 放 tokCW（明细标签沿用 Mac 版的写法），不带速度。
+  // 与 Mac 相同，匹配当前时间范围里每个模型自己的计时数据。
   const rows: ModelRow[] = (r.models ?? []).map((m) => {
     const denom = m.cached + m.in;
     return {
@@ -83,6 +83,7 @@ function GeminiCard({ ctx }: { ctx: CardContext }) {
       tokOut: m.out,
       tokCR: m.cached,
       tokCW: m.thoughts,
+      perf: modelPerf(r.perf, m.name),
       hasBreakdown: true,
     };
   });

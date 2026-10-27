@@ -3936,7 +3936,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokei"
-version = "1.0.47"
+version = "1.0.48"
 dependencies = [
  "dirs 6.0.0",
  "keyring",

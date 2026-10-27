@@ -26,14 +26,19 @@ struct QuotaChartDatum: Identifiable {
     var id: String { "\(Int(timestamp.timeIntervalSince1970)):\(window)" }
 }
 
-struct QuotaDropEvent: Identifiable {
+struct QuotaChangeEvent: Identifiable {
     var timestamp: Date
     var durationMinutes: Int
     var window: String
-    var drop: Double
+    var previousRemaining: Double
+    var remaining: Double
     var activity: [QuotaModelActivity]
 
     var id: String { "\(Int(timestamp.timeIntervalSince1970)):\(window)" }
+    var change: Double { remaining - previousRemaining }
+    var drop: Double { -change }
+    var isRecovery: Bool { change > 0 }
+    var isFullRecovery: Bool { isRecovery && remaining == 100 }
 }
 
 struct QuotaActivityEvent: Identifiable {
@@ -85,7 +90,9 @@ struct QuotaHistoryProjection {
     var markerData: [QuotaChartDatum]
     var latestValues: [String: Double]
     var latestDatumIDs: Set<String>
-    var dropEvents: [QuotaDropEvent]
+    var changeEvents: [QuotaChangeEvent]
+    var dropEvents: [QuotaChangeEvent]
+    var recoveryEvents: [QuotaChangeEvent]
     var activityEvents: [QuotaActivityEvent]
     var hoverSamples: [QuotaHoverSample]
 
@@ -99,7 +106,8 @@ struct QuotaHistoryProjection {
         )
         var latestValues: [String: Double] = [:]
         var latestByWindow: [String: QuotaChartDatum] = [:]
-        var drops: [QuotaDropEvent] = []
+        var changes: [QuotaChangeEvent] = []
+        var recoveryMarkers: [String: QuotaChartDatum] = [:]
         var previousByWindow: [String: (point: QuotaHistoryPoint, remaining: Double)] = [:]
         var activityEvents: [QuotaActivityEvent] = []
         var hoverSamples: [QuotaHoverSample] = []
@@ -131,15 +139,18 @@ struct QuotaHistoryProjection {
                 hoverRows.append(.init(window: window, remaining: remaining))
 
                 if let previous = previousByWindow[window] {
-                    let drop = previous.remaining - remaining
-                    if drop >= 0.05 {
-                        drops.append(.init(
+                    let change = remaining - previous.remaining
+                    let isRecovery = Self.isRecovery(from: previous.remaining, to: remaining)
+                    if change <= -0.05 || isRecovery {
+                        changes.append(.init(
                             timestamp: date,
                             durationMinutes: max(1, (point.timestamp - previous.point.timestamp) / 60),
                             window: window,
-                            drop: drop,
+                            previousRemaining: previous.remaining,
+                            remaining: remaining,
                             activity: windowActivity
                         ))
+                        if isRecovery { recoveryMarkers[datum.id] = datum }
                     }
                 }
                 previousByWindow[window] = (point, remaining)
@@ -157,6 +168,7 @@ struct QuotaHistoryProjection {
         var markerByID = Dictionary(
             uniqueKeysWithValues: latestByWindow.values.map { ($0.id, $0) }
         )
+        markerByID.merge(recoveryMarkers) { _, recovery in recovery }
         var lineData: [QuotaChartDatum] = []
         for window in windows {
             let series = seriesByWindow[window] ?? []
@@ -182,9 +194,43 @@ struct QuotaHistoryProjection {
             }
             return $0.timestamp < $1.timestamp
         }
-        dropEvents = drops.sorted { $0.timestamp > $1.timestamp }
+        changeEvents = changes.sorted { $0.timestamp > $1.timestamp }
+        dropEvents = changeEvents.filter { !$0.isRecovery }
+        recoveryEvents = changeEvents.filter(\.isRecovery)
         self.activityEvents = activityEvents.reversed()
         self.hoverSamples = hoverSamples
+    }
+
+    /// 最近一次明显回升取全部留存快照，避免被当前图表的 24h 范围隐藏。
+    /// 这里只描述实际读数的变化，不推断是否使用了重置卡。
+    static func latestRecovery(
+        from points: [QuotaHistoryPoint],
+        tool: QuotaHistoryTool
+    ) -> QuotaChangeEvent? {
+        var previous: [String: (point: QuotaHistoryPoint, remaining: Double)] = [:]
+        var latest: QuotaChangeEvent?
+        for point in points {
+            for window in tool.windowNames {
+                guard let remaining = value(for: window, point: point, tool: tool) else { continue }
+                if let prior = previous[window], isRecovery(from: prior.remaining, to: remaining) {
+                    latest = QuotaChangeEvent(
+                        timestamp: Date(timeIntervalSince1970: TimeInterval(point.timestamp)),
+                        durationMinutes: max(1, (point.timestamp - prior.point.timestamp) / 60),
+                        window: window,
+                        previousRemaining: prior.remaining,
+                        remaining: remaining,
+                        activity: activity(for: point, window: window, tool: tool)
+                    )
+                }
+                previous[window] = (point, remaining)
+            }
+        }
+        return latest
+    }
+
+    private static func isRecovery(from previous: Double, to remaining: Double) -> Bool {
+        let increase = remaining - previous
+        return increase >= 10 || (remaining == 100 && increase >= 0.05)
     }
 
     /// 按本地自然日汇总每个窗口剩余额度的下降量，新 → 旧（issue #85）。

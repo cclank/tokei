@@ -101,8 +101,65 @@ struct QuotaHistoryStoreCheck {
         try expect(reloaded.points.count == 1, "points outside retention should be pruned")
 
         try checkProjection()
+        try checkRecovery()
         try checkDailyConsumption()
         print("quota history store checks passed")
+    }
+
+    private static func checkRecovery() throws {
+        let base = 1_800_000_000
+        func codex(_ offset: Int, _ remaining: Double?) -> QuotaHistoryPoint {
+            QuotaHistoryPoint(timestamp: base + offset, codexWeekRemaining: remaining)
+        }
+        let reset = codex(120, 100)
+        let points = [
+            codex(0, 0), codex(60, nil), reset, codex(180, 99),
+            codex(3600, 98), codex(26 * 3600, 77),
+        ]
+        let projection = QuotaHistoryProjection(points: points, tool: .codex)
+        try expect(projection.recoveryEvents.count == 1, "0 -> 100 must be a recovery across a missing reading")
+        let recovery = projection.recoveryEvents[0]
+        try expect(recovery.previousRemaining == 0 && recovery.remaining == 100 && recovery.isFullRecovery,
+                   "recovery must preserve zero and the full-quota reading")
+        try expect(projection.changeEvents.count == 4 && projection.dropEvents.count == 3,
+                   "recent changes must include the recovery and subsequent usage")
+        try expect(projection.markerData.contains { $0.id == recovery.id && $0.activity.isEmpty },
+                   "a recovery needs a chart marker even without token activity")
+        try expect(projection.lineData.contains { $0.remaining == 100 },
+                   "line compaction must retain the recovery to 100")
+
+        let now = Date(timeIntervalSince1970: TimeInterval(base + 26 * 3600))
+        let start = now.addingTimeInterval(-24 * 3600)
+        let visible = QuotaHistoryProjection(
+            points: points.filter { TimeInterval($0.timestamp) >= start.timeIntervalSince1970 }, tool: .codex)
+        try expect(visible.recoveryEvents.isEmpty, "yesterday's reset can fall outside the 24h chart")
+        try expect(QuotaHistoryProjection.latestRecovery(from: points, tool: .codex)?.id == recovery.id,
+                   "the latest-recovery notice must use the full retained history")
+        let weekStart = now.addingTimeInterval(-7 * 24 * 3600)
+        let week = QuotaHistoryProjection(
+            points: points.filter { TimeInterval($0.timestamp) >= weekStart.timeIntervalSince1970 }, tool: .codex)
+        try expect(week.recoveryEvents.first?.id == recovery.id, "the one-week chart must reveal that recovery")
+
+        let partial = QuotaHistoryProjection(
+            points: [codex(0, 40), codex(60, 41), codex(120, 65)], tool: .codex)
+        try expect(partial.recoveryEvents.count == 1 && !partial.recoveryEvents[0].isFullRecovery,
+                   "small rises stay quiet; a large partial rise must not be labelled full")
+        try expect(QuotaHistoryProjection.latestRecovery(from: partial.points, tool: .codex)?.remaining == 65,
+                   "the notice and visible events must use the same recovery rules")
+        let topUp = QuotaHistoryProjection(points: [codex(0, 99), codex(60, 100)], tool: .codex)
+        try expect(topUp.recoveryEvents.first?.isFullRecovery == true,
+                   "a rise to exactly 100 must remain visible even below the large-rise threshold")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tokei-quota-reset-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("quota_history.json")
+        let store = QuotaHistoryStore(fileURL: url)
+        store.record(QuotaCapture(codexWeekRemaining: 0), at: Date(timeIntervalSince1970: TimeInterval(base)))
+        store.record(QuotaCapture(codexWeekRemaining: 100), at: Date(timeIntervalSince1970: TimeInterval(base + 60)))
+        let reloaded = QuotaHistoryStore(fileURL: url)
+        try expect(reloaded.points.map(\.codexWeekRemaining) == [0, 100],
+                   "a recorded reset must survive a store reload without treating zero as missing")
     }
 
     private static func checkProjection() throws {

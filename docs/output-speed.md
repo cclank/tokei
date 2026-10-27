@@ -15,8 +15,12 @@
 
 Pi 解析规则更新后会重读现存日志，并替换账本中对应来源的旧速率样本，Token 和费用统计保持原口径。已清理日志中未归档的首字计时无法补回。
 
+MiniMax Code 按会话、轮次和输入／输出／缓存四个 Token 桶，将每次模型调用的用量与助手回复配对。同一轮内的多次调用分别计时，工具执行间隔不参与生成耗时。Token 桶重复时，只接受落在不重叠请求时间窗口内的唯一回复；无法可靠配对的记录不计速率。旧消息缺少 Token 桶时，仅单次调用且只有一条助手回复的轮次可以回退。
+
+MiniMax 优先使用客户端记录的 `decode_duration_ms`；同时存在有效的 `request_duration_ms` 时，两者之差用于首字延迟。只有请求总耗时时，速率标注“含等待”，不推算首字延迟。早期客户端可能等工具执行完才写入助手回复，只有时间戳的多次调用记录或带工具调用的回复不计算速率；单次调用、单条无工具回复的旧记录可回退为含等待的端到端耗时。解析升级会重读现存数据库并刷新可重算的速率；Token／费用账本的高水位保持原口径，已清理的原始计时无法补回。
+
 有效样本需要至少 20 个输出 Token，计时超过 0.2 秒且不超过 30 分钟；超过 3000 tok/s 的样本会被排除。TTFT 超过 120 秒时不进入首字延迟的直方图，生成速率仍可使用有效的生成耗时。TTFT 展示直方图近似中位数；偶数样本取两项中间观测值的平均，分处不同桶时也分别估计后取平均。分桶保留约 5% 的范围，数值精度受分桶影响。
 
 参考：[Pi 消息字段](https://github.com/earendil-works/pi/blob/main/packages/ai/src/types.ts)、[Pi 会话格式](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md)、[oh-my-pi 毫秒计时字段](https://github.com/can1357/oh-my-pi/blob/main/packages/ai/src/types.ts)。
 
-回归检查：`tests/test_pi_rate_accuracy.py` 验证计时优先级、单位、等待时间、平均值、异常字段与缓存／账本升级；`tests/test_perf.py` 覆盖其他采集器与跨设备合并；`tests/test_metric_grid_refresh.py` 验证 Mac 原生网格动态更新；Windows 在 Vite 中打开 `/tests/metric-grid.html`，检查全部生产卡片的动态更新结果与新建视图是否一致。
+回归检查：`tests/test_pi_rate_accuracy.py` 验证 Pi 计时优先级、单位、等待时间、平均值、异常字段与缓存／账本升级；`tests/test_minimax_rate_accuracy.py` 验证 MiniMax 逐次匹配、工具间隔、等待标记、重复／异常记录与缓存／账本升级；`tests/test_perf.py` 覆盖其他采集器与跨设备合并；`tests/test_metric_grid_refresh.py` 验证 Mac 原生网格动态更新；Windows 在 Vite 中打开 `/tests/metric-grid.html`，检查全部生产卡片的动态更新结果与新建视图是否一致。

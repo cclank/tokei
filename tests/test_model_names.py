@@ -142,6 +142,9 @@ class ClaudeModelNameTests(unittest.TestCase):
 
     def test_sonnet_5_5_is_its_own_model_at_the_official_price(self):
         """OpenRouter 还没收录 Sonnet 5.5 时，靠内置价认出它，而不是按 sonnet 家族兜底成 Sonnet 5。"""
+        patch = mock.patch.object(USAGE, "_PRICING_DB", {})
+        patch.start()
+        self.addCleanup(patch.stop)
         for model in ("claude-sonnet-5-5", "claude-sonnet-5.5", "claude-sonnet-5-5-20260915"):
             with self.subTest(model=model):
                 self.assertEqual(USAGE._pricing_id(model), "anthropic/claude-sonnet-5.5")

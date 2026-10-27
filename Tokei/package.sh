@@ -50,12 +50,14 @@ fi
 # 不走 `--arch arm64 --arch x86_64`：那条路要完整 Xcode 的 xcbuild，
 # 只装 Command Line Tools 的机器编不了。本地只想快点验证时可设 TOKEI_ARCHS=arm64。
 ARCHS="${TOKEI_ARCHS:-arm64 x86_64}"
+BUILD_JOBS="${TOKEI_BUILD_JOBS:-2}"
+[[ "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "TOKEI_BUILD_JOBS 必须是正整数" >&2; exit 1; }
 for arch in $ARCHS; do
     case "$arch" in
         arm64|x86_64) ;;
         *) echo "TOKEI_ARCHS 只支持 arm64 / x86_64: $arch" >&2; exit 1 ;;
     esac
-    swift build -c release --arch "$arch"
+    swift build -c release --arch "$arch" --jobs "$BUILD_JOBS"
 done
 
 APP="Tokei.app"
@@ -211,7 +213,7 @@ INSTALL
             && SetFile -a V "$VOLUME_PATH/.fseventsd" 2>/dev/null || true
     fi
 
-    if [ -n "$VOLUME_PATH" ] && [ -f "$VOLUME_PATH/.background/bg.png" ]; then
+    if [ "${TOKEI_SKIP_DMG_STYLE:-0}" != 1 ] && [ -n "$VOLUME_PATH" ] && [ -f "$VOLUME_PATH/.background/bg.png" ]; then
         osascript <<'APPLE' || true
 tell application "Finder"
     tell disk "Tokei"

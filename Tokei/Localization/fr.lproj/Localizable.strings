@@ -244,7 +244,7 @@
 "开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。" = "Une fois activé, utilise la session de Grok Bot pour consulter les quotas et tokens officiels (mis en cache 5 min). Confirmez l'invite système à la première utilisation ; l'assistant dédié conserve l'autorisation. Les jetons restent en mémoire de l'assistant.";
 "开放 API（api.x.ai）" = "API publique (api.x.ai)";
 "当前展示最近一次成功结果；登录态或网络恢复后会自动刷新。" = "Affichage du dernier résultat réussi ; s'actualise automatiquement dès que la connexion ou le réseau est rétabli.";
-"当前时间范围内还没有检测到额度下降" = "Aucune baisse de quota détectée dans cette plage pour l'instant";
+"当前时间范围内还没有检测到明显额度变化" = "Aucun changement significatif de quota détecté dans cette plage";
 "当前版本 %@" = "Version actuelle %@";
 "当前范围无可分享的用量" = "Aucune consommation partageable dans cette plage";
 "彩色" = "Coloré";
@@ -282,7 +282,7 @@
 "数据面板" = "Tableau de bord";
 "无匹配项目" = "Aucun projet correspondant";
 "无限期" = "Sans limite";
-"日均" = "Moyenne quotidienne";
+"日均成本" = "Coût moyen/jour";
 "日期" = "Date";
 "旧版日志未保存真实用量，当前仅展示上下文与执行指标。" = "Les anciens journaux n'enregistraient pas la consommation réelle ; affichage des métriques d'exécution uniquement.";
 "时间" = "Heure";
@@ -305,6 +305,11 @@
 "最大区间下降" = "Plus grande baisse sur la plage";
 "最近一次 · %@" = "Dernier · %@";
 "最近额度变化" = "Changements récents de quota";
+"最近回满" = "Dernier retour à 100 %";
+"最近回升" = "Dernière remontée du quota";
+"回满" = "Retour à 100 %";
+"回升" = "Remontée";
+"查看曲线" = "Voir la courbe";
 "月" = "Mois";
 "月剩余" = "Mois restant";
 "有 %@ 个设备快照读取异常" = "%@ instantanés d'appareils n'ont pas pu être chargés";
@@ -499,17 +504,27 @@
 "（当前范围无可复制的用量）" = "(Aucune consommation partageable dans cette plage)";
 "仅输出" = "Sortie uniquement";
 
-/* Windows 与性能指标 */
+/* Windows 主窗口与托盘快捷面板 */
 "打开主窗口" = "Ouvrir la fenêtre principale";
 "快捷面板" = "Panneau rapide";
 "主窗口" = "Fenêtre principale";
 "点击托盘图标" = "Clic sur l’icône de notification";
 "关闭快捷面板" = "Fermer le panneau rapide";
+
+// Windows 平台额度说明
+
+// Windows 旧界面词条兼容
+"日均" = "Moyenne quotidienne";
+"当前时间范围内还没有检测到额度下降" = "Aucune baisse de quota détectée dans cette plage pour l'instant";
+
+// Windows 原生隐私与额度
 "开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用请点击“授权 Grok Bot”；授权在重启和升级后保留。登录 Token 仅在辅助进程内存中使用。" = "Utilise la session propre à Grok Bot pour consulter les quotas et tokens officiels, avec un cache de 5 minutes. Cliquez sur « Autoriser Grok Bot » à la première utilisation ; l’autorisation est conservée après les redémarrages et mises à jour. Les tokens de connexion restent uniquement en mémoire du processus auxiliaire.";
 "此授权功能仅在 Windows 应用中可用。" = "Cette autorisation est disponible uniquement dans l’application Windows.";
 "Grok Bot 的登录凭据格式暂不支持，请更新 Tokei。" = "Ce format d’identifiants Grok Bot n’est pas encore pris en charge. Mettez Tokei à jour.";
+
 "上次数据 %@" = "Données précédentes %@";
 "额度更新中…" = "Mise à jour des quotas…";
+
 "平均输出速度（含等待）" = "Vitesse moyenne (attente incluse)";
 "平均速度（含等待）" = "Vitesse moy. (attente incluse)";
 "输出 token 总数 ÷ 记录耗时；%@ 个请求中，%@ 个包含首字等待，无法还原纯生成速度" = "Tokens de sortie ÷ durée enregistrée ; sur %@ requêtes, %@ incluent l’attente du premier token. La vitesse de génération seule est indisponible.";
@@ -521,3 +536,4 @@
 "正在读取额度周期…" = "Lecture des cycles de quota…";
 "一个额度周期用了多少" = "Quota consommé sur un cycle";
 "Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。" = "Aucune carte de quota Grok : connectez-vous sur grok.com une fois pour que Tokei puisse relever le quota.";
+"Gemini 4 Argon 周" = "Gemini 4 Argon - semaine";

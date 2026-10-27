@@ -159,18 +159,36 @@ struct WrappedView: View {
     // MARK: - Stat chips
     func statChips(_ d: WrappedData) -> some View {
         let avg = d.active_days > 0 ? d.total_cost / Double(d.active_days) : 0
-        return HStack(spacing: 7) {
-            chip(L("总成本"), nativeMoney(d.total_cost, d.cost_cny), Theme.claude)
+        return HStack(alignment: .top, spacing: 7) {
+            moneyChip(L("总成本"), usd: d.total_cost, cny: d.cost_cny, tint: Theme.claude)
             chip(L("连续"), L("%@ 天", d.streak_cur), Theme.hermes, icon: "flame.fill")
-            chip(L("日均"), nativeMoney(avg, (d.cost_cny ?? 0) / Double(max(d.active_days, 1))), Theme.gemini)
+            moneyChip(L("日均成本"), usd: avg,
+                      cny: (d.cost_cny ?? 0) / Double(max(d.active_days, 1)), tint: Theme.gemini)
             chip(L("峰值日"), shortDate(d.busiest.date), Color.red.opacity(0.85))
             chip(L("本命模型"), L10n.data(d.top_model.name), Theme.codex)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    func chip(_ label: String, _ value: String, _ tint: Color, icon: String? = nil) -> some View {
+    func moneyChip(_ label: String, usd: Double, cny: Double?, tint: Color) -> some View {
+        let hasUSD = usd > 0 || (cny ?? 0) <= 0
+        let value = hasUSD ? nativeMoney(usd) : nativeMoney(0, cny)
+        let secondary = usd > 0 && (cny ?? 0) > 0 ? "CNY " + nativeMoney(0, cny) : nil
+        return chip(label, value, tint, currency: hasUSD ? "USD" : "CNY", secondary: secondary)
+    }
+
+    func chip(_ label: String, _ value: String, _ tint: Color, icon: String? = nil,
+              currency: String? = nil, secondary: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.system(size: Theme.fontSize(9), weight: .medium)).foregroundStyle(tint.opacity(0.9))
+            HStack(spacing: 3) {
+                Text(label).font(.system(size: Theme.fontSize(9), weight: .medium))
+                    .foregroundStyle(tint.opacity(0.9)).lineLimit(1).minimumScaleFactor(0.8)
+                if let currency {
+                    Spacer(minLength: 0)
+                    Text(currency).font(.system(size: Theme.fontSize(7.5), design: .monospaced))
+                        .foregroundStyle(Theme.tTertiary)
+                }
+            }
             HStack(spacing: 3) {
                 if let icon {
                     Image(systemName: icon).font(.system(size: Theme.fontSize(10), weight: .bold)).foregroundStyle(tint)
@@ -178,8 +196,12 @@ struct WrappedView: View {
                 Text(value).font(.system(size: Theme.fontSize(12.5), weight: .bold, design: .rounded))
                     .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
             }
+            if let secondary {
+                Text(secondary).font(.system(size: Theme.fontSize(9.5), weight: .medium, design: .rounded))
+                    .foregroundStyle(Theme.tSecondary).lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.vertical, 7).padding(.horizontal, 9)
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)

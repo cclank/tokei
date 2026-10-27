@@ -248,7 +248,13 @@ class MiniMaxScanTests(unittest.TestCase):
         self.assertEqual(USAGE._pricing_id("MiniMax-M2.7-highspeed"), "minimax/minimax-m2.7-highspeed")
         self.assertEqual(USAGE._raw_price("MiniMax-M2.7-highspeed")["in"], 0.6)
         # 还没公开定价的预览版沿用同一版本线上一个版本（M3）的价
-        self.assertEqual(USAGE._pricing_id("MiniMax-M3.1-Flash-Preview"), "minimax/minimax-m3")
+        # Explicitly model a catalog that has not listed M3.1 Flash yet.
+        # A refreshed live catalog may already contain its exact price.
+        with mock.patch.object(USAGE, "_PRICING_DB", {"minimax/minimax-m3": {"in": .3, "out": 1.2}}), \
+             mock.patch.object(USAGE, "_DEFAULT_PRICES", {}), \
+             mock.patch.object(USAGE, "_OV_MODELS", {}), \
+             mock.patch.object(USAGE, "_CATALOG_INDEX", None):
+            self.assertEqual(USAGE._pricing_id("MiniMax-M3.1-Flash-Preview"), "minimax/minimax-m3")
 
 
 class MiniMaxQuotaTests(unittest.TestCase):

@@ -156,21 +156,6 @@ class GrokBotRealKeychainTests(unittest.TestCase):
 
                 self.assertEqual(resolve(helpers["v1.0.47"])["helper"], str(helpers["v1.0.47"]))
                 read("authorized-before-upgrade")
-                # A changed app does not install or replace the already-trusted
-                # helper. Each resolution uses a new process, as after restart.
-                duration = int(os.environ.get("TOKEI_KEYCHAIN_SOAK_SECONDS", "620"))
-                began = time.monotonic()
-                iteration = 0
-                while True:
-                    self.assertEqual(resolve(helpers["v1.0.47"])["helper"], str(helpers["v1.0.47"]))
-                    read(f"upgrade-refresh-{iteration}")
-                    elapsed = time.monotonic() - began
-                    if elapsed >= duration:
-                        break
-                    time.sleep(min(30, duration - elapsed))
-                    iteration += 1
-                self.report["continuous_refresh_seconds"] = round(time.monotonic() - began, 3)
-
                 self.command([admin, "lock", keychain, service])
                 read("locked-keychain", expected_success=False)
                 self.command([admin, "unlock", keychain, service])
@@ -205,6 +190,21 @@ class GrokBotRealKeychainTests(unittest.TestCase):
                 (root / "saved-consent").rename(marker)
                 self.assertEqual(self.fingerprint(marker), before_marker)
                 read("grant-restored-without-reauthorization")
+                # A changed app does not install or replace the already-trusted
+                # helper. Each resolution uses a new process, as after restart.
+                duration = int(os.environ.get("TOKEI_KEYCHAIN_SOAK_SECONDS", "620"))
+                began = time.monotonic()
+                iteration = 0
+                while True:
+                    self.assertEqual(resolve(helpers["v1.0.47"])["helper"], str(helpers["v1.0.47"]))
+                    read(f"upgrade-refresh-{iteration}")
+                    elapsed = time.monotonic() - began
+                    if elapsed >= duration:
+                        break
+                    time.sleep(min(30, duration - elapsed))
+                    iteration += 1
+                self.report["continuous_refresh_seconds"] = round(time.monotonic() - began, 3)
+
             after_acl = self.command([admin, "acl", keychain, service])
             self.assertEqual(after_acl, before_acl)
             self.report.update(authorization_marker_unchanged=True, authorized_helper_unchanged=True,

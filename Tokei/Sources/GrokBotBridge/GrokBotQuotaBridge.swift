@@ -410,44 +410,63 @@ public enum GrokBotQuotaBridge {
         return String(data: output, encoding: .utf8)
     }
 
+    // 旧系统的传统钥匙串 ACL 还需要进程级禁止交互；macOS 26 则必须跳过旧接口，
+    // 避免已授权的 SecItemCopyMatching 被错误拒绝。无论读取成功与否，都恢复原状态。
+    static func withLegacyKeychainInteractionSuppressed<Value>(
+        allowInteraction: Bool,
+        macOSMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
+        _ operation: () -> Value?
+    ) -> Value? {
+        guard !allowInteraction, macOSMajorVersion < 26 else {
+            return operation()
+        }
+        var previousInteraction = DarwinBoolean(false)
+        guard SecKeychainGetUserInteractionAllowed(&previousInteraction) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            return nil
+        }
+        defer {
+            _ = SecKeychainSetUserInteractionAllowed(previousInteraction.boolValue)
+        }
+        return operation()
+    }
+
     private static func safeStoragePassword(
         allowInteraction: Bool,
         returnKeychainItem: Bool
     ) -> KeychainSecret? {
-        // macOS 26：已废弃的 SecKeychainSetUserInteractionAllowed(false) 会让紧随其后的
-        // SecItemCopyMatching 返回 errSecAuthFailed(-25293)，即使当前可执行文件已在该
-        // 钥匙串项的 ACL 中。抑制系统弹窗改由下方 LAContext.interactionNotAllowed +
-        // kSecUseAuthenticationUI 负责，两者对 SecItemCopyMatching 已足够。
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true,
-        ]
-        if returnKeychainItem {
-            query[kSecReturnRef as String] = true
+        return withLegacyKeychainInteractionSuppressed(allowInteraction: allowInteraction) {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecReturnData as String: true,
+            ]
+            if returnKeychainItem {
+                query[kSecReturnRef as String] = true
+            }
+            if !allowInteraction {
+                let context = LAContext()
+                context.interactionNotAllowed = true
+                query[kSecUseAuthenticationContext as String] = context
+                query[kSecUseAuthenticationUI as String] = uiFailPolicy as CFString
+            }
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &item)
+            guard status == errSecSuccess else { return nil }
+            if let data = item as? Data, !data.isEmpty {
+                return KeychainSecret(password: data, item: nil)
+            }
+            guard let values = item as? [String: Any],
+                  let data = values[kSecValueData as String] as? Data,
+                  !data.isEmpty else {
+                return nil
+            }
+            return KeychainSecret(
+                password: data,
+                item: keychainItem(from: values[kSecValueRef as String])
+            )
         }
-        if !allowInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-            query[kSecUseAuthenticationUI as String] = uiFailPolicy as CFString
-        }
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess else { return nil }
-        if let data = item as? Data, !data.isEmpty {
-            return KeychainSecret(password: data, item: nil)
-        }
-        guard let values = item as? [String: Any],
-              let data = values[kSecValueData as String] as? Data,
-              !data.isEmpty else {
-            return nil
-        }
-        return KeychainSecret(
-            password: data,
-            item: keychainItem(from: values[kSecValueRef as String])
-        )
     }
 
     private static func keychainItem(from value: Any?) -> SecKeychainItem? {

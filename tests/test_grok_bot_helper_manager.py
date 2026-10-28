@@ -25,7 +25,9 @@ class GrokBotHelperManagerTests(unittest.TestCase):
                 check=True,
                 cwd=ROOT,
             )
-            for scenario in (None, "preserve-v2", "blocked-v2", "modern-v2"):
+            for scenario in (None, "preserve-v2", "blocked-v2", "modern-v2", "unsafe-modern-v2",
+                             "protocol4-old-system", "protocol4-modern", "protocol5-modern",
+                             "unrecognized-v2", "missing-helper", "invalid-helper"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         [str(binary)] + ([scenario] if scenario else []),

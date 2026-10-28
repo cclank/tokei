@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=8
+# TOKEI_COLLECTOR_REVISION=9
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -7491,13 +7491,29 @@ def _grok_bot_helper_path():
     if _IS_WINDOWS or os.environ.get("TOKEI_GROK_BOT_HELPER_BLOCKED") == "1":
         return None  # 原生助手只有 macOS 版
     configured = os.environ.get("TOKEI_GROK_BOT_HELPER")
-    candidates = [configured] if isinstance(configured, str) and configured.strip() else []
+    if isinstance(configured, str) and configured.strip():
+        # The app supplies its already-validated persistent helper. A missing
+        # executable must not silently switch to another Keychain identity.
+        path = _expand_path(configured)
+        return path if path and os.path.isfile(path) and os.access(path, os.X_OK) else None
     if sys.platform == "darwin":
-        candidates.append("/Applications/Tokei.app/Contents/MacOS/Tokei")
-    for candidate in candidates:
-        path = _expand_path(candidate)
-        if path and os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
+        app = "/Applications/Tokei.app/Contents/MacOS/Tokei"
+        try:
+            # Version 4 adds the resolver. Older apps must never be launched with
+            # an unknown argument (which could open their normal UI).
+            version = subprocess.run([app, "--grok-bot-helper-version"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3)
+            if version.returncode != 0 or int(version.stdout.strip()) < 4:
+                return None
+            resolved = subprocess.run([app, "--grok-bot-resolve-helper"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=4)
+            result = json.loads(resolved.stdout) if resolved.returncode == 0 else {}
+            if not isinstance(result, dict) or result.get("blocked") is not False:
+                return None
+            path = _expand_path(result.get("helper"))
+            return path if path and os.path.isfile(path) and os.access(path, os.X_OK) else None
+        except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+            return None
     return None
 
 
@@ -7748,6 +7764,7 @@ def _grok_bot_helper_start(marker):
     temporary = f"{result_path}.{os.getpid()}.tmp"
     since = _grok_bot_events_since()
     since_args = '--since "$3"' if since is not None else ""
+    authorization_snapshot = None
     try:
         os.makedirs(os.path.dirname(result_path) or ".", mode=0o700, exist_ok=True)
         if _IS_WINDOWS:
@@ -7758,13 +7775,31 @@ def _grok_bot_helper_start(marker):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=0x08000000, close_fds=True)
         else:
+            environment = os.environ.copy()
+            if sys.platform == "darwin":
+                if _grok_bot_authorization_generation() is None:
+                    return False, False
+                # Old authorized helpers may delete their marker on a transient
+                # Keychain failure. Give each read its own consent snapshot, so
+                # the original grant and its cache generation remain untouched.
+                import tempfile
+                fd, authorization_snapshot = tempfile.mkstemp(
+                    prefix=".grok-bot-consent-", dir=os.path.dirname(result_path) or ".")
+                os.close(fd)
+                environment["TOKEI_GROK_BOT_AUTH_MARKER"] = authorization_snapshot
             process = subprocess.Popen(
                 ["/bin/sh", "-c",
-                 f'umask 077; "$0" --grok-bot-data-json {since_args} > "$1" && mv -f "$1" "$2" || rm -f "$1"',
-                 helper, temporary, result_path, str(since or "")],
+                 'umask 077; trap \'rm -f "$1" "$4"\' EXIT; '
+                 f'"$0" --grok-bot-data-json {since_args} > "$1" && mv -f "$1" "$2"',
+                 helper, temporary, result_path, str(since or ""), authorization_snapshot or ""],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True, close_fds=True)
+                start_new_session=True, close_fds=True, env=environment)
     except OSError:
+        if authorization_snapshot:
+            try:
+                os.unlink(authorization_snapshot)
+            except OSError:
+                pass
         return False, False
     _atomic_write_json(state_path, {"pid": process.pid, "started": int(_time.time()), "marker": marker})
     return True, True

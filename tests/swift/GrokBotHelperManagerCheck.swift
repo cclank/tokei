@@ -100,7 +100,9 @@ struct GrokBotHelperManagerCheck {
             try FileManager.default.createDirectory(
                 at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        try writeHelper(to: installed, marker: "preserved-old", version: 2)
+        let protocolVersion = scenario.hasPrefix("protocol4") ? 4 : scenario.hasPrefix("protocol5") ? 5 : 2
+        try writeHelper(to: installed, marker: "preserved-old", version: protocolVersion,
+                        legacySuppression: !["unrecognized-v2", "unsafe-modern-v2"].contains(scenario))
         try writeHelper(to: bundled, marker: "fixed-current")
         let old = try Data(contentsOf: installed)
         let grant = Data("existing-authorization\n".utf8)
@@ -109,13 +111,23 @@ struct GrokBotHelperManagerCheck {
         setenv("TOKEI_GROK_BOT_BUNDLED_HELPER", bundled.path, 1)
         setenv("TOKEI_GROK_BOT_AUTH_MARKER", marker.path, 1)
         let digest = SHA256.hash(data: old).map { String(format: "%02x", $0) }.joined()
-        let blocked: Set<String> = scenario == "preserve-v2" ? [] : [digest]
-        let version = scenario == "modern-v2" ? 27 : 15
+        let blocked: Set<String> = scenario == "blocked-v2" ? [digest] : []
+        let version = scenario.contains("modern") ? 27 : 15
+        if scenario == "missing-helper" {
+            try FileManager.default.removeItem(at: installed)
+        } else if scenario == "invalid-helper" {
+            try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: installed.path)
+        }
         let helper = GrokBotHelperManager.resolvedHelperURL(
             macOSMajorVersion: version, blockedHelperDigests: blocked)
+        if ["missing-helper", "invalid-helper"].contains(scenario) {
+            try expect(helper == nil, "missing or invalid trusted helper must never fall back to the app bundle")
+            try expect(try Data(contentsOf: marker) == grant, "missing helper must not erase prior consent")
+            return
+        }
         try expect(try Data(contentsOf: installed) == old, "resolving must preserve trusted helper bytes")
         try expect(try Data(contentsOf: marker) == grant, "existing authorization must be retained")
-        if scenario == "blocked-v2" {
+        if ["blocked-v2", "unrecognized-v2", "unsafe-modern-v2", "protocol4-modern"].contains(scenario) {
             try expect(helper == nil, "a known unsafe helper must not run in the background")
             try expect(GrokBotHelperManager.isBackgroundAccessBlocked, "collector fallback must be blocked")
             try expect(GrokBotHelperManager.needsReauthorization, "manual upgrade must be discoverable")
@@ -136,7 +148,8 @@ struct GrokBotHelperManagerCheck {
 
     private static func writeHelper(
         to url: URL, marker: String,
-        version: Int = GrokBotHelperManager.requiredProtocolVersion
+        version: Int = GrokBotHelperManager.requiredProtocolVersion,
+        legacySuppression: Bool = true
     ) throws {
         let script = """
         #!/bin/sh
@@ -151,7 +164,11 @@ struct GrokBotHelperManagerCheck {
         fi
         exit 2
         """
-        try Data(script.utf8).write(to: url, options: .atomic)
+        var bytes = Data(script.utf8)
+        if legacySuppression {
+            bytes.append(Data("\n# _SecKeychainSetUserInteractionAllowed\0\n".utf8))
+        }
+        try bytes.write(to: url, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: url.path

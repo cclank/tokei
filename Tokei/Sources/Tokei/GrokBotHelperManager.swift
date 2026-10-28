@@ -3,8 +3,8 @@ import Foundation
 import CryptoKit
 
 enum GrokBotHelperManager {
-    /// 3：旧系统后台钥匙串读取禁止交互；仅用户主动授权时安装新版。
-    static let requiredProtocolVersion = 3
+    /// 5：所有 macOS 的后台读取均禁止进程交互，保留历史授权。
+    static let requiredProtocolVersion = 5
     /// 已安装的辅助程序不低于这个版本就照常用来采集。换新版会让钥匙串重新弹授权框，
     /// 不能因为 App 升级就把用户授权过的旧版停掉——只在用户主动（重新）授权时换。
     static let minimumProtocolVersion = 1
@@ -35,26 +35,40 @@ enum GrokBotHelperManager {
             installedVersion = usableVersion(installed, requireCurrentUserOwner: true)
             if (installedVersion ?? 0) >= minimumProtocolVersion {
                 let unsafe: Bool
-                if macOSMajorVersion < 26, installedVersion == 2 {
+                if (installedVersion ?? 0) < 3 {
                     unsafe = (try? Data(contentsOf: installed)).map {
                         blockedHelperDigests.contains(SHA256.hash(data: $0).map {
                             String(format: "%02x", $0)
-                        }.joined())
+                        }.joined()) || !$0.containsLegacyKeychainSuppression
                     } ?? true
                 } else {
-                    unsafe = false
+                    // Protocols 3/4 suppressed interaction only before macOS 26.
+                    unsafe = macOSMajorVersion >= 26 && (installedVersion ?? 0) < 5
                 }
                 backgroundAccessBlocked = unsafe
                 cachedHelperURL = unsafe ? nil : installed
             } else {
-                cachedHelperURL = bundledHelperURLs.first {
-                    isUsableHelper($0, requireCurrentUserOwner: false)
-                }
+                // A bundled executable has a different Keychain identity. Only
+                // explicit authorization may install it; do not probe it on launch.
+                cachedHelperURL = nil
             }
             resolved = cachedHelperURL
         }
         resolutionLock.unlock()
         return resolved
+    }
+
+    static func runIfRequested() -> Bool {
+        guard CommandLine.arguments.contains("--grok-bot-resolve-helper") else { return false }
+        let path = resolvedHelperURL()?.path
+        let result: [String: Any] = [
+            "helper": path as Any? ?? NSNull(),
+            "blocked": path == nil || isBackgroundAccessBlocked,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: result) {
+            FileHandle.standardOutput.write(data)
+        }
+        return true
     }
 
     static var isBackgroundAccessBlocked: Bool {
@@ -205,5 +219,15 @@ enum GrokBotHelperManager {
         resolvedOnce = true
         backgroundAccessBlocked = false
         resolutionLock.unlock()
+    }
+}
+
+private extension Data {
+    /// Protocols 1/2 predate capability reporting. Their dedicated bridge had
+    /// one Keychain read path. A build without this import cannot suppress the
+    /// legacy ACL prompt. This also detects re-signed and single-arch v1.0.48
+    /// helpers whose whole-file digest differs from the official Universal DMG.
+    var containsLegacyKeychainSuppression: Bool {
+        range(of: Data("_SecKeychainSetUserInteractionAllowed\0".utf8)) != nil
     }
 }

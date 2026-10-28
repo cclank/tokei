@@ -853,6 +853,10 @@ enum Icon {
     }
 }
 
+if GrokBotHelperManager.runIfRequested() {
+    exit(0)
+}
+
 if GrokBotQuotaBridge.runIfRequested() {
     exit(0)
 }

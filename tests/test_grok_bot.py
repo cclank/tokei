@@ -484,7 +484,8 @@ class GrokBotIncrementalEventsTests(unittest.TestCase):
         script = Path(self.tmp.name) / "helper.sh"
         script.write_text(f"#!/bin/sh\necho \"$@\" > '{args_file}'\nexit 2\n", encoding="utf-8")
         script.chmod(0o700)
-        with mock.patch.object(USAGE, "_grok_bot_helper_path", return_value=str(script)):
+        with mock.patch.object(USAGE, "_grok_bot_helper_path", return_value=str(script)), \
+                mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=1):
             running, started = USAGE._grok_bot_helper_start("marker")
             import time
             for _ in range(50):

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import CryptoKit
 
 private enum TestFailure: Error {
     case assertion(String)
@@ -8,6 +9,11 @@ private enum TestFailure: Error {
 @main
 struct GrokBotHelperManagerCheck {
     static func main() throws {
+        if let scenario = CommandLine.arguments.dropFirst().first {
+            try checkLegacyAuthorization(scenario)
+            print("grok bot helper manager checks passed")
+            return
+        }
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("tokei-grok-helper-\(UUID().uuidString)")
         let bundled = root.appendingPathComponent("BundledHelper")
@@ -34,7 +40,7 @@ struct GrokBotHelperManagerCheck {
         try writeHelper(to: legacyBundled, marker: "new")
         try writeHelper(to: legacyInstalled, marker: "old",
                         version: GrokBotHelperManager.minimumProtocolVersion)
-        // 标记事先就在：这一段不触发补标记，免得占掉后面那次（每 5 分钟最多一次）
+        // 已有授权标记必须保留，解析助手时不能重新访问钥匙串。
         let legacyMarker = legacyRoot.appendingPathComponent("authorization-marker")
         try Data("ok\n".utf8).write(to: legacyMarker)
         setenv("TOKEI_GROK_BOT_BUNDLED_HELPER", legacyBundled.path, 1)
@@ -69,8 +75,8 @@ struct GrokBotHelperManagerCheck {
         let attributes = try FileManager.default.attributesOfItem(atPath: installed.path)
         try expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700,
                    "installed helper permissions should be owner-only")
-        try expect(FileManager.default.fileExists(atPath: authorizationMarker.path),
-                   "a usable authorization should restore the missing local marker")
+        try expect(!FileManager.default.fileExists(atPath: authorizationMarker.path),
+                   "installing an executable must not trigger background authorization")
 
         try writeHelper(to: bundled, marker: "replacement")
         let second = GrokBotHelperManager.installIfNeeded()
@@ -81,6 +87,51 @@ struct GrokBotHelperManagerCheck {
                    "data collection should prefer the persistent helper")
 
         print("grok bot helper manager checks passed")
+    }
+
+    private static func checkLegacyAuthorization(_ scenario: String) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tokei-helper-authorization-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installed = root.appendingPathComponent("installed/TokeiGrokBotHelper")
+        let bundled = root.appendingPathComponent("bundled/TokeiGrokBotHelper")
+        let marker = root.appendingPathComponent("authorized")
+        for path in [installed, bundled] {
+            try FileManager.default.createDirectory(
+                at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try writeHelper(to: installed, marker: "preserved-old", version: 2)
+        try writeHelper(to: bundled, marker: "fixed-current")
+        let old = try Data(contentsOf: installed)
+        let grant = Data("existing-authorization\n".utf8)
+        try grant.write(to: marker)
+        setenv("TOKEI_GROK_BOT_PERSISTENT_HELPER", installed.path, 1)
+        setenv("TOKEI_GROK_BOT_BUNDLED_HELPER", bundled.path, 1)
+        setenv("TOKEI_GROK_BOT_AUTH_MARKER", marker.path, 1)
+        let digest = SHA256.hash(data: old).map { String(format: "%02x", $0) }.joined()
+        let blocked: Set<String> = scenario == "preserve-v2" ? [] : [digest]
+        let version = scenario == "modern-v2" ? 27 : 15
+        let helper = GrokBotHelperManager.resolvedHelperURL(
+            macOSMajorVersion: version, blockedHelperDigests: blocked)
+        try expect(try Data(contentsOf: installed) == old, "resolving must preserve trusted helper bytes")
+        try expect(try Data(contentsOf: marker) == grant, "existing authorization must be retained")
+        if scenario == "blocked-v2" {
+            try expect(helper == nil, "a known unsafe helper must not run in the background")
+            try expect(GrokBotHelperManager.isBackgroundAccessBlocked, "collector fallback must be blocked")
+            try expect(GrokBotHelperManager.needsReauthorization, "manual upgrade must be discoverable")
+            try expect(GrokBotHelperManager.installIfNeeded() == installed, "explicit authorization must install the fixed helper")
+            try expect(try Data(contentsOf: installed) == Data(contentsOf: bundled), "manual upgrade must use the fixed executable")
+            try expect(try Data(contentsOf: marker) == grant, "installing must not silently overwrite authorization")
+            try expect(!GrokBotHelperManager.isBackgroundAccessBlocked, "manual upgrade clears the unsafe-helper state")
+            try expect(!GrokBotHelperManager.needsReauthorization, "upgrade prompt must clear")
+        } else {
+            try expect(helper == installed, "safe authorized helpers must continue to work")
+            try expect(!GrokBotHelperManager.isBackgroundAccessBlocked, "safe old helpers must remain enabled")
+            try expect(!GrokBotHelperManager.needsReauthorization, "normal upgrades must not require reauthorization")
+        }
+        try FileManager.default.removeItem(at: marker)
+        for _ in 0..<3 { _ = GrokBotHelperManager.resolvedHelperURL() }
+        try expect(!FileManager.default.fileExists(atPath: marker.path), "background refresh must never probe authorization")
     }
 
     private static func writeHelper(

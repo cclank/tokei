@@ -1252,7 +1252,9 @@ struct PanelView: View {
                 if hasActivity || hasUsage { thinDivider }
                 providerQuotaContent(stat.quota, tint: Theme.grokBot)
             } else if grokBotQuotaEnabled {
-                Text(L("官方数据暂时不可用，Tokei 将自动重试"))
+                Text(GrokBotHelperManager.isBackgroundAccessBlocked
+                     ? L("为避免系统授权弹窗，已暂停后台查询；历史统计保留")
+                     : L("官方数据暂时不可用，Tokei 将自动重试"))
                     .font(.system(size: Theme.fontSize(9)))
                     .foregroundStyle(Theme.tTertiary)
             }
@@ -1263,14 +1265,14 @@ struct PanelView: View {
     }
 
     /// 授权助手有新版时直接在卡片上提示：换新版要重新授权一次，不能指望用户自己去设置里找。
-    /// 不重新授权也照常可用，旧版助手每次从年初全量读取，慢一些。
+    /// 正常旧助手保留授权；已知会弹窗的旧助手暂停后台访问，等待用户主动授权更新。
     private var grokBotReauthorizePrompt: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "key.fill")
                 .font(.system(size: Theme.fontSize(9)))
                 .foregroundStyle(Theme.grokBot)
             Text(grokBotAuthorizationResult.isEmpty
-                 ? L("授权助手已更新：重新授权一次，读取更快、不受条数上限")
+                 ? L("授权助手需要更新：请主动重新授权，后台不会弹出授权窗口")
                  : grokBotAuthorizationResult)
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tSecondary)
@@ -3514,7 +3516,7 @@ struct PanelView: View {
             thinDivider
 
             settingsToggleRow(L("Grok Bot 额度查询"), isOn: $grokBotQuotaEnabled)
-            Text(L("开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。"))
+            Text(L("开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。已有授权会保留；未授权或授权失效时后台静默停止。系统授权窗口仅在主动点击授权时显示，登录 Token 仅在助手进程内存中使用。"))
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)

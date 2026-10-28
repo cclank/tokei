@@ -241,7 +241,7 @@
 "平均深度" = "Instantané de contexte du jour";
 "年" = "Total aujourd'hui";
 "应用活跃统计" = "Réponses du jour";
-"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。" = "Une fois activé, utilise la session de Grok Bot pour consulter les quotas et tokens officiels (mis en cache 5 min). Confirmez l'invite système à la première utilisation ; l'assistant dédié conserve l'autorisation. Les jetons restent en mémoire de l'assistant.";
+"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。已有授权会保留；未授权或授权失效时后台静默停止。系统授权窗口仅在主动点击授权时显示，登录 Token 仅在助手进程内存中使用。" = "Une fois activé, utilise la session de Grok Bot pour consulter les quotas et tokens officiels, en cache pendant 5 minutes. Les autorisations existantes sont conservées ; les requêtes s'arrêtent silencieusement si l'autorisation manque ou expire. Une invite système apparaît uniquement après un clic sur Autoriser. Les jetons restent en mémoire de l'assistant.";
 "开放 API（api.x.ai）" = "API publique (api.x.ai)";
 "当前展示最近一次成功结果；登录态或网络恢复后会自动刷新。" = "Affichage du dernier résultat réussi ; s'actualise automatiquement dès que la connexion ou le réseau est rétabli.";
 "当前时间范围内还没有检测到明显额度变化" = "Aucun changement significatif de quota détecté dans cette plage";
@@ -263,7 +263,7 @@
 "按模型 · %@" = "Par modèle · %@";
 "按量预算" = "Budget à l'usage";
 "授权 Grok Bot" = "Autoriser Grok Bot";
-"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Assistant mis à jour : réautorisez une fois pour une lecture plus rapide et sans limite";
+"授权助手需要更新：请主动重新授权，后台不会弹出授权窗口" = "L'assistant d'autorisation doit être mis à jour. Réautorisez quand vous le souhaitez ; aucune invite système en arrière-plan.";
 "重新授权" = "Réautoriser";
 "重新授权 Grok Bot" = "Réautoriser Grok Bot";
 "授权 Zed" = "Autoriser Zed";
@@ -537,3 +537,4 @@
 "一个额度周期用了多少" = "Quota consommé sur un cycle";
 "Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。" = "Aucune carte de quota Grok : connectez-vous sur grok.com une fois pour que Tokei puisse relever le quota.";
 "Gemini 4 Argon 周" = "Gemini 4 Argon - semaine";
+"为避免系统授权弹窗，已暂停后台查询；历史统计保留" = "Les requêtes en arrière-plan sont suspendues pour éviter les invites système. L'historique est conservé.";

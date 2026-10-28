@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -195,11 +196,12 @@ class GrokBotTests(unittest.TestCase):
                 mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="c" * 64), \
                 mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=2), \
                 mock.patch.object(USAGE, "_grok_bot_helper_sand_usage", return_value=None) as helper, \
-                mock.patch.object(USAGE, "_cursor_session", return_value=None):
+                mock.patch.object(USAGE, "_cursor_session", return_value=None) as cursor:
             self.assertEqual(USAGE.fetch_grok_bot_quota(), {})
             self.assertEqual(USAGE.fetch_grok_bot_quota(), {})
 
         helper.assert_called_once_with()
+        cursor.assert_not_called()
 
     @unittest.skipUnless(sys.platform == "darwin", "Uses the macOS Grok Bot helper and authorization")
     def test_recent_usage_cache_survives_missing_authorization_marker(self):
@@ -223,7 +225,6 @@ class GrokBotTests(unittest.TestCase):
             USAGE._save_provider_quota_cache("grok_bot", "old-marker", cached)
             with mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="a" * 64), \
                     mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=None), \
-                    mock.patch.object(USAGE, "_grok_bot_repair_authorization_marker", return_value=False), \
                     mock.patch.object(USAGE, "_cursor_session", return_value=None):
                 quota = USAGE.fetch_grok_bot_quota()
 
@@ -256,7 +257,6 @@ class GrokBotTests(unittest.TestCase):
             )
             with mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="a" * 64), \
                     mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=None), \
-                    mock.patch.object(USAGE, "_grok_bot_repair_authorization_marker", return_value=False), \
                     mock.patch.object(USAGE, "_cursor_session", return_value=None):
                 quota = USAGE.fetch_grok_bot_quota()
 
@@ -266,43 +266,46 @@ class GrokBotTests(unittest.TestCase):
         self.assertEqual(quota["usage"]["ranges"]["today"]["tokens"], 120)
 
     @unittest.skipUnless(sys.platform == "darwin", "Uses the macOS Grok Bot helper and authorization")
-    def test_missing_authorization_marker_is_repaired_without_user_prompt(self):
-        payload = {
-            "quotaFetched": True,
-            "usageFetched": False,
-            "sandUsage": {
-                "hasNonZeroIncludedLimit": True,
-                "usagePercent": 12.5,
-            },
-        }
+    def test_missing_authorization_marker_never_launches_a_helper(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(USAGE, "PROVIDER_QUOTA_CACHE", str(Path(tmp) / "quota.json")), \
                 mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="e" * 64), \
-                mock.patch.object(
-                    USAGE, "_grok_bot_authorization_generation", side_effect=[None, 7]), \
-                mock.patch.object(
-                    USAGE, "_grok_bot_repair_authorization_marker", return_value=True) as repair, \
-                mock.patch.object(USAGE, "_grok_bot_helper_sand_usage", return_value=payload), \
-                mock.patch.object(USAGE, "_cursor_session") as cursor_session:
-            quota = USAGE.fetch_grok_bot_quota()
-
-        self.assertEqual(quota["windows"][0]["used_pct"], 12.5)
-        repair.assert_called_once_with()
-        cursor_session.assert_not_called()
+                mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=None), \
+                mock.patch.object(USAGE, "_grok_bot_helper_sand_usage") as helper, \
+                mock.patch.object(USAGE, "_cursor_session") as cursor, \
+                mock.patch.object(USAGE.subprocess, "run") as launch:
+            for _ in range(3):
+                self.assertEqual(USAGE.fetch_grok_bot_quota(), {})
+        helper.assert_not_called()
+        cursor.assert_not_called()
+        launch.assert_not_called()
 
     @unittest.skipUnless(sys.platform == "darwin", "Uses the macOS Grok Bot helper and authorization")
-    def test_missing_marker_repair_failure_is_backed_off_for_five_minutes(self):
+    def test_missing_account_does_not_probe_other_keychain_credentials(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(USAGE, "PROVIDER_QUOTA_CACHE", str(Path(tmp) / "quota.json")), \
-                mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value="f" * 64), \
+                mock.patch.object(USAGE, "_grok_bot_active_account_id", return_value=None), \
                 mock.patch.object(USAGE, "_grok_bot_authorization_generation", return_value=None), \
-                mock.patch.object(
-                    USAGE, "_grok_bot_repair_authorization_marker", return_value=False) as repair, \
-                mock.patch.object(USAGE, "_cursor_session", return_value=None):
+                mock.patch.object(USAGE, "_cursor_session") as cursor, \
+                mock.patch.object(USAGE.subprocess, "run") as launch:
             self.assertEqual(USAGE.fetch_grok_bot_quota(), {})
-            self.assertEqual(USAGE.fetch_grok_bot_quota(), {})
+        cursor.assert_not_called()
+        launch.assert_not_called()
 
-        repair.assert_called_once_with()
+    @unittest.skipUnless(sys.platform == "darwin", "Uses the macOS Grok Bot helper and authorization")
+    def test_blocked_legacy_helper_keeps_history_without_starting_any_helper(self):
+        cached = {"available": False, "source": "cache", "stale": True, "usage": {"tokens": 120}}
+        with mock.patch.dict(os.environ, {"TOKEI_GROK_BOT_HELPER_BLOCKED": "1"}), \
+                mock.patch.object(USAGE, "_latest_cached_provider_quota", return_value=cached), \
+                mock.patch.object(USAGE, "_grok_bot_helper_sand_usage") as helper, \
+                mock.patch.object(USAGE, "_cursor_session") as cursor, \
+                mock.patch.object(USAGE.subprocess, "run") as launch:
+            for _ in range(3):
+                self.assertEqual(USAGE.fetch_grok_bot_quota(), cached)
+            self.assertIsNone(USAGE._grok_bot_helper_path())
+        helper.assert_not_called()
+        cursor.assert_not_called()
+        launch.assert_not_called()
 
     @unittest.skipUnless(sys.platform == "darwin", "Uses the macOS Grok Bot helper and authorization")
     def test_confirmed_empty_native_quota_does_not_fall_back_to_cursor(self):

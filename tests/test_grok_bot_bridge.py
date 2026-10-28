@@ -25,8 +25,12 @@ class GrokBotQuotaBridgeTests(unittest.TestCase):
             ], check=True, capture_output=True, text=True)
             result = subprocess.run(
                 [str(binary)], check=True, capture_output=True, text=True)
+            version = subprocess.run(
+                [str(binary), "--grok-bot-helper-version"],
+                check=True, capture_output=True, text=True)
 
         self.assertEqual(result.stdout.strip(), "ok")
+        self.assertEqual(version.stdout.strip(), "3")
 
     def test_same_path_authorization_replaces_stale_code_requirement(self):
         source = (ROOT / "Tokei/Sources/GrokBotBridge/GrokBotQuotaBridge.swift").read_text()

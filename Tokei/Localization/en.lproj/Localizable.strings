@@ -300,7 +300,7 @@
 "年" = "Year";
 "广撒网" = "Wide Net";
 "应用活跃统计" = "App activity stats";
-"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。首次使用时确认一次系统授权；专用只读助手会保留授权，Tokei 重启和升级无需重复确认。登录 Token 仅在助手进程内存中使用。" = "When enabled, uses Grok Bot's own login session to query official quota and tokens, cached for 5 min. Confirm the system prompt once on first use; a dedicated read-only helper keeps the authorization so restarts and upgrades need no re-confirmation. Login tokens stay in helper memory only.";
+"开启后使用 Grok Bot 自身登录态查询官方额度和 Token，并按 5 分钟缓存。已有授权会保留；未授权或授权失效时后台静默停止。系统授权窗口仅在主动点击授权时显示，登录 Token 仅在助手进程内存中使用。" = "When enabled, uses Grok Bot's own session to query official quota and tokens, cached for 5 minutes. Existing authorization is retained; background queries stop silently when authorization is missing or invalid. System prompts appear only after you click Authorize. Login tokens stay in helper memory only.";
 "开放 API（api.x.ai）" = "Public API (api.x.ai)";
 "当前展示最近一次成功结果；登录态或网络恢复后会自动刷新。" = "Showing the last successful result; refreshes automatically once login or network recovers.";
 "当前时间范围内还没有检测到明显额度变化" = "No significant quota change detected in this range yet";
@@ -324,7 +324,7 @@
 "按模型 · %@" = "By model · %@";
 "按量预算" = "Pay-as-you-go budget";
 "授权 Grok Bot" = "Authorize Grok Bot";
-"授权助手已更新：重新授权一次，读取更快、不受条数上限" = "Helper updated: re-authorize once for faster reads with no event limit";
+"授权助手需要更新：请主动重新授权，后台不会弹出授权窗口" = "The authorization helper needs an update. Re-authorize when ready; background checks will not show system prompts.";
 "重新授权" = "Re-authorize";
 "重新授权 Grok Bot" = "Re-authorize Grok Bot";
 "授权 Zed" = "Authorize Zed";
@@ -624,3 +624,4 @@
 "正在读取额度周期…" = "Reading quota cycles…";
 "一个额度周期用了多少" = "Quota used this cycle";
 "Grok 还没有额度卡片：登录一次 grok.com 让 Tokei 抓到额度读数。" = "No Grok quota card yet: sign in at grok.com once so Tokei can capture a quota reading.";
+"为避免系统授权弹窗，已暂停后台查询；历史统计保留" = "Background queries are paused to avoid system authorization prompts. Usage history is retained.";

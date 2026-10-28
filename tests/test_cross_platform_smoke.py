@@ -86,6 +86,7 @@ class CrossPlatformSmokeTests(unittest.TestCase):
         (tokei / "config.json").write_text(json.dumps({
             "device_id": "smoke-pc", "sync_dir": str(cls.sync_dir),
             "auto_sync": False, "note": "中文配置",
+            "auto_pricing_enabled": False,
         }, ensure_ascii=False), encoding="utf-8")
 
         env = {key: value for key, value in os.environ.items()

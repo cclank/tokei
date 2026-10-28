@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=7
+# TOKEI_COLLECTOR_REVISION=8
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -7488,7 +7488,7 @@ def _grok_bot_authorization_generation(path=None):
 
 
 def _grok_bot_helper_path():
-    if _IS_WINDOWS:
+    if _IS_WINDOWS or os.environ.get("TOKEI_GROK_BOT_HELPER_BLOCKED") == "1":
         return None  # 原生助手只有 macOS 版
     configured = os.environ.get("TOKEI_GROK_BOT_HELPER")
     candidates = [configured] if isinstance(configured, str) and configured.strip() else []
@@ -7799,25 +7799,6 @@ def _grok_bot_helper_sand_usage():
     return _GROK_BOT_HELPER_PENDING
 
 
-def _grok_bot_repair_authorization_marker():
-    """Restore a missing local marker when Keychain access is still valid."""
-    helper = _grok_bot_helper_path()
-    if not helper:
-        return False
-    try:
-        result = subprocess.run(
-            [helper, "--grok-bot-verify"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and _grok_bot_authorization_generation() is not None
-
-
 def _grok_bot_usage_from_bridge(payload):
     if not isinstance(payload, dict) or payload.get("usageFetched") is not True:
         return None
@@ -8024,20 +8005,14 @@ def fetch_grok_bot_quota(session=None):
     native_fallback = None if _IS_WINDOWS else _latest_cached_provider_quota(
         "grok_bot", _PROVIDER_QUOTA_FALLBACK_TTL, stale=True) \
         or _grok_bot_usage_only_fallback()
+    if not _IS_WINDOWS and os.environ.get("TOKEI_GROK_BOT_HELPER_BLOCKED") == "1":
+        return native_fallback
     if session is None:
         account_id = _grok_bot_active_account_id()
         authorization_generation = _grok_bot_authorization_generation()
-        if account_id and authorization_generation is None:
-            repair_marker = _provider_credential_marker(
-                "grok-bot-auth-repair-v1", account_id)
-            recent_repair = _provider_quota_recent_attempt_result(
-                "grok_bot_auth", repair_marker, _PROVIDER_QUOTA_TTL)
-            if recent_repair is None:
-                if _grok_bot_repair_authorization_marker():
-                    authorization_generation = _grok_bot_authorization_generation()
-                else:
-                    _save_provider_quota_attempt(
-                        "grok_bot_auth", repair_marker, result="failed")
+        if sys.platform == "darwin" and (not account_id or authorization_generation is None):
+            # 授权标记缺失时仅展示历史缓存；由用户在设置中主动授权，后台不试探钥匙串。
+            return native_fallback
         if account_id and authorization_generation is not None:
             native_marker = _provider_credential_marker(
                 "grok-bot-account-v1", account_id, authorization_generation)
@@ -8077,6 +8052,9 @@ def fetch_grok_bot_quota(session=None):
                             "grok_bot", native_marker, result="empty")
                         return {}
                 _save_provider_quota_attempt("grok_bot", native_marker)
+
+        if sys.platform == "darwin":
+            return native_fallback  # 自身助手失效时不转而访问其他应用的钥匙串。
 
     if _IS_WINDOWS:
         # 查询 Grok Bot 自身账号；没有授权时不借用其他应用的账号。

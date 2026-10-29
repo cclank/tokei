@@ -119,16 +119,22 @@ final class LaunchAgentLoginItemService: LoginItemServicing {
     }
 
     private static func runLaunchctl(arguments: [String]) -> CommandResult {
+        runCommand(executableURL: URL(fileURLWithPath: "/bin/launchctl"), arguments: arguments)
+    }
+
+    static func runCommand(executableURL: URL, arguments: [String]) -> CommandResult {
         let process = Process()
         let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = pipe
         process.standardError = pipe
         do {
             try process.run()
-            process.waitUntilExit()
+            // Drain while the child is running: waiting first can fill the pipe
+            // and deadlock both startup and the settings view on the main thread.
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
             let output = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return (process.terminationStatus, output)

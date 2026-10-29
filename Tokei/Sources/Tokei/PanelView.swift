@@ -186,8 +186,6 @@ struct PanelView: View {
                 if mode == .projects {
                     projectPanelContent
                         .frame(width: w, height: projectPanelHeight)
-                        .background(Theme.bg)
-                        .background(VisualEffect())
                         .environment(\.colorScheme, .dark)
                         .id(appLanguage)
                 } else {
@@ -200,8 +198,6 @@ struct PanelView: View {
                     }
                         .frame(width: w)
                         .frame(maxHeight: maxPanelHeight)
-                        .background(Theme.bg)
-                        .background(VisualEffect())
                         .environment(\.colorScheme, .dark)
                 }
             } else {
@@ -210,8 +206,6 @@ struct PanelView: View {
                     .frame(width: w, alignment: .top)
                     // 量自然高度时不要让页脚 Spacer 和卡片撑满探针的高度提案。
                     .fixedSize(horizontal: false, vertical: true)
-                    .background(Theme.bg)
-                    .background(VisualEffect())
                     .environment(\.colorScheme, .dark)
             }
         }
@@ -221,7 +215,22 @@ struct PanelView: View {
             alignment: .top
         )
         .background {
-            if scrollable { Theme.bg }
+            if scrollable {
+                // Leave the top edge on the native popover material, shared with
+                // its arrow, then blend into the existing tinted panel background.
+                Theme.bg
+                    .background(VisualEffect())
+                    .mask(alignment: .top) {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black],
+                                           startPoint: .top, endPoint: .bottom)
+                                .frame(height: 24)
+                            Color.black
+                        }
+                    }
+            } else {
+                Theme.bg.background(VisualEffect())
+            }
         }
         // 换到宽度不同的页面时，由 App 按新页面重新摆放弹窗（issue #105）。
         .onChange(of: mode) { next in

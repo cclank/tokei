@@ -208,6 +208,8 @@ struct PanelView: View {
                 panelContent
                     .id(appLanguage)
                     .frame(width: w, alignment: .top)
+                    // 量自然高度时不要让页脚 Spacer 和卡片撑满探针的高度提案。
+                    .fixedSize(horizontal: false, vertical: true)
                     .background(Theme.bg)
                     .background(VisualEffect())
                     .environment(\.colorScheme, .dark)

@@ -1081,6 +1081,193 @@ struct GrokBotStat: Codable {
     }
 }
 
+/// Cached Agent conversations only. Token, model, cost and timing data are unavailable.
+struct DoubaoWorkRange: Codable, Equatable {
+    var sessions: Int = 0
+    /// nil preserves the uncertainty of older snapshots without conversation identities.
+    var session_ids: [String]?
+
+    init(sessions: Int = 0, session_ids: [String]? = nil) {
+        self.sessions = max(0, sessions)
+        if let ids = session_ids, ids.allSatisfy({ id in
+            id.utf8.count == 64 && id.utf8.allSatisfy {
+                (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0)
+            }
+        }) {
+            self.session_ids = Array(Set(ids.map { $0.lowercased() })).sorted()
+        } else {
+            self.session_ids = nil
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sessions: (try? c.decodeIfPresent(Int.self, forKey: .sessions)) ?? 0,
+            session_ids: try? c.decodeIfPresent([String].self, forKey: .session_ids)
+        )
+    }
+
+    private var completeIDs: Set<String>? {
+        if sessions == 0 && (session_ids?.isEmpty ?? true) { return [] }
+        guard let session_ids, session_ids.count == sessions else { return nil }
+        return Set(session_ids)
+    }
+
+    func merged(with other: DoubaoWorkRange) -> DoubaoWorkRange {
+        guard let left = completeIDs, let right = other.completeIDs else {
+            // Cloud caches overlap; missing or inconsistent IDs cannot safely be added.
+            return DoubaoWorkRange(sessions: max(sessions, other.sessions))
+        }
+        let ids = left.union(right)
+        return DoubaoWorkRange(sessions: ids.count, session_ids: Array(ids))
+    }
+}
+
+struct DoubaoWorkRanges: Codable {
+    var today = DoubaoWorkRange()
+    var yesterday = DoubaoWorkRange()
+    var week = DoubaoWorkRange()
+    var last_week = DoubaoWorkRange()
+    var month = DoubaoWorkRange()
+    var year = DoubaoWorkRange()
+    var all: DoubaoWorkRange?
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        today = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .today)) ?? .init()
+        yesterday = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .yesterday)) ?? .init()
+        week = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .week)) ?? .init()
+        last_week = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .last_week)) ?? .init()
+        month = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .month)) ?? .init()
+        year = (try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .year)) ?? .init()
+        all = try? c.decodeIfPresent(DoubaoWorkRange.self, forKey: .all)
+    }
+
+    func get(_ key: RangeKey) -> DoubaoWorkRange {
+        switch key {
+        case .today: return today
+        case .yesterday: return yesterday
+        case .week: return week
+        case .lastWeek: return last_week
+        case .month: return month
+        case .year: return year
+        case .all: return all ?? year
+        }
+    }
+
+    mutating func set(_ key: RangeKey, _ value: DoubaoWorkRange) {
+        switch key {
+        case .today: today = value
+        case .yesterday: yesterday = value
+        case .week: week = value
+        case .lastWeek: last_week = value
+        case .month: month = value
+        case .year: year = value
+        case .all: all = value
+        }
+    }
+}
+
+struct DoubaoWorkQuotaWindow: Codable, Equatable {
+    let window_type: Int
+    let used_percent: Double
+    let start_time_ms: Int64
+    let end_time_ms: Int64
+    let less_than_one_percent: Bool
+
+    var isValid: Bool {
+        [1, 2].contains(window_type) && used_percent.isFinite && (0...100).contains(used_percent)
+            && start_time_ms >= 0 && end_time_ms >= 0 && end_time_ms <= 32_503_680_000_000
+            && (end_time_ms == 0 || end_time_ms >= start_time_ms)
+    }
+    var remaining: Double { 100 - used_percent }
+    var label: String { window_type == 1 ? L("当前时段额度") : L("7 天额度") }
+    var reset: Int? { end_time_ms > 0 ? Int(end_time_ms / 1000) : nil }
+    func hasReset(now: Date = Date()) -> Bool {
+        reset.map { $0 <= Int(now.timeIntervalSince1970) } ?? false
+    }
+}
+
+struct DoubaoWorkQuota: Codable {
+    var version = 1
+    var status: String
+    var updated: Int?
+    var windows: [DoubaoWorkQuotaWindow]
+
+    init(status: String, updated: Int? = nil, windows: [DoubaoWorkQuotaWindow] = []) {
+        self.status = status
+        self.updated = updated
+        self.windows = windows
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        status = try c.decode(String.self, forKey: .status)
+        updated = try c.decodeIfPresent(Int.self, forKey: .updated)
+        windows = try c.decodeIfPresent([DoubaoWorkQuotaWindow].self, forKey: .windows) ?? []
+        guard version == 1, ["connected", "login_required", "unavailable"].contains(status),
+              windows.count <= 2, windows.allSatisfy(\.isValid),
+              Set(windows.map(\.window_type)).count == windows.count,
+              status != "connected" || (!windows.isEmpty && (updated ?? 0) > 0) else {
+            throw DecodingError.dataCorruptedError(forKey: .windows, in: c,
+                debugDescription: "Invalid Doubao quota snapshot")
+        }
+    }
+
+    func isFresh(now: Date = Date()) -> Bool {
+        guard status == "connected", let updated else { return false }
+        return (-300...1800).contains(Int(now.timeIntervalSince1970) - updated)
+    }
+
+    var summary: String? {
+        guard isFresh() else { return nil }
+        let rows = windows.filter { !$0.hasReset() }.sorted { $0.window_type < $1.window_type }
+        guard !rows.isEmpty else { return nil }
+        return rows.map { window in
+            window.less_than_one_percent
+                ? "\(window.label) · \(L("已用 <1%"))"
+                : "\(window.label) · \(L("剩余")) \(String(format: "%g%%", window.remaining))"
+        }.joined(separator: " · ")
+    }
+}
+
+struct DoubaoWorkStat: Codable {
+    var ranges = DoubaoWorkRanges()
+    var source: String?
+    var updated: Int?
+    var quota: DoubaoWorkQuota?
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ranges = (try? c.decodeIfPresent(DoubaoWorkRanges.self, forKey: .ranges)) ?? .init()
+        source = try? c.decodeIfPresent(String.self, forKey: .source)
+        updated = try? c.decodeIfPresent(Int.self, forKey: .updated)
+        quota = try? c.decodeIfPresent(DoubaoWorkQuota.self, forKey: .quota)
+    }
+
+    /// Detection uses the displayed snapshot; the selected period may legitimately be zero.
+    var hasActivity: Bool {
+        RangeKey.allCases.contains { ranges.get($0).sessions > 0 } || !(quota?.windows.isEmpty ?? true)
+    }
+
+    static func activityLabel(for range: RangeKey) -> String {
+        range == .all ? L("累计会话") : L("%@ 新建会话", range.label)
+    }
+
+    static var sourceCaption: String { L("仅统计已缓存的 Agent 会话，未提供 Token 用量") }
+    var displaySourceCaption: String {
+        quota?.windows.isEmpty == false
+            ? L("账号额度来自豆包官网；会话数来自本机缓存，未提供 Token 用量")
+            : Self.sourceCaption
+    }
+}
+
 /// Devin 的两个来源互不相干：`ranges` 来自 CLI 自己的会话库，
 /// `quota` 来自桌面端启动时写下的那一行套餐缓存。
 struct DevinStat: Codable {
@@ -1166,6 +1353,7 @@ struct Usage: Codable {
     @Boxed var gemini: GeminiStat
     @Boxed var grok: GrokStat
     @Boxed var grokBot: GrokBotStat
+    @Boxed var doubaoWork: DoubaoWorkStat
     @Boxed var qoderwork: QoderStat
     @Boxed var qoder: QoderIdeStat
     @Boxed var qodercli: QoderStat
@@ -1198,6 +1386,7 @@ struct Usage: Codable {
 
     enum CodingKeys: String, CodingKey {
         case claude, codex, gemini, grok, grokBot = "grok_bot"
+        case doubaoWork = "doubaowork"
         case qoder, qoderwork, qodercli, qodercliCN = "qodercli_cn", hermes, zcode, mimocode
         case openclaw, pi, workbuddy, workbuddyAI = "workbuddy_ai"
         case codebuddy
@@ -1212,6 +1401,7 @@ struct Usage: Codable {
         gemini = try c.decode(GeminiStat.self, forKey: .gemini)
         grok = try c.decode(GrokStat.self, forKey: .grok)
         grokBot = try c.decodeIfPresent(GrokBotStat.self, forKey: .grokBot) ?? .empty
+        doubaoWork = (try? c.decodeIfPresent(DoubaoWorkStat.self, forKey: .doubaoWork)) ?? .init()
         qoderwork = (try? c.decodeIfPresent(QoderStat.self, forKey: .qoderwork))
             ?? QoderStat(ranges: .empty, model: nil)
         qoder = (try? c.decodeIfPresent(QoderIdeStat.self, forKey: .qoder))

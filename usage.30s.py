@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=9
+# TOKEI_COLLECTOR_REVISION=11
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -26,6 +26,8 @@
 #   Grok Bot:    ~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob
 #                (本地会话活动；当前快照不含 Token / 模型 / 成本)
 #                额度默认关闭；授权后由 Tokei 原生 helper 临时读取 Keychain 登录态
+#   Doubao Work: Application Support / APPDATA / DoubaoWork 的 IndexedDB 缓存
+#                (只统计已缓存的 Agent 新建会话，不估算 Token / 成本 / 速率)
 #   DeepSeek:    ~/.dsh/sessions/**/*.jsonl.zstd (由 App 原生解压后增量扫描)
 #   Qwen Code:   ~/.qwen/usage/token-usage-*.jsonl (逐请求,usage_record.jsonl 补历史)
 #   Kimi Code:   ${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl
@@ -45,6 +47,7 @@ import json
 import math
 import re
 import sqlite3
+import struct
 import subprocess
 import threading
 from datetime import datetime, timedelta, date, timezone
@@ -167,6 +170,12 @@ GROK_BOT_DIRS = _path_candidates(
                  "sand-client-persistence"),
     os.path.join(APPDATA, "Grok Bot", "sand-client-persistence"),
     os.path.join(HOME, ".config", "Grok Bot", "sand-client-persistence"))
+DOUBAOWORK_DIRS = _path_candidates(
+    "TOKEI_DOUBAOWORK_DIR",
+    os.path.join(HOME, "Library", "Application Support", "DoubaoWork"),
+    os.path.join(APPDATA, "DoubaoWork"),
+    os.path.join(LOCALAPPDATA, "DoubaoWork"),
+    os.path.join(LOCALAPPDATA, "DoubaoWork", "User Data"))
 GROK_BOT_SECRET_PATHS = _path_candidates(
     "TOKEI_GROK_BOT_SECRETS",
     os.path.join(HOME, "Library", "Application Support", "Grok Bot",
@@ -12544,6 +12553,668 @@ def scan_grok_bot(bounds, cache):
     return {"ranges": ranges}
 
 
+# ---------- Doubao Work (read-only Chromium conversation cache) ----------
+# Doubao Work 2.34 stores Agent conversation metadata in IndexedDB. Its current
+# cache does not expose billable tokens or generation timing. Count only dated
+# Agent conversations; never turn cache sizes, model-item keys or task duration
+# into tokens, model names or throughput. This bounded reader uses only stdlib,
+# opens no database for writing, and never reads Cookies, Login Data or Keychain.
+_DOUBAOWORK_CACHE_VERSION = 2
+_DOUBAOWORK_MAX_FILE = 64 * 1024 * 1024
+_DOUBAOWORK_MAX_VALUE = 16 * 1024 * 1024
+
+
+class _DoubaoDataError(ValueError):
+    pass
+
+
+class _DoubaoBytes:
+    def __init__(self, data):
+        self.data, self.pos = data, 0
+
+    def take(self, size):
+        if size < 0 or self.pos + size > len(self.data):
+            raise _DoubaoDataError("truncated cache value")
+        start = self.pos
+        self.pos += size
+        return self.data[start:self.pos]
+
+    def varint(self):
+        value = 0
+        for shift in range(0, 70, 7):
+            byte = self.take(1)[0]
+            value |= (byte & 127) << shift
+            if not byte & 128:
+                if value > (1 << 64) - 1:
+                    break
+                return value
+        raise _DoubaoDataError("oversized cache integer")
+
+    def sized(self):
+        size = self.varint()
+        if size > _DOUBAOWORK_MAX_VALUE:
+            raise _DoubaoDataError("oversized cache value")
+        return self.take(size)
+
+
+def _doubao_snappy(data):
+    """Raw Snappy block, with bounded output and overlapping-copy handling."""
+    reader = _DoubaoBytes(data)
+    expected = reader.varint()
+    if expected > _DOUBAOWORK_MAX_VALUE:
+        raise _DoubaoDataError("oversized compressed cache")
+    out = bytearray()
+    while reader.pos < len(data):
+        tag = reader.take(1)[0]
+        kind, length = tag & 3, tag >> 2
+        if kind == 0:
+            length = length + 1 if length < 60 else int.from_bytes(reader.take(length - 59), "little") + 1
+            if len(out) + length > expected:
+                raise _DoubaoDataError("invalid Snappy literal")
+            out.extend(reader.take(length))
+            continue
+        if kind == 1:
+            offset = ((tag & 224) << 3) | reader.take(1)[0]
+            length = 4 + ((tag >> 2) & 7)
+        else:
+            offset = int.from_bytes(reader.take(2 if kind == 2 else 4), "little")
+            length += 1
+        if not 0 < offset <= len(out) or len(out) + length > expected:
+            raise _DoubaoDataError("invalid Snappy copy")
+        start = len(out) - offset
+        pattern = out[start:start + min(length, offset)]
+        out.extend((pattern * ((length + len(pattern) - 1) // len(pattern)))[:length])
+    if len(out) != expected:
+        raise _DoubaoDataError("incomplete Snappy block")
+    return bytes(out)
+
+
+_DOUBAOWORK_CRC_TABLE = None
+
+
+def _doubao_crc(data):
+    """LevelDB's masked CRC32C (Castagnoli), independent of platform libraries."""
+    global _DOUBAOWORK_CRC_TABLE
+    if _DOUBAOWORK_CRC_TABLE is None:
+        table = []
+        for value in range(256):
+            for _ in range(8):
+                value = (value >> 1) ^ (0x82F63B78 if value & 1 else 0)
+            table.append(value)
+        _DOUBAOWORK_CRC_TABLE = table
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc = _DOUBAOWORK_CRC_TABLE[(crc ^ byte) & 255] ^ (crc >> 8)
+    crc ^= 0xFFFFFFFF
+    return (((crc >> 15) | (crc << 17)) + 0xA282EAD8) & 0xFFFFFFFF
+
+
+def _doubao_log_records(data):
+    """Verified complete WAL/manifest records; ignore an unfinished live tail."""
+    pos, fragments = 0, None
+    while pos + 7 <= len(data):
+        remaining = 32768 - pos % 32768
+        if remaining < 7:
+            pos += remaining
+            continue
+        checksum, size, kind = struct.unpack_from("<IHB", data, pos)
+        if checksum == size == kind == 0:
+            # Zero padding is permitted at block boundaries, never as a bridge
+            # between fragments of a committed logical record.
+            if fragments is not None:
+                raise _DoubaoDataError("broken WAL fragments")
+            pos += remaining
+            continue
+        if size > remaining - 7:
+            raise _DoubaoDataError("WAL record crosses block")
+        if pos + 7 + size > len(data):
+            break
+        payload = data[pos + 7:pos + 7 + size]
+        if _doubao_crc(bytes([kind]) + payload) != checksum:
+            raise _DoubaoDataError("cache WAL checksum mismatch")
+        pos += 7 + size
+        if kind == 1:
+            if fragments is not None:
+                raise _DoubaoDataError("unfinished WAL fragments")
+            yield payload
+        elif kind == 2:
+            if fragments is not None:
+                raise _DoubaoDataError("nested WAL fragments")
+            fragments = bytearray(payload)
+        elif kind in (3, 4) and fragments is not None:
+            if len(fragments) + size > _DOUBAOWORK_MAX_VALUE:
+                raise _DoubaoDataError("oversized WAL record")
+            fragments.extend(payload)
+            if kind == 4:
+                yield bytes(fragments)
+                fragments = None
+        else:
+            raise _DoubaoDataError("unsupported WAL record")
+
+
+def _doubao_block_entries(data):
+    if len(data) < 4:
+        raise _DoubaoDataError("short table block")
+    count = struct.unpack_from("<I", data, len(data) - 4)[0]
+    end = len(data) - 4 * (count + 1)
+    if not count or end < 0:
+        raise _DoubaoDataError("invalid table restarts")
+    restarts = struct.unpack_from(f"<{count}I", data, end)
+    if restarts[0] != 0 or any(a >= b for a, b in zip(restarts, restarts[1:])) or restarts[-1] > end:
+        raise _DoubaoDataError("invalid table restart offset")
+    reader, previous = _DoubaoBytes(data[:end]), b""
+    while reader.pos < end:
+        shared, length, size = reader.varint(), reader.varint(), reader.varint()
+        if shared > len(previous) or shared + length > _DOUBAOWORK_MAX_VALUE or size > _DOUBAOWORK_MAX_VALUE:
+            raise _DoubaoDataError("invalid table entry")
+        key = previous[:shared] + reader.take(length)
+        yield key, reader.take(size)
+        previous = key
+
+
+def _doubao_table_records(data):
+    if len(data) < 48 or struct.unpack_from("<Q", data, len(data) - 8)[0] != 0xDB4775248B80FB57:
+        raise _DoubaoDataError("invalid table footer")
+    footer = _DoubaoBytes(data[-48:-8])
+    footer.varint(), footer.varint()  # metaindex handle; no values live there
+    index_offset, index_size = footer.varint(), footer.varint()
+
+    def block(offset, size):
+        if size > _DOUBAOWORK_MAX_VALUE or offset + size + 5 > len(data) - 48:
+            raise _DoubaoDataError("invalid table block handle")
+        raw = data[offset:offset + size]
+        compression = data[offset + size]
+        checksum = struct.unpack_from("<I", data, offset + size + 1)[0]
+        if checksum != _doubao_crc(raw + bytes([compression])):
+            raise _DoubaoDataError("cache table checksum mismatch")
+        if compression not in (0, 1):
+            raise _DoubaoDataError("unsupported table compression")
+        return _doubao_snappy(raw) if compression == 1 else raw
+
+    seen = set()
+    for _, handle in _doubao_block_entries(block(index_offset, index_size)):
+        reader = _DoubaoBytes(handle)
+        offset, size = reader.varint(), reader.varint()
+        if reader.pos != len(handle) or (offset, size) in seen:
+            raise _DoubaoDataError("invalid repeated table block")
+        seen.add((offset, size))
+        for key, value in _doubao_block_entries(block(offset, size)):
+            if len(key) < 8:
+                raise _DoubaoDataError("invalid internal table key")
+            sequence = struct.unpack_from("<Q", key, len(key) - 8)[0]
+            if sequence & 255 not in (0, 1):
+                raise _DoubaoDataError("unsupported internal key type")
+            yield key[:-8], sequence >> 8, sequence & 255, value
+
+
+def _doubao_batch_records(data):
+    if len(data) < 12:
+        raise _DoubaoDataError("short cache write batch")
+    reader = _DoubaoBytes(data)
+    sequence, count = struct.unpack("<QI", reader.take(12))
+    if count > 200000 or sequence + count >= 1 << 56:
+        raise _DoubaoDataError("oversized cache write batch")
+    rows = []
+    for i in range(count):
+        kind = reader.take(1)[0]
+        if kind not in (0, 1):
+            raise _DoubaoDataError("unsupported cache mutation")
+        key = reader.sized()
+        rows.append((key, sequence + i, kind, reader.sized() if kind else b""))
+    if reader.pos != len(data):
+        raise _DoubaoDataError("invalid write batch length")
+    return rows
+
+
+def _doubao_read_file(path, limit=_DOUBAOWORK_MAX_FILE):
+    with open(path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise _DoubaoDataError("cache file exceeds read budget")
+    return data
+
+
+def _doubao_child(root, name):
+    root = os.path.realpath(root)
+    path = os.path.join(root, name)
+    if os.path.commonpath((root, os.path.realpath(path))) != root:
+        raise _DoubaoDataError("cache file outside selected directory")
+    return path
+
+
+def _doubao_db_plan(root):
+    """Only the active manifest's files count; obsolete SSTs can contain deletions."""
+    root = os.path.realpath(root)
+    current = _doubao_read_file(_doubao_child(root, "CURRENT"), 128).decode("ascii").strip()
+    if not re.fullmatch(r"MANIFEST-\d+", current):
+        raise _DoubaoDataError("invalid cache manifest name")
+    manifest = _doubao_child(root, current)
+    active, log_number, previous_log = set(), None, 0
+    for edit in _doubao_log_records(_doubao_read_file(manifest, 8 * 1024 * 1024)):
+        reader = _DoubaoBytes(edit)
+        while reader.pos < len(edit):
+            tag = reader.varint()
+            if tag == 1:
+                if reader.sized() not in (b"idb_cmp1", b"leveldb.BytewiseComparator"):
+                    raise _DoubaoDataError("unsupported cache comparator")
+            elif tag == 2:
+                log_number = reader.varint()
+            elif tag in (3, 4):
+                reader.varint()
+            elif tag == 5:
+                reader.varint(), reader.sized()
+            elif tag == 6:
+                reader.varint()
+                active.discard(reader.varint())
+            elif tag == 7:
+                reader.varint()
+                number = reader.varint()
+                reader.varint(), reader.sized(), reader.sized()
+                active.add(number)
+            elif tag == 9:
+                previous_log = reader.varint()
+            else:
+                raise _DoubaoDataError("unsupported manifest edit")
+    if log_number is None or len(active) > 512:
+        raise _DoubaoDataError("incomplete cache manifest")
+    files = []
+    for number in sorted(active):
+        name = f"{number:06d}.ldb"
+        if not os.path.isfile(_doubao_child(root, name)):
+            name = f"{number:06d}.sst"
+        files.append(_doubao_child(root, name))
+    # A live rotation may create the next WAL before publishing its manifest edit.
+    for name in sorted(os.listdir(root)):
+        if re.fullmatch(r"\d+\.log", name) and (int(name[:-4]) >= log_number or int(name[:-4]) == previous_log):
+            files.append(_doubao_child(root, name))
+    total, signature = 0, []
+    for path in [manifest, *files]:
+        st = os.stat(path)
+        total += st.st_size
+        signature.append([os.path.basename(path), st.st_mtime_ns, st.st_size])
+    if len(files) > 1024 or total > 128 * 1024 * 1024:
+        raise _DoubaoDataError("cache exceeds total read budget")
+    return files, signature
+
+
+def _doubao_key_prefix(key):
+    if not key:
+        return None
+    lengths = ((key[0] >> 5) + 1, ((key[0] >> 2) & 7) + 1, (key[0] & 3) + 1)
+    if len(key) <= 1 + sum(lengths):
+        return None
+    pos, ids = 1, []
+    for size in lengths:
+        ids.append(int.from_bytes(key[pos:pos + size], "little"))
+        pos += size
+    return ids, pos, lengths[2]
+
+
+def _doubao_object_store_key(key, indexes=(1,)):
+    prefix = _doubao_key_prefix(key)
+    return bool(prefix and prefix[0][0] > 0 and prefix[0][1] > 0 and prefix[0][2] in indexes)
+
+
+def _doubao_resolve_value(root, key, value, latest, blob_paths=None):
+    root = os.path.realpath(root)
+    reader = _DoubaoBytes(value)
+    reader.varint()
+    if reader.take(3) != b"\xff\x11\x01":
+        return value
+    size, slot = reader.varint(), reader.varint()
+    if size > _DOUBAOWORK_MAX_VALUE or slot > 1024 or reader.pos != len(value):
+        raise _DoubaoDataError("invalid external cache wrapper")
+    ids, end, index_length = _doubao_key_prefix(key)
+    blob_key = key[:end - index_length] + (3).to_bytes(index_length, "little") + key[end:]
+    reference = latest.get(blob_key)
+    if not reference or not reference[1]:
+        raise _DoubaoDataError("missing external cache reference")
+    external = _DoubaoBytes(reference[2])
+    for i in range(slot + 1):
+        # Only IndexedDB's serialized-value blobs are relevant. Never open
+        # external user Files or filesystem access handles from another store.
+        if external.take(1) != b"\x00":
+            raise _DoubaoDataError("unsupported external cache object")
+        number = external.varint()
+        mime_length = external.varint()
+        if mime_length > 4096:
+            raise _DoubaoDataError("oversized external MIME type")
+        external.take(mime_length * 2)  # IndexedDB uses UTF-16BE here.
+        declared = external.varint()
+    if declared != size:
+        raise _DoubaoDataError("external cache size mismatch")
+    blob_root = root[:-8] + ".blob" if root.endswith(".leveldb") else root + ".blob"
+    parent = os.path.dirname(root)
+    if os.path.commonpath((parent, os.path.realpath(blob_root))) != parent:
+        raise _DoubaoDataError("external cache outside selected profile")
+    path = _doubao_child(os.path.realpath(blob_root), f"{ids[0]:x}/{(number & 0xff00) >> 8:02x}/{number:x}")
+    if blob_paths is not None:
+        blob_paths.add(path)
+    payload = _doubao_read_file(path, _DOUBAOWORK_MAX_VALUE)
+    if len(payload) != size:
+        raise _DoubaoDataError("external cache is incomplete")
+    return b"\x00" + payload  # Supply the record-version prefix for the decoder.
+
+
+def _doubao_v8_value(data):
+    """The JSON-like subset used by conversation caches, with V8 reference IDs.
+
+    Unknown host objects and future envelopes are deliberately
+    ignored. A saved conversation's statistics survive such a format change.
+    """
+    reader = _DoubaoBytes(data)
+    reader.varint()  # IndexedDB record version
+    payload = data[reader.pos:]
+    if payload.startswith(b"\xff\x11\x02"):
+        payload = _doubao_snappy(payload[3:])
+    reader = _DoubaoBytes(payload)
+    if reader.take(1) != b"\xff":
+        raise _DoubaoDataError("missing Blink envelope")
+    version = reader.varint()
+    if not 16 <= version <= 21:
+        raise _DoubaoDataError("unsupported Blink envelope")
+    end = len(payload)
+    if version >= 21:
+        if reader.take(1) != b"\xfe":
+            raise _DoubaoDataError("missing Blink trailer header")
+        offset, size = struct.unpack(">QI", reader.take(12))
+        if offset or size:
+            if offset < reader.pos or offset + size != len(payload):
+                raise _DoubaoDataError("invalid Blink trailer")
+            end = offset
+    if reader.take(1) != b"\xff" or reader.varint() not in (13, 14, 15):
+        raise _DoubaoDataError("unsupported V8 envelope")
+    reader.data = payload[:end]
+    refs, remaining = [], [200000]
+
+    def value(depth=0):
+        remaining[0] -= 1
+        if depth > 64 or remaining[0] < 0:
+            raise _DoubaoDataError("cache object exceeds decode budget")
+        tag = reader.take(1)
+        while tag in (b"\x00", b"?"):
+            if tag == b"?":
+                reader.varint()
+            tag = reader.take(1)
+        if tag in (b"-", b"_", b"0"):
+            return None
+        if tag in (b"T", b"F", b"y", b"x"):
+            result = tag in (b"T", b"y")
+            if tag in (b"y", b"x"):
+                refs.append(result)
+            return result
+        if tag in (b"I", b"U"):
+            number = reader.varint()
+            if number > 0xFFFFFFFF:
+                raise _DoubaoDataError("invalid V8 integer")
+            return (number >> 1) ^ -(number & 1) if tag == b"I" else number
+        if tag in (b"N", b"D", b"n"):
+            number = struct.unpack("<d", reader.take(8))[0]
+            if tag in (b"D", b"n"):
+                refs.append(number)
+            return number
+        if tag in (b'S', b'"', b'c'):
+            encoding = {b'S': "utf-8", b'"': "latin-1", b'c': "utf-16-le"}[tag]
+            return reader.sized().decode(encoding)
+        if tag == b"^":
+            index = reader.varint()
+            if index >= len(refs):
+                raise _DoubaoDataError("invalid V8 reference")
+            return refs[index]
+        if tag not in (b"o", b"A", b"a"):
+            raise _DoubaoDataError("unsupported V8 object")
+        array = tag != b"o"
+        length = reader.varint() if array else 0
+        if length > 100000:
+            raise _DoubaoDataError("oversized V8 array")
+        result = [None] * length if array else {}
+        refs.append(result)
+        if tag == b"A":
+            for index in range(length):
+                result[index] = value(depth + 1)
+        terminator = {b"o": b"{", b"A": b"$", b"a": b"@"}[tag]
+        properties = 0
+        while True:
+            # Padding may precede the end marker of an object or array.
+            while reader.pos < len(reader.data) and reader.data[reader.pos] == 0:
+                reader.pos += 1
+            if reader.pos >= len(reader.data):
+                raise _DoubaoDataError("unfinished V8 object")
+            if reader.data[reader.pos:reader.pos + 1] == terminator:
+                reader.pos += 1
+                break
+            key, item = value(depth + 1), value(depth + 1)
+            if not isinstance(key, (str, int)) or isinstance(key, bool):
+                raise _DoubaoDataError("invalid V8 property")
+            if array:
+                if (isinstance(key, int) or (isinstance(key, str) and key.isdecimal())) and 0 <= int(key) < length:
+                    result[int(key)] = item
+            else:
+                result[key] = item
+            properties += 1
+        if reader.varint() != properties or (array and reader.varint() != length):
+            raise _DoubaoDataError("invalid V8 property count")
+        return result
+
+    result = value()
+    if reader.pos != len(reader.data):
+        raise _DoubaoDataError("unexpected V8 tail")
+    return result
+
+
+def _doubao_conversations(root):
+    """Keep only hashed identity and real timestamps; discard titles/chat text."""
+    if not isinstance(root, dict) or not isinstance(root.get("data"), dict):
+        return []
+    uid, rows = root.get("uid"), root["data"].get("conversations")
+    if not isinstance(uid, str) or not uid or uid == "UnLoggedUser" or not isinstance(rows, list):
+        return []
+    result = []
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("conversation_type")) != "3":
+            continue
+        extra = row.get("extra")
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra)
+            except (ValueError, TypeError):
+                continue
+        sid = row.get("conversation_id")
+        if not isinstance(extra, dict) or str(extra.get("agent_mode_last_used")) != "1" or not isinstance(sid, str) or not sid:
+            continue
+
+        def timestamp(raw):
+            if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+                return None
+            try:
+                number = float(raw)
+                # The observed API uses seconds. Do not guess dates from IDs,
+                # filesystem mtimes, task durations or invalid/missing fields.
+                if math.isfinite(number) and 1735689600 <= number <= datetime.now().timestamp() + 300:
+                    return int(number)
+            except (ValueError, OverflowError):
+                pass
+            return None
+
+        created = timestamp(row.get("create_time"))
+        if created is None:
+            continue
+        identity = hashlib.sha256(json.dumps([uid, sid], separators=(",", ":")).encode("utf-8")).hexdigest()
+        item = {"id": identity, "created": created}
+        updated = timestamp(row.get("update_time"))
+        if updated is not None and updated >= created:
+            item["updated"] = updated
+        result.append(item)
+    return result
+
+
+def _doubao_blob_signatures(paths):
+    signatures = []
+    for path in sorted(paths):
+        try:
+            st = os.stat(path)
+            signatures.append([path, st.st_mtime_ns, st.st_size])
+        except OSError:
+            signatures.append([path, None, None])
+    return signatures
+
+
+def _doubao_read_db(root, files, blob_paths=None):
+    latest = {}
+    for path in files:
+        data = _doubao_read_file(path)
+        records = (row for batch in _doubao_log_records(data) for row in _doubao_batch_records(batch)) \
+            if path.endswith(".log") else _doubao_table_records(data)
+        for key, sequence, kind, value in records:
+            if _doubao_object_store_key(key, (1, 3)) and (key not in latest or sequence > latest[key][0]):
+                latest[key] = (sequence, kind, value)
+        if len(latest) > 200000:
+            raise _DoubaoDataError("cache has too many records")
+    rows = {}
+    for key, (_, kind, value) in latest.items():
+        if not kind or not _doubao_object_store_key(key):
+            continue
+        try:
+            parsed = _doubao_conversations(_doubao_v8_value(_doubao_resolve_value(root, key, value, latest, blob_paths)))
+        except (OSError, ValueError, UnicodeError, struct.error, RecursionError):
+            # Unrelated stores can contain unsupported host objects or missing
+            # blobs. Their state must not discard valid conversation records.
+            continue
+        for item in parsed:
+            previous = rows.get(item["id"])
+            if previous is None or item.get("updated", 0) > previous.get("updated", 0):
+                rows[item["id"]] = item
+    return sorted(rows.values(), key=lambda row: row["id"])
+
+
+def _doubao_databases():
+    databases = []
+    for root in _existing_dirs(DOUBAOWORK_DIRS):
+        if os.path.isfile(os.path.join(root, "CURRENT")):
+            databases.append(root)  # Explicit override can point at one DB.
+            continue
+        indexed_dirs = [os.path.join(root, "IndexedDB"), os.path.join(root, "Default", "IndexedDB")]
+        indexed_dirs.extend(os.path.join(path, "IndexedDB") for path in sorted(glob.glob(os.path.join(root, "Profile *")))[:16])
+        for indexed in indexed_dirs:
+            for app in ("chat", "launcher"):
+                path = os.path.join(indexed, f"chrome_doubaowork-{app}_0.indexeddb.leveldb")
+                if os.path.isdir(path) and os.path.commonpath((root, os.path.realpath(path))) == root:
+                    databases.append(path)
+    return _existing_dirs(databases)
+
+
+def _empty_doubaowork():
+    return {"ranges": {key: {"sessions": 0, "session_ids": []} for key in RANGE_KEYS},
+            "source": "doubaowork-local-cache"}
+
+
+def _doubaowork_quota_cache(now=None):
+    """Read only Tokei's projected quota cache; never browser credentials or APIs."""
+    if _tokei_config().get("doubaowork_quota_enabled") is not True:
+        return None
+    try:
+        path = os.path.join(_USER_DIR, "doubaowork_quota_cache.json")
+        with open(path, "rb") as handle:
+            data = handle.read(65537)
+        if len(data) > 65536:
+            return None
+        value = json.loads(data)
+        if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+            return None
+        status = value.get("status")
+        if status not in ("connected", "login_required", "unavailable"):
+            return None
+        updated = value.get("updated")
+        current = int(_time.time() if now is None else now)
+        if updated is not None and (type(updated) is not int or updated <= 0 or updated > current + 300):
+            return None
+        windows = value.get("windows", [])
+        if not isinstance(windows, list) or len(windows) > 2:
+            return None
+        result, seen = [], set()
+        for row in windows:
+            if not isinstance(row, dict):
+                return None
+            kind, percent = row.get("window_type"), row.get("used_percent")
+            start, end = row.get("start_time_ms"), row.get("end_time_ms")
+            less = row.get("less_than_one_percent")
+            if (type(kind) is not int or kind not in (1, 2) or kind in seen
+                    or type(percent) not in (int, float) or not math.isfinite(percent) or not 0 <= percent <= 100
+                    or type(start) is not int or type(end) is not int or start < 0 or end < 0
+                    or end > 32503680000000 or (end > 0 and end < start) or type(less) is not bool):
+                return None
+            seen.add(kind)
+            result.append({"window_type": kind, "used_percent": percent,
+                           "start_time_ms": start, "end_time_ms": end, "less_than_one_percent": less})
+        if status == "connected" and (not result or updated is None):
+            return None
+        projected = {"version": 1, "status": status, "windows": sorted(result, key=lambda row: row["window_type"])}
+        if updated is not None:
+            projected["updated"] = updated
+        return projected
+    except (OSError, ValueError, TypeError, OverflowError):
+        return None
+
+
+def scan_doubaowork(bounds, cache):
+    ledger_touch("doubaowork")
+    file_cache = cache.setdefault("doubaowork", {})
+    seen, rows = set(), {}
+    for root in _doubao_databases():
+        seen.add(root)
+        old = file_cache.get(root)
+        old = old if isinstance(old, dict) and old.get("version") == _DOUBAOWORK_CACHE_VERSION else {}
+        try:
+            files, signature = _doubao_db_plan(root)
+            old_blobs = old.get("blobs", [])
+            if old.get("sig") == signature and old_blobs == _doubao_blob_signatures(row[0] for row in old_blobs):
+                parsed = old.get("rows", [])
+            else:
+                blob_paths = set()
+                parsed = _doubao_read_db(root, files, blob_paths)
+                if _doubao_db_plan(root)[1] != signature:
+                    raise _DoubaoDataError("cache rotated during read")
+                file_cache[root] = {"version": _DOUBAOWORK_CACHE_VERSION, "sig": signature,
+                                    "blobs": _doubao_blob_signatures(blob_paths), "rows": parsed}
+                cache["_dirty"] = True
+        except (OSError, ValueError, UnicodeError, struct.error):
+            parsed = old.get("rows", [])  # Retry next scan; retain last good metadata.
+        for item in parsed:
+            previous = rows.get(item["id"])
+            if previous is None or item.get("updated", 0) > previous.get("updated", 0):
+                rows[item["id"]] = item
+    for root in list(file_cache):
+        if root not in seen:
+            del file_cache[root]
+            cache["_dirty"] = True
+
+    days, sources = {}, {}
+    for item in rows.values():
+        dk = datetime.fromtimestamp(item["created"]).date().isoformat()
+        day = {"sessions": [item["id"]], "_updated": item.get("updated", 0), "_accounting_version": 1}
+        sources[item["id"]] = {dk: day}
+        days[dk] = _ledger_values(days.get(dk, {}), day)
+    merged = ledger_reconcile("doubaowork", days, source_days=sources)
+    result = _empty_doubaowork()
+    buckets, updated = {key: set() for key in RANGE_KEYS}, 0
+    for dk, day in merged.items():
+        try:
+            local_day = date.fromisoformat(dk)
+        except (TypeError, ValueError):
+            continue
+        updated = max(updated, day.get("_updated", 0))
+        for key in classify_date(local_day, bounds):
+            buckets[key].update(day.get("sessions") or [])
+    for key, ids in buckets.items():
+        result["ranges"][key] = {"sessions": len(ids), "session_ids": sorted(ids)}
+    if updated:
+        result["updated"] = updated
+    quota = _doubaowork_quota_cache()
+    if quota is not None:
+        result["quota"] = quota
+    return result
+
+
 # ---------- DeepSeek Harness ----------
 # Harness 会为同一次调用写 usage chunk 和最终 message。按 session/turn/step
 # 只保留最终 message；异常中断时再用 usage chunk 兜底。
@@ -16331,6 +17002,8 @@ def compute(local_only=False):
                     _empty_workbuddy, errors)
     grok_bot = _safe_scan("grok_bot", lambda: scan_grok_bot(bounds, cache),
                           _empty_grok_bot, errors)
+    doubaowork = _safe_scan("doubaowork", lambda: scan_doubaowork(bounds, cache),
+                            _empty_doubaowork, errors)
     dsh = _safe_scan("deepseek_harness", lambda: scan_deepseek_harness(bounds, cache),
                      _empty_deepseek_harness, errors)
     ocode = _safe_scan("opencode", lambda: scan_opencode(bounds, cache), _empty_opencode, errors)
@@ -16606,6 +17279,7 @@ def compute(local_only=False):
             "ranges": grok_bot_ranges,
             "quota": provider_quotas["grok_bot"],
         },
+        "doubaowork": doubaowork,
         "qwenwork": qwenwork_quota,
         "qoderwork": {
             "ranges": qwranges,
@@ -17030,6 +17704,14 @@ def main():
         print(f"model: {gk['model']} {F}")
     print(f"  (成本按 API 价估,订阅实付不按此) | font=Menlo size=11")
     print("---")
+    # Doubao Work 的缓存没有 Token；按会话创建日期展示活动统计。
+    doubao = d["doubaowork"]["ranges"]
+    if doubao["all"]["sessions"] > 0:
+        print(f"Doubao Work {HEAD}")
+        print(f"今日 新建会话 {doubao['today']['sessions']:>6} {F}")
+        print(f"累计 会话     {doubao['all']['sessions']:>6} {F}")
+        print("仅统计已缓存的 Agent 会话，未提供 Token 用量 | font=Menlo size=11")
+        print("---")
     # Pi 块
     pt = d["pi"]["ranges"]["today"]
     if pt["sessions"] > 0:

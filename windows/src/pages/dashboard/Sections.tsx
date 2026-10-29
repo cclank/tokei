@@ -94,6 +94,8 @@ export function modelTint(tool: string): RGB {
       return Theme.zai;
     case "grok_bot":
       return Theme.grokBot;
+    case "doubaowork":
+      return Theme.doubaoWork;
     case "grok":
       return Theme.grok;
     case "qoder":

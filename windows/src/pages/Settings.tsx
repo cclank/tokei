@@ -16,6 +16,7 @@ import { PrivacySection } from "./settings/PrivacySection";
 import { Note, Segmented, SettingsSection, StackedValue, TintToggleRow, ToggleGrid, ToggleRow } from "./settings/controls";
 import { DiagnosticsSection, PricingSection } from "./settings/MaintenanceSections";
 import { ProviderQuotaSection } from "./settings/ProviderQuotaSection";
+import { DoubaoWorkQuotaSection } from "./settings/DoubaoWorkQuotaSection";
 import { TRAY_QUOTA_SOURCES, trayQuotaEnabled } from "../lib/trayQuota";
 import { normalizeTrayClickAction, openQuickPanel, TRAY_CLICK_KEY, type TrayClickAction } from "../lib/surface";
 
@@ -33,7 +34,7 @@ const LANGUAGE_OPTIONS: { value: LangSetting; label: () => string }[] = [
 
 /** 「显示卡片」的顺序照 Mac 版设置页（与首页卡片顺序在末尾几张上不同）。 */
 const SETTINGS_CARD_ORDER = [
-  "claude", "codex", "gemini", "cursor", "zed", "sub2api", "zai", "grok", "grok-bot",
+  "claude", "codex", "gemini", "cursor", "zed", "sub2api", "zai", "grok", "grok-bot", "doubaowork",
   "qoder", "qoderwork", "qodercli", "qodercli_cn", "hermes", "zcode", "mimocode", "openclaw",
   "pi", "prime_agent", "workbuddy", "workbuddy-ai", "codebuddy", "deepseek_harness", "opencode",
   "qwencode", "qwenwork", "kimicode", "musecode", "cmdcode", "copilot", "devin", "minimax",
@@ -299,6 +300,7 @@ export default function SettingsPage({ onClose }: { onClose?: () => void } = {})
           <AppearanceSection />
           <TrayQuotaSection />
           <PrivacySection />
+          <DoubaoWorkQuotaSection />
           <SystemSection />
         </div>
       </div>

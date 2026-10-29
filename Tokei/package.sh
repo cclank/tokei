@@ -83,6 +83,7 @@ chmod 755 "$APP/Contents/MacOS/Tokei" "$APP/Contents/Helpers/TokeiGrokBotHelper"
 
 # 打包 Python 脚本和配置到 Resources
 cp "$PROJ_DIR/usage.30s.py" "$APP/Contents/Resources/"
+cp "$PROJ_DIR/doubaowork-quota.js" "$APP/Contents/Resources/"
 [ -f "$PROJ_DIR/pricing.json" ] && cp "$PROJ_DIR/pricing.json" "$APP/Contents/Resources/"
 [ -f "$PROJ_DIR/pricing_overrides.json" ] && cp "$PROJ_DIR/pricing_overrides.json" "$APP/Contents/Resources/"
 [ -f "AppIcon.icns" ] && cp "AppIcon.icns" "$APP/Contents/Resources/"

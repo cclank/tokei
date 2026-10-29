@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "usage.30s.py"
+      - "doubaowork-quota.js"
       - "pricing.json"
       - "Tokei/**"
       - "tests/**"
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - "usage.30s.py"
+      - "doubaowork-quota.js"
       - "pricing.json"
       - "Tokei/**"
       - "tests/**"
@@ -74,6 +76,8 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: python -m unittest discover -s tests
+      - name: Shared quota observer tests
+        run: node --test tests/test_doubaowork_quota_js.cjs
 
   keychain-compatibility:
     name: Keychain upgrade (${{ matrix.os }})

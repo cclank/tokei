@@ -14,6 +14,7 @@ export const Theme = {
   zai: [0.38, 0.67, 0.98],
   grok: [0.65, 0.68, 0.75],
   grokBot: [0.95, 0.4, 0.64],
+  doubaoWork: [0.35, 0.66, 0.98],
   qoder: [0.9, 0.75, 0.35],
   qoderwork: [0.75, 0.65, 0.3],
   qodercli: [0.96, 0.84, 0.45],

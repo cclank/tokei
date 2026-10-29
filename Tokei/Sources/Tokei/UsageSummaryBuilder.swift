@@ -11,6 +11,7 @@ struct UsageToolVisibility: Equatable {
     var zai = true
     var grok = true
     var grokBot = true
+    var doubaoWork = true
     var qoder = true
     var qoderwork = true
     var qodercli = true
@@ -57,6 +58,9 @@ enum UsageSummaryBuilder {
         /// Cache hit percent 0–100 when available.
         var hit: Double?
         var extra: String?
+        /// Activity-only headline, including a valid zero for the selected period.
+        var activityLabel: String? = nil
+        var sourceCaption: String? = nil
 
         var isEmpty: Bool {
             let tok = tokens ?? 0
@@ -66,6 +70,7 @@ enum UsageSummaryBuilder {
             let parts = (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0) + (reason ?? 0)
             return tok <= 0 && ses <= 0 && cal <= 0 && cst <= 0 && parts <= 0
                 && (extra == nil || extra?.isEmpty == true)
+                && activityLabel == nil
         }
     }
 
@@ -293,6 +298,16 @@ enum UsageSummaryBuilder {
             )
             if !line.isEmpty { lines.append(line) }
         }
+        if visibility.doubaoWork && usage.doubaoWork.hasActivity {
+            lines.append(Line(
+                id: "doubaowork", name: "Doubao Work", cost: nil, tokens: nil,
+                sessions: usage.doubaoWork.ranges.get(range).sessions,
+                calls: nil, input: nil, output: nil, cacheRead: nil, cacheWrite: nil,
+                reason: nil, hit: nil, extra: usage.doubaoWork.quota?.summary,
+                activityLabel: DoubaoWorkStat.activityLabel(for: range),
+                sourceCaption: usage.doubaoWork.displaySourceCaption
+            ))
+        }
         if visibility.qoder {
             let r = usage.qoder.ranges.get(range)
             let line = Line(
@@ -453,6 +468,11 @@ enum UsageSummaryBuilder {
 
     private static func formatLine(_ line: Line) -> String {
         var parts: [String] = []
+        if let label = line.activityLabel {
+            parts.append("\(Fmt.human(line.sessions ?? 0)) \(label)")
+            if let caption = line.sourceCaption { parts.append(caption) }
+            return "\(line.name)  " + parts.joined(separator: " · ")
+        }
         if (line.cost ?? 0) > 0 || (line.cost_cny ?? 0) > 0 {
             parts.append(nativeMoney(line.cost ?? 0, line.cost_cny))
         }

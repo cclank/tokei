@@ -69,6 +69,7 @@ struct PanelView: View {
     @AppStorage("showZai") private var showZai = false
     @AppStorage("showGrok") private var showGrok = true
     @AppStorage("showGrokBot") private var showGrokBot = true
+    @AppStorage("showDoubaoWork") private var showDoubaoWork = true
     @AppStorage("showQoderIde") private var showQoder = true
     @AppStorage("showQoderWork") private var showQoderWork = true
     @AppStorage("showQoderCli") private var showQoderCli = true
@@ -98,6 +99,7 @@ struct PanelView: View {
     @AppStorage("grokBotQuotaEnabled") private var grokBotQuotaEnabled = false
     /// 默认关闭：开启后仅查询千问办公桌面端暴露在本机回环地址上的额度接口。
     @AppStorage("qwenWorkQuotaEnabled") private var qwenWorkQuotaEnabled = false
+    @AppStorage("doubaoWorkQuotaEnabled") private var doubaoWorkQuotaEnabled = false
     /// 默认关闭：仅在 Desktop 缓存不可用时复用 Claude Code CLI 登录态查询官方额度。
     @AppStorage("claudeCLIQuotaEnabled") private var claudeCLIQuotaEnabled = false
     @AppStorage(ActivityReporter.enabledKey) private var activityStatisticsEnabled = true
@@ -120,6 +122,7 @@ struct PanelView: View {
             cursor: showCursor, zed: showZed, sub2api: showSub2API, zai: showZai,
             grok: showGrok,
             grokBot: showGrokBot,
+            doubaoWork: showDoubaoWork,
             qoder: showQoder, qoderwork: showQoderWork, qodercli: showQoderCli,
             qodercliCN: showQoderCliCN,
             hermes: showHermes, zcode: showZcode, mimocode: showMimoCode,
@@ -135,7 +138,7 @@ struct PanelView: View {
 
     private var visibleCount: Int {
         [showClaude, showCodex, showGemini, showCursor, showZed, showSub2API, showZai,
-         showGrok, showGrokBot, showQoder, showQoderWork, showQoderCli, showQoderCliCN, showHermes,
+         showGrok, showGrokBot, showDoubaoWork, showQoder, showQoderWork, showQoderCli, showQoderCliCN, showHermes,
          showZcode, showMimoCode,
          showOpenClaw, showPi, showWorkBuddy, showWorkBuddyAI, showDeepSeekHarness,
          showCodeBuddy,
@@ -505,6 +508,9 @@ struct PanelView: View {
                          content: AnyView(grokBotBlock(
                             u.grokBot, grokBotDisplay.range, grokBotDisplay.usage,
                             displayedRange: grokBotDisplay.key))),
+            ToolCardItem(id: "doubaowork", name: "Doubao Work", visible: showDoubaoWork,
+                         active: u.doubaoWork.hasActivity, tint: Theme.doubaoWork,
+                         content: AnyView(doubaoWorkBlock(u.doubaoWork.ranges.get(sel)))),
             ToolCardItem(id: "qoder", name: "Qoder Desktop", visible: showQoder,
                          active: qr.calls > 0 || qr.in + qr.cached + qr.out > 0,
                          tint: Theme.qoder, content: AnyView(qoderIdeBlock(u.qoder, qr))),
@@ -1186,6 +1192,59 @@ struct PanelView: View {
             return Fmt.reset(epoch)
         }
         return L10n.data(detail.value)
+    }
+
+    @ViewBuilder
+    func doubaoWorkBlock(_ r: DoubaoWorkRange) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            cardHead("Doubao Work", tint: Theme.doubaoWork, toolID: "doubaowork")
+            if let quota = store.usage?.doubaoWork.quota, !quota.windows.isEmpty {
+                ForEach(quota.windows.sorted { $0.window_type < $1.window_type }, id: \.window_type) { window in
+                    if window.less_than_one_percent && !window.hasReset() {
+                        HStack {
+                            Text(window.label).foregroundStyle(Theme.tSecondary)
+                            Spacer()
+                            Text(L("已用 <1%"))
+                            if let reset = window.reset {
+                                Text("· \(Fmt.reset(reset))")
+                                    .foregroundStyle(Theme.tTertiary)
+                            }
+                        }
+                        .font(.system(size: Theme.fontSize(11)))
+                        .opacity(quota.isFresh() ? 1 : 0.65)
+                    } else {
+                        quotaRow(title: L("%@剩余", window.label), pct: window.remaining,
+                                 reset: window.reset, tint: Theme.doubaoWork,
+                                 stale: !quota.isFresh() || window.hasReset())
+                    }
+                }
+                HStack {
+                    Text(DoubaoWorkStat.activityLabel(for: sel))
+                    Spacer()
+                    Text(Fmt.human(r.sessions)).monospacedDigit()
+                }
+                .font(.system(size: Theme.fontSize(10)))
+                .foregroundStyle(Theme.tSecondary)
+                if !quota.isFresh() {
+                    Text(L("上次读取的额度，等待刷新"))
+                        .font(.system(size: Theme.fontSize(8.5)))
+                        .foregroundStyle(Theme.tTertiary)
+                }
+            } else {
+                CostHeadline(value: Fmt.human(r.sessions),
+                             caption: DoubaoWorkStat.activityLabel(for: sel), tint: Theme.doubaoWork)
+            }
+            Button { DoubaoWorkQuotaBridge.shared.connect() } label: {
+                Label(L("连接豆包账号查看额度"), systemImage: "person.crop.circle")
+                    .font(.system(size: Theme.fontSize(10)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.doubaoWork)
+            Text(store.usage?.doubaoWork.displaySourceCaption ?? DoubaoWorkStat.sourceCaption)
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - Grok Bot 卡片
@@ -3183,6 +3242,7 @@ struct PanelView: View {
                 settingsRow("z.ai / GLM", tint: Theme.zai, isOn: $showZai)
                 settingsRow("Grok", tint: Theme.grok, isOn: $showGrok)
                 settingsRow("Grok Bot", tint: Theme.grokBot, isOn: $showGrokBot)
+                settingsRow("Doubao Work", tint: Theme.doubaoWork, isOn: $showDoubaoWork)
                 settingsRow("Qoder Desktop", tint: Theme.qoder, isOn: $showQoder)
                 settingsRow("QoderWork", tint: Theme.qoderwork, isOn: $showQoderWork)
                 settingsRow("Qoder CLI", tint: Theme.qodercli, isOn: $showQoderCli)
@@ -3550,6 +3610,19 @@ struct PanelView: View {
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            thinDivider
+            settingsToggleRow(L("豆包工作额度查询"), isOn: $doubaoWorkQuotaEnabled)
+            Text(L("额度连接为试验功能，登录兼容性仍在验证。"))
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tTertiary)
+            Text(L("首次连接时登录豆包官网，登录状态在 Tokei 中保留。之后每 5 分钟静默刷新额度；登录失效时不会自动弹窗。关闭后停止查询，保留登录状态。"))
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            settingsActionButton(icon: "person.crop.circle", title: L("连接豆包账号查看额度")) {
+                DoubaoWorkQuotaBridge.shared.connect()
+            }
         }
         .onChange(of: activityStatisticsEnabled) { _ in
             ActivityReporter.shared.preferencesChanged()
@@ -3568,6 +3641,12 @@ struct PanelView: View {
         .onChange(of: qwenWorkQuotaEnabled) { enabled in
             Self.setQwenWorkQuotaEnabled(enabled)
             store.refresh()
+        }
+        .onChange(of: doubaoWorkQuotaEnabled) { enabled in
+            if SyncManager.setDoubaoWorkQuotaEnabled(enabled) {
+                DoubaoWorkQuotaBridge.shared.configure(enabled: enabled)
+                store.refresh()
+            }
         }
     }
 
@@ -4347,7 +4426,7 @@ struct PanelView: View {
         if let data = result.stdout.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let tools = ["claude", "codex", "gemini", "antigravity", "cursor", "zed",
-                         "sub2api", "zai", "grok", "grok_bot", "qoder", "qoderwork", "qodercli",
+                         "sub2api", "zai", "grok", "grok_bot", "doubaowork", "qoder", "qoderwork", "qodercli",
                          "qodercli_cn", "hermes",
                          "zcode", "mimocode", "openclaw", "pi", "workbuddy", "workbuddy_ai",
                          "codebuddy",

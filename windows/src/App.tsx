@@ -6,7 +6,7 @@ import { sortedUsageCards } from "./lib/cardOrder";
 import { call, inTauri } from "./lib/collector";
 import { currentLanguage, L } from "./lib/i18n";
 import { pushTrayMenu } from "./lib/native";
-import { getPref, usePrefsVersion } from "./lib/prefs";
+import { getPref, setPref, usePrefsVersion } from "./lib/prefs";
 import { loadQuotaDetail, useQuotaDetail } from "./lib/quotaDetail";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
@@ -303,6 +303,11 @@ function Panel({ ready }: { ready: boolean }) {
       void import("@tauri-apps/api/event").then(async ({ listen }) => {
         const listeners = await Promise.all([
           listen("tokei://open-settings", () => setMode("settings")),
+          listen("tokei://connect-doubaowork-quota", () => {
+            void import("./lib/doubaoworkQuotaNative").then(({ connectDoubaoQuota }) => connectDoubaoQuota())
+              .then(state => setPref("doubaoWorkQuotaEnabled", state.enabled))
+              .catch(() => setMode("settings"));
+          }),
           listen<RangeKey | null>("tokei://open-home", (event) => {
             setMode("cards");
             if (event.payload && DISPLAY_RANGES.includes(event.payload)) setRange(event.payload);

@@ -355,6 +355,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         PanelView.syncQoderIdeConfigOnLaunch()
         PanelView.syncGrokLiveQuotaConfigOnLaunch()
         PanelView.syncQwenWorkQuotaConfigOnLaunch()
+        let doubaoQuotaEnabled = UserDefaults.standard.bool(forKey: DoubaoWorkQuotaBridge.defaultsKey)
+        SyncManager.setDoubaoWorkQuotaEnabled(doubaoQuotaEnabled)
+        DoubaoWorkQuotaBridge.shared.configure(enabled: doubaoQuotaEnabled)
+        NotificationCenter.default.addObserver(forName: DoubaoWorkQuotaBridge.changed,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.store.refresh()
+        }
         PanelView.syncProviderQuotaConfigOnLaunch()
         if var syncConfig = store.syncManager.config {
             let interval = SyncManager.normalizedSyncInterval(syncConfig.sync_interval)
@@ -402,6 +409,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 self?.togglePopover()
             }
+        }
+        if CommandLine.arguments.contains("--doubaowork-connect") {
+            DispatchQueue.main.async { DoubaoWorkQuotaBridge.shared.connect() }
         }
     }
 

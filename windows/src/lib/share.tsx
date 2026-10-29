@@ -16,6 +16,7 @@ import {
 import { createElement } from "react";
 import { fill, fs, rgba, T, Theme, type RGB } from "../ui/theme";
 import * as Fmt from "./fmt";
+import { doubaoWorkActivityLabel, doubaoWorkHasActivity, doubaoWorkQuota, doubaoWorkQuotaNotice, doubaoWorkQuotaRows, doubaoWorkRange, doubaoWorkSourceCaption } from "./doubaowork";
 import { L } from "./i18n";
 import { getPref } from "./prefs";
 import { rangeLabel } from "./store";
@@ -33,6 +34,7 @@ const VISIBILITY_KEYS = {
   zai: "showZai",
   grok: "showGrok",
   grokBot: "showGrokBot",
+  doubaoWork: "showDoubaoWork",
   qoder: "showQoderIde",
   qoderwork: "showQoderWork",
   qodercli: "showQoderCli",
@@ -91,6 +93,10 @@ export interface ShareLine {
   /** 缓存命中率 0–100。 */
   hit?: number | null;
   extra?: string | null;
+  activityLabel?: string | null;
+  sourceCaption?: string | null;
+  quotaHeadline?: { value: string; caption: string } | null;
+  quotaCells?: { title: string; value: string; detail: string | null }[];
 }
 
 export interface ShareTotals {
@@ -115,7 +121,8 @@ function isEmptyLine(line: ShareLine): boolean {
     (line.calls ?? 0) <= 0 &&
     (line.cost ?? 0) <= 0 &&
     parts <= 0 &&
-    !line.extra
+    !line.extra &&
+    line.activityLabel == null && line.quotaHeadline == null
   );
 }
 
@@ -434,6 +441,20 @@ export function shareToolLines(usage: Usage, range: RangeKey, visibility: Record
       extra: n(r.turns) > 0 ? L("%@ 条消息", n(r.turns)) : null,
     });
   }
+  if (visible("doubaoWork") && (doubaoWorkHasActivity(usage.doubaowork) || (doubaoWorkQuota(usage.doubaowork)?.windows.length ?? 0) > 0)) {
+    const hasWindows = (doubaoWorkQuota(usage.doubaowork)?.windows.length ?? 0) > 0;
+    const [current, week] = doubaoWorkQuotaRows(usage.doubaowork);
+    const notice = doubaoWorkQuotaNotice(usage.doubaowork);
+    push({
+      id: "doubaowork",
+      name: "Doubao Work",
+      sessions: doubaoWorkRange(usage.doubaowork, range).sessions,
+      activityLabel: doubaoWorkActivityLabel(range),
+      sourceCaption: [notice, current.detail && `${current.title} · ${current.detail}`, week.detail && `${week.title} · ${week.detail}`, doubaoWorkSourceCaption(usage.doubaowork)].filter(Boolean).join(" · "),
+      quotaHeadline: hasWindows ? { value: current.value, caption: current.caption } : null,
+      quotaCells: hasWindows ? [{ title: week.caption, value: week.value, detail: week.detail }] : undefined,
+    });
+  }
   if (visible("qoder")) {
     const r = rangeOf<QoderIdeShareRange>(usage, "qoder", range);
     push({
@@ -541,6 +562,7 @@ const TINTS: Record<string, RGB> = {
   "z.ai": Theme.zai,
   Grok: Theme.grok,
   "Grok Bot": Theme.grokBot,
+  "Doubao Work": Theme.doubaoWork,
   "Qoder Desktop": Theme.qoder,
   QoderWork: Theme.qoderwork,
   "Qoder CLI": Theme.qodercli,
@@ -863,6 +885,7 @@ function drawShareHeader(
 }
 
 export function shareLineCells(line: ShareLine, tint: RGB): Cell[] {
+  if (line.quotaCells) return line.quotaCells.map(row => metricCell("timer", row.title, row.value, tint));
   const cells: Cell[] = [];
   if (line.cost != null && (line.cost > 0 || (line.cost_cny ?? 0) > 0)) {
     cells.push(metricCell("dollarsign.circle", L("≈成本"), Fmt.nativeMoney(line.cost, line.cost_cny), tint));
@@ -882,9 +905,34 @@ export function shareLineCells(line: ShareLine, tint: RGB): Cell[] {
 
 /** The same headline drives both measured height and rendered text. */
 export function shareLineHeadline(line: ShareLine, periodLabel: string): { value: string; caption: string } | null {
+  if (line.quotaHeadline) return line.quotaHeadline;
+  if (line.activityLabel != null) return { value: Fmt.human(line.sessions ?? 0), caption: line.activityLabel };
   if ((line.tokens ?? 0) > 0) return { value: Fmt.human(line.tokens ?? 0), caption: line.id === "copilot" ? L("仅输出") : L("%@ 总量", periodLabel) };
   if ((line.calls ?? 0) > 0) return { value: Fmt.human(line.calls ?? 0), caption: L("%@ 响应", periodLabel) };
   return null;
+}
+
+function wrapCaption(text: string, width: number, fonts: Fonts): string[] {
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return [text];
+  context.font = fontSpec(fs(8.5), 400, fonts.sans);
+  const lines: string[] = [];
+  let line = "";
+  for (const char of text) {
+    if (line && context.measureText(line + char).width > width) {
+      const space = line.lastIndexOf(" ");
+      if (space > 0) {
+        lines.push(line.slice(0, space));
+        line = line.slice(space + 1);
+      } else {
+        lines.push(line);
+        line = "";
+      }
+    }
+    line += char;
+  }
+  if (line.trim()) lines.push(line.trim());
+  return lines;
 }
 
 /** 一个工具的卡片（nativeToolCard）：色点 + 名称 + 会话数、总量、指标格。 */
@@ -909,6 +957,9 @@ function drawToolCard(
   let h = pad + headH;
   if (headline) h += 10 + lh(fs(23));
   if (cells.length) h += 10 + drawGrid(null, cells, 0, 0, inner, 8, f);
+  const captionLines = line.sourceCaption ? wrapCaption(line.sourceCaption, inner, f) : [];
+  const captionSize = fs(8.5);
+  if (captionLines.length) h += 10 + captionLines.length * lh(captionSize);
   h += pad;
   if (!ctx) return h;
 
@@ -944,7 +995,14 @@ function drawToolCard(
   }
   if (cells.length) {
     cy += 10;
-    drawGrid(ctx, cells, left, cy, inner, 8, f);
+    cy += drawGrid(ctx, cells, left, cy, inner, 8, f);
+  }
+  if (captionLines.length) {
+    cy += 10;
+    for (const text of captionLines) {
+      drawText(ctx, text, left, cy + lh(captionSize) / 2, fontSpec(captionSize, 400, f.sans), T.tertiary);
+      cy += lh(captionSize);
+    }
   }
   return h;
 }

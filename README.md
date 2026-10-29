@@ -37,6 +37,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 | **z.ai / GLM** | 近 30 天账号 Token、按模型统计、会话/周期/MCP 额度、BigModel CN 余额 |
 | **Grok Build** | Token（输入/输出/缓存/推理）、会话、上下文、延迟、配额（本地日志；可选实时） |
 | **Grok Bot** | 本地会话活动；授权后显示官方 Token、缓存、模型、成本与账号额度 |
+| **豆包工作（Doubao Work）** | 已缓存的 Agent 新建会话数、历史保留；连接豆包账号后可查询当前时段和 7 天额度、重置时间；尚无精确 Token 和速率 |
 | **Qoder Desktop** | Token、缓存、会话、调用次数、模型 |
 | **QoderWork** | Token、调用次数、子 Agent、时长、上下文 |
 | **Qoder CLI** | 会话、调用、工具、活跃时长、估算 Token |
@@ -114,6 +115,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 - Kimi Code 额度使用 Kimi Code CLI 已有的本机登录态读取官方接口。Tokei 只读 `access_token`，从不使用同目录的 `refresh_token` 代为刷新（避免顶掉 CLI 自己的登录态）；登录态过期时直接跳过查询，卡片改为标注读数已过期而不是继续显示旧百分比。可用 `TOKEI_KIMI_LIVE_QUOTA=0` 关闭
 - Grok 实时额度默认关闭，可选择只读本地日志
 - Grok Bot 本地活动直接读取会话快照，快照不含 Token、模型和成本，Tokei 不按文本量估算。官方用量查询默认关闭；用户明确授权后，Tokei 临时解密 Grok Bot 当前登录态，只查询 `sand` 客户端的官方 Token、模型、成本和额度。登录 Token 只在内存中使用
+- Doubao Work 会话统计默认只读 IndexedDB。按 Agent 会话的创建时间统计“新建会话”，普通聊天不计入；仅覆盖客户端已缓存的会话。Tokei 缓存及账本仅保留哈希会话标识和时间信息，清理源缓存后已采集的统计仍保留；多设备同步按标识去重。可选的“豆包工作额度查询”默认关闭：主动连接并登录豆包官网后，Tokei 在自己的持久网站会话中每 5 分钟静默刷新当前账号额度，不导入其他应用的 Cookie 或登录凭据，失效时不自动打开登录窗口。额度只保存百分比和时间，不参与多设备相加；当前没有可核对的 Token、成本和生成耗时
 - 千问办公额度默认关闭；开启后仅调用官方桌面端的 `127.0.0.1` MCP，由已运行并登录的千问办公查询官方额度
 - Tokei 不读取或解密千问办公的 `auth-v2.dat`、浏览器 Cookie 或 `.status.json` 账号资料；仅用 `.status.json` 文件元数据使切换账号后的额度缓存失效，也不会自动启动千问办公
 - Cursor、Zed、Sub2API、z.ai 卡片默认关闭；开启后才查询额度。Sub2API 与 z.ai API Key 保存于 macOS Keychain，不写入 `config.json` 或额度缓存
@@ -213,6 +215,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | z.ai / GLM | macOS Keychain API Key + Global/BigModel CN quota / model-usage API（卡片默认关闭） |
 | Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl`（含真实 token + billing 额度）+ `sessions/*/*/{summary,signals}.json`；可选实时账单接口（设置里默认关闭） |
 | Grok Bot | `~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob`（本地活动）；可选 Sand 官方 usage-events / 额度接口（首次需授权 Grok Bot 钥匙串，设置里默认关闭） |
+| Doubao Work | macOS：`~/Library/Application Support/DoubaoWork/Default/IndexedDB/chrome_doubaowork-{chat,launcher}_0.indexeddb.leveldb`；Windows：自动发现 `%APPDATA%/DoubaoWork`、`%LOCALAPPDATA%/DoubaoWork` 及其 `User Data` / `Default` / `Profile *` 目录；可用 `TOKEI_DOUBAOWORK_DIR` 指定数据根目录、profile 或单个 LevelDB 目录 |
 | Hermes | `~/.hermes/state.db` + `~/.hermes/profiles/*/state.db` |
 | OpenClaw | `~/.openclaw/state/openclaw.sqlite` 动态发现 agent SQLite；`transcript_events` 正文兼容 `event_json` 与 `event_zstd`（Python 3.14+ 标准库或已安装的 zstandard 解码）两种存储；兼容旧版 `agents/*/sessions/*.jsonl` |
 | Pi Coding Agent CLI | `~/.pi/agent/sessions/<project>/*.jsonl` |
@@ -261,6 +264,8 @@ chmod +x ~/.tokei/tokei-sync.sh
 ## 更新日志
 
 ### Unreleased
+
+- feat: Doubao Work 已缓存 Agent 会话统计，以及默认关闭的账号额度连接试验功能；支持 Mac / Windows 卡片、设置、分享和历史保留。Token、成本和速率继续保持缺失
 
 - feat(provider): 新增 Cursor、Zed、Sub2API、z.ai / GLM 额度卡
 - feat(provider-usage): Cursor 与 z.ai 新增账号 Token、按模型统计及 Dashboard 独立账号模型区
@@ -405,7 +410,7 @@ Tokei is a **macOS menu bar app** that tracks usage, cost, and quotas across **2
 
 **Features:** Real-time monitoring (30s refresh, seven menu bar styles, three density modes) · Cost estimation (317 models, OpenRouter pricing) · Dashboard (daily chart, weekly heatmap) · Time ranges (today/week/month/year) · Project-level tracking · Multi-device sync (Git-based, Mac + Linux) · Annual Wrapped · Keep awake · Sit reminder · Privacy-first (local usage logs, explicit quota controls) · [Compare with CodexBar](https://tokei.lanshuagent.com#compare)
 
-**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Qoder Desktop, QoderWork, Qoder CLI, Qoder CN, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin, MiniMax Code
+**Supported tools:** Claude Code, Codex CLI, Gemini CLI / Antigravity, Cursor, Zed, Sub2API, z.ai / GLM, Grok Build, Grok Bot, Doubao Work (cached Agent conversations and optional account quota), Qoder Desktop, QoderWork, Qoder CLI, Qoder CN, Hermes, ZCode, MiMoCode, OpenClaw, Pi Coding Agent CLI, Prime Agent, WorkBuddy, WorkBuddy Intl., CodeBuddy Code, DeepSeek Harness, OpenCode, Qwen Code, Kimi Code, Muse Code, Command Code, QwenWork, Devin, MiniMax Code
 
 For full documentation, visit [tokei.lanshuagent.com](https://tokei.lanshuagent.com).
 

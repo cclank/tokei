@@ -256,6 +256,23 @@ final class SyncManager {
         } ?? false
     }
 
+    @discardableResult
+    static func setDoubaoWorkQuotaEnabled(_ enabled: Bool) -> Bool {
+        withConfigLock {
+            var dictionary: [String: Any] = [:]
+            if FileManager.default.fileExists(atPath: configPath.path) {
+                let data = try Data(contentsOf: configPath)
+                guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                dictionary = object
+            }
+            dictionary["doubaowork_quota_enabled"] = enabled
+            try writeConfigDictionary(dictionary)
+            return true
+        } ?? false
+    }
+
     private static let providerQuotaIDs: Set<String> = [
         "cursor", "grok_bot", "zed", "sub2api", "zai", "antigravity", "devin", "minimax",
     ]
@@ -447,6 +464,16 @@ final class SyncManager {
             mergeRanges(&u.grok.ranges, peer.usage.grok.ranges, pairs)
             u.grok.model = mergeModelName(u.grok.model, peer.usage.grok.model)
             mergeRanges(&u.grokBot.ranges, peer.usage.grokBot.ranges, pairs)
+            for pair in pairs {
+                let merged = u.doubaoWork.ranges.get(pair.dst)
+                    .merged(with: peer.usage.doubaoWork.ranges.get(pair.src))
+                u.doubaoWork.ranges.set(pair.dst, merged)
+            }
+            if let updated = peer.usage.doubaoWork.updated,
+               updated > (u.doubaoWork.updated ?? 0) {
+                u.doubaoWork.updated = updated
+                u.doubaoWork.source = peer.usage.doubaoWork.source
+            }
             if shouldReplaceProviderQuota(
                 current: u.grokBot.quota,
                 candidate: peer.usage.grokBot.quota

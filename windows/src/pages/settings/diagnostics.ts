@@ -5,7 +5,7 @@ import { call, inTauri, runCollector } from "../../lib/collector";
 /** 与 Mac 版 formatDiagnostics 同一张表、同样的顺序。 */
 const TOOLS = [
   "claude", "codex", "gemini", "antigravity", "cursor", "zed",
-  "sub2api", "zai", "grok", "grok_bot", "qoder", "qoderwork", "qodercli",
+  "sub2api", "zai", "grok", "grok_bot", "doubaowork", "qoder", "qoderwork", "qodercli",
   "qodercli_cn", "hermes",
   "zcode", "mimocode", "openclaw", "pi", "workbuddy", "workbuddy_ai",
   "codebuddy",

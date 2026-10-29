@@ -26,6 +26,7 @@ export const PRIVACY_CONFIG_KEYS: Record<string, string> = {
   grokLiveQuotaEnabled: "grok_live_quota_enabled",
   grokBotQuotaEnabled: "grok_bot_quota_enabled",
   qwenWorkQuotaEnabled: "qwenwork_quota_enabled",
+  doubaoWorkQuotaEnabled: "doubaowork_quota_enabled",
 };
 
 export async function writeCollectorFlag(configKey: string, enabled: boolean): Promise<void> {
@@ -71,4 +72,5 @@ export async function syncCollectorConfigOnLaunch(): Promise<void> {
   }
   patch.minimax_quota_enabled = cardShown("showMiniMax") && (await minimaxKeyStored());
   await updateTokeiConfig(patch);
+  if (inTauri) await call("set_doubaowork_quota_enabled", { enabled: patch.doubaowork_quota_enabled }).catch(console.error);
 }

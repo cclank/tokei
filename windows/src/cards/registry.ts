@@ -3,6 +3,7 @@ import { claudeCard } from "./claude";
 import { codexCard } from "./codex";
 import { geminiCard } from "./gemini";
 import { grokBotCard, grokCard } from "./grok";
+import { doubaoWorkCard } from "./doubaowork";
 import { hermesCard } from "./hermes";
 import { openclawCard } from "./openclaw";
 import { cursorCard, devinCard, minimaxCard, sub2apiCard, zaiCard, zedCard } from "./providerQuota";
@@ -36,6 +37,7 @@ export const CARDS: CardSpec[] = [
   zaiCard,
   grokCard,
   grokBotCard,
+  doubaoWorkCard,
   qoderIdeCard,
   qoderworkCard,
   qodercliCard,

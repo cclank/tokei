@@ -401,6 +401,7 @@ struct DashboardView: View {
         case "cursor": return Theme.cursor
         case "zai": return Theme.zai
         case "grok_bot": return Theme.grokBot
+        case "doubaowork": return Theme.doubaoWork
         case "grok": return Theme.grok
         case "qoder": return Theme.qoder
         case "qoderwork": return Theme.qoderwork

@@ -130,6 +130,7 @@ enum UsageShareImage {
         case "Sub2API": return Theme.sub2api
         case "Grok": return Theme.grok
         case "Grok Bot": return Theme.grokBot
+        case "Doubao Work": return Theme.doubaoWork
         case "Qoder Desktop": return Theme.qoder
         case "QoderWork": return Theme.qoderwork
         case "Qoder CLI": return Theme.qodercli
@@ -355,7 +356,9 @@ private func nativeToolCard(
             Spacer(minLength: 0)
         }
 
-        if let tokens = line.tokens, tokens > 0 {
+        if let label = line.activityLabel {
+            CostHeadline(value: Fmt.human(line.sessions ?? 0), caption: label, tint: tint)
+        } else if let tokens = line.tokens, tokens > 0 {
             CostHeadline(value: Fmt.human(tokens), caption: line.id == "copilot" ? L("仅输出") : L("%@ 总量", rangeLabel), tint: tint)
         } else if let calls = line.calls, calls > 0 {
             CostHeadline(value: Fmt.human(calls), caption: L("%@ 响应", rangeLabel), tint: tint)
@@ -405,6 +408,12 @@ private func nativeToolCard(
                     MetricCell(icon: "info.circle", label: L("信息"), value: extra, tint: tint)
                 }
             }
+        }
+        if let caption = line.sourceCaption {
+            Text(caption)
+                .font(.system(size: Theme.fontSize(8.5)))
+                .foregroundStyle(Theme.tTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
     .padding(12)

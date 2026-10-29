@@ -54,6 +54,7 @@ enum Theme {
     static let zai = Color(red: 0.38, green: 0.67, blue: 0.98)      // GLM 蓝
     static let grok   = Color(red: 0.65, green: 0.68, blue: 0.75)   // 冷灰银
     static let grokBot = Color(red: 0.95, green: 0.40, blue: 0.64)  // 星莓红
+    static let doubaoWork = Color(red: 0.35, green: 0.66, blue: 0.98)
     static let qoder  = Color(red: 0.90, green: 0.75, blue: 0.35)   // 琥珀金
     static let qoderwork = Color(red: 0.75, green: 0.65, blue: 0.30)  // 暗琥珀
     static let qodercli = Color(red: 0.96, green: 0.84, blue: 0.45)  // 亮琥珀

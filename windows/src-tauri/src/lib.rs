@@ -1,4 +1,6 @@
 mod collector;
+mod doubaowork_quota;
+mod doubaowork_webview;
 mod panel;
 mod placement;
 mod power;
@@ -109,6 +111,7 @@ fn set_tray_menu_labels(
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.state::<privacy::ActivityState>().stop();
+    app.state::<doubaowork_webview::QuotaState>().stop();
     app.exit(0);
 }
 
@@ -138,6 +141,7 @@ pub fn run() {
         .manage(panel::SurfaceState::load())
         .manage(snapshot::SnapshotStore::default())
         .manage(privacy::ActivityState::default())
+        .manage(doubaowork_webview::QuotaState::default())
         .manage(StartupWindow {
             manual: !std::env::args().any(|arg| arg == "--autostart"),
             shown: AtomicBool::new(false),
@@ -165,6 +169,10 @@ pub fn run() {
             privacy::set_activity_statistics,
             privacy::grok_bot_authorization_status,
             privacy::authorize_grok_bot,
+            doubaowork_webview::doubaowork_quota_state,
+            doubaowork_webview::set_doubaowork_quota_enabled,
+            doubaowork_webview::connect_doubaowork_quota,
+            doubaowork_webview::refresh_doubaowork_quota,
             panel::open_main_window,
             panel::hide_quick_panel,
             panel::open_quick_panel,
@@ -187,6 +195,7 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             build_tray(app.handle())?;
+            doubaowork_webview::initialize(app.handle());
 
             if let Some(window) = app.get_webview_window(panel::LABEL) {
                 let handle = app.handle().clone();

@@ -25,6 +25,7 @@ enum UsageCardOrdering {
             let r = u.grok.ranges.get(range)
             return r.usage_available ? r.tokens : 0
         case "grok-bot": return u.grokBot.quota.usage?.ranges.get(range).totalTokens ?? 0
+        case "doubaowork": return 0 // Unknown token total; used for ordering only.
         case "qoder":
             let r = u.qoder.ranges.get(range)
             return r.in + r.cached + r.out

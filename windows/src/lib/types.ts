@@ -196,9 +196,38 @@ export function totalTokens(r: TokenUsageRange): number {
 }
 
 /** 采集脚本 `--json` 的整份输出。各家的具体结构见各自的卡片文件。 */
+export interface DoubaoWorkRange {
+  sessions: number;
+  session_ids?: string[] | null;
+}
+
+export interface DoubaoWorkQuotaWindow {
+  window_type: 1 | 2;
+  used_percent: number;
+  start_time_ms: number;
+  end_time_ms: number;
+  less_than_one_percent: boolean;
+}
+
+/** Current local account snapshot; never aggregated with a selected activity period. */
+export interface DoubaoWorkQuota {
+  version: 1;
+  status: "connected" | "login_required" | "unavailable";
+  updated?: number | null;
+  windows: DoubaoWorkQuotaWindow[];
+}
+
+export interface DoubaoWorkStat {
+  ranges?: Partial<Record<RangeKey, DoubaoWorkRange>> | null;
+  source?: "doubaowork-local-cache" | null;
+  updated?: number | null;
+  quota?: DoubaoWorkQuota | null;
+}
+
 export interface Usage {
   claude: ClaudeStat;
   codex: CodexStat;
+  doubaowork?: DoubaoWorkStat | null;
   // 其余各家：gemini、grok、grok_bot、qoder、qoderwork、qodercli、qodercli_cn、hermes、
   // zcode、mimocode、openclaw、pi、prime_agent、workbuddy、workbuddy_ai、codebuddy、
   // deepseek_harness、opencode、qwencode、qwenwork、kimicode、musecode、cmdcode、devin、

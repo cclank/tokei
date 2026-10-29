@@ -73,7 +73,8 @@
     "resources": {
       "../native_bridge.py": "collector/windows_native.py",
       "../../usage.30s.py": "collector/usage.30s.py",
-      "../../pricing.json": "collector/pricing.json"
+      "../../pricing.json": "collector/pricing.json",
+      "../../pricing_overrides.json": "collector/pricing_overrides.json"
     },
     "windows": {
       "nsis": {

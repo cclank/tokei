@@ -94,7 +94,8 @@ enum ProviderCredentialStore {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         applyNoUI(to: &query)
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        let status = withoutKeychainUI { SecItemCopyMatching(query as CFDictionary, &result) }
+        guard status == errSecSuccess,
               let data = result as? Data else { return .missing }
         guard let rawValue = String(data: data, encoding: .utf8) else { return .cleared }
         if rawValue == clearedMarker { return .cleared }
@@ -141,13 +142,13 @@ enum ProviderCredentialStore {
 
     static func environmentOverrides() -> [String: String] {
         var result: [String: String] = [:]
-        if let token = token(for: .sub2api) {
+        if providerQuotaEnabled("sub2api"), let token = token(for: .sub2api) {
             result["SUB2API_API_KEY"] = token
         }
-        if let token = token(for: .zai) {
+        if providerQuotaEnabled("zai"), let token = token(for: .zai) {
             result["Z_AI_API_KEY"] = token
         }
-        if let token = token(for: .minimax) {
+        if providerQuotaEnabled("minimax"), let token = token(for: .minimax) {
             result["TOKEI_MINIMAX_API_KEY"] = token
         }
         if providerQuotaEnabled("zed"), let credentials = zedCredentials() {
@@ -270,18 +271,16 @@ enum ProviderCredentialStore {
         return (userID, accessToken)
     }
 
-    private static func withoutKeychainUI<T>(_ body: () -> T) -> T {
+    private static func withoutKeychainUI(_ body: () -> OSStatus) -> OSStatus {
         interactionLock.lock()
         defer { interactionLock.unlock() }
         var interactionAllowed: DarwinBoolean = false
-        let status = SecKeychainGetUserInteractionAllowed(&interactionAllowed)
-        if status == errSecSuccess {
-            SecKeychainSetUserInteractionAllowed(false)
+        guard SecKeychainGetUserInteractionAllowed(&interactionAllowed) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            return errSecInteractionNotAllowed
         }
         defer {
-            if status == errSecSuccess {
-                SecKeychainSetUserInteractionAllowed(interactionAllowed.boolValue)
-            }
+            _ = SecKeychainSetUserInteractionAllowed(interactionAllowed.boolValue)
         }
         return body()
     }

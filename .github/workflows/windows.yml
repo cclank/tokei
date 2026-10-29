@@ -75,9 +75,40 @@ jobs:
           PYTHONUTF8: "1"
         run: python -m unittest discover -s tests
 
+  keychain-compatibility:
+    name: Keychain upgrade (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install synthetic credential test dependency
+        run: python -m pip install cryptography==50.0.1
+      - name: Real Keychain ACL upgrade and no-prompt acceptance
+        env:
+          TOKEI_RUN_REAL_KEYCHAIN_TESTS: "1"
+          TOKEI_KEYCHAIN_SOAK_SECONDS: "620"
+          TOKEI_KEYCHAIN_REPORT_DIR: ${{ runner.temp }}/tokei-keychain-results
+        run: python -m unittest tests.test_grok_bot_real_keychain -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grok-keychain-${{ matrix.os }}
+          path: ${{ runner.temp }}/tokei-keychain-results
+          if-no-files-found: error
+          retention-days: 7
+
   app:
     name: App installer (windows-latest)
-    needs: [collector, full-suite]
+    needs: [collector, full-suite, keychain-compatibility]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

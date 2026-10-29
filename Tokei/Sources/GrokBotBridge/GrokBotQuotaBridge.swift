@@ -52,7 +52,7 @@ public enum GrokBotQuotaBridge {
     public static func runIfRequested() -> Bool {
         // 2：--grok-bot-data-json 支持 --since <毫秒>，只拉这之后的用量事件。
         if CommandLine.arguments.contains("--grok-bot-helper-version") {
-            print("2")
+            print("5")
             exit(0)
         }
         if CommandLine.arguments.contains("--grok-bot-authorize") {
@@ -79,7 +79,6 @@ public enum GrokBotQuotaBridge {
     }
 
     static func authorize() -> Bool {
-        updateAuthorizationMarker(enabled: false)
         guard let result = credentialResult(
             allowInteraction: true,
             requireMarker: false,
@@ -97,7 +96,7 @@ public enum GrokBotQuotaBridge {
 
     static func verifyPersistentAuthorization() -> Bool {
         let ok = credential(allowInteraction: false, requireMarker: false) != nil
-        updateAuthorizationMarker(enabled: ok)
+        if ok { recordAuthorization() }
         return ok
     }
 
@@ -157,7 +156,8 @@ public enum GrokBotQuotaBridge {
             allowInteraction: allowInteraction,
             returnKeychainItem: returnKeychainItem
         ) else {
-            if !allowInteraction { updateAuthorizationMarker(enabled: false) }
+            // A locked keychain, cancelled prompt, or temporary read failure does
+            // not revoke the user's consent. Background reads must never erase it.
             return nil
         }
         guard let stored = activeCredential(password: secret.password),
@@ -410,45 +410,73 @@ public enum GrokBotQuotaBridge {
         return String(data: output, encoding: .utf8)
     }
 
+    // AuthenticationUIFail / LAContext alone can still show legacy ACL dialogs,
+    // including on modern macOS. Suppress interaction for every background read;
+    // if the OS refuses this policy, fail closed and keep the saved consent.
+    static func withKeychainInteractionSuppressed<Value>(
+        allowInteraction: Bool,
+        _ operation: () -> Value?
+    ) -> Value? {
+        guard !allowInteraction else {
+            return operation()
+        }
+        var previousInteraction = DarwinBoolean(false)
+        guard SecKeychainGetUserInteractionAllowed(&previousInteraction) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            return nil
+        }
+        defer {
+            _ = SecKeychainSetUserInteractionAllowed(previousInteraction.boolValue)
+        }
+        return operation()
+    }
+
     private static func safeStoragePassword(
         allowInteraction: Bool,
         returnKeychainItem: Bool
     ) -> KeychainSecret? {
-        // macOS 26：已废弃的 SecKeychainSetUserInteractionAllowed(false) 会让紧随其后的
-        // SecItemCopyMatching 返回 errSecAuthFailed(-25293)，即使当前可执行文件已在该
-        // 钥匙串项的 ACL 中。抑制系统弹窗改由下方 LAContext.interactionNotAllowed +
-        // kSecUseAuthenticationUI 负责，两者对 SecItemCopyMatching 已足够。
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true,
-        ]
-        if returnKeychainItem {
-            query[kSecReturnRef as String] = true
+        return withKeychainInteractionSuppressed(allowInteraction: allowInteraction) {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecReturnData as String: true,
+            ]
+            if returnKeychainItem {
+                query[kSecReturnRef as String] = true
+            }
+            if !allowInteraction {
+                let context = LAContext()
+                context.interactionNotAllowed = true
+                query[kSecUseAuthenticationContext as String] = context
+                query[kSecUseAuthenticationUI as String] = uiFailPolicy as CFString
+            }
+            var item: CFTypeRef?
+            let status = copyKeychainItem(query as CFDictionary, &item)
+            guard status == errSecSuccess else { return nil }
+            if let data = item as? Data, !data.isEmpty {
+                return KeychainSecret(password: data, item: nil)
+            }
+            guard let values = item as? [String: Any],
+                  let data = values[kSecValueData as String] as? Data,
+                  !data.isEmpty else {
+                return nil
+            }
+            return KeychainSecret(
+                password: data,
+                item: keychainItem(from: values[kSecValueRef as String])
+            )
         }
-        if !allowInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-            query[kSecUseAuthenticationUI as String] = uiFailPolicy as CFString
-        }
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess else { return nil }
-        if let data = item as? Data, !data.isEmpty {
-            return KeychainSecret(password: data, item: nil)
-        }
-        guard let values = item as? [String: Any],
-              let data = values[kSecValueData as String] as? Data,
-              !data.isEmpty else {
-            return nil
-        }
-        return KeychainSecret(
-            password: data,
-            item: keychainItem(from: values[kSecValueRef as String])
-        )
     }
+
+#if TOKEI_GROK_BOT_KEYCHAIN_TEST
+    // Test binaries cannot fall through to the user's real login keychain.
+    static var copyKeychainItem: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = { _, _ in
+        fatalError("The test must provide an isolated keychain query")
+    }
+#else
+    private static let copyKeychainItem = SecItemCopyMatching
+#endif
 
     private static func keychainItem(from value: Any?) -> SecKeychainItem? {
         guard let value else { return nil }
@@ -670,12 +698,8 @@ public enum GrokBotQuotaBridge {
             .appendingPathComponent(".tokei/grok_bot_keychain_authorized")
     }
 
-    private static func updateAuthorizationMarker(enabled: Bool) {
+    private static func recordAuthorization() {
         let url = authorizationMarkerURL
-        if !enabled {
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -691,7 +715,7 @@ public enum GrokBotQuotaBridge {
                 ofItemAtPath: url.path
             )
         } catch {
-            try? FileManager.default.removeItem(at: url)
+            // Preserve any previous authorization if an atomic update fails.
         }
     }
 }

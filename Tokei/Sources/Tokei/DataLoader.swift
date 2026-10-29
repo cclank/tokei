@@ -762,8 +762,10 @@ final class DataLoader {
         }
         var environment = ProcessInfo.processInfo.environment
         environment["TOKEI_DSH_DECOMPRESSED_DIR"] = deepSeekSessions.path
-        environment["TOKEI_GROK_BOT_HELPER"] =
-            GrokBotHelperManager.resolvedHelperURL()?.path ?? Bundle.main.executablePath
+        let grokBotHelper = GrokBotHelperManager.resolvedHelperURL()?.path
+        environment["TOKEI_GROK_BOT_HELPER"] = grokBotHelper
+        environment["TOKEI_GROK_BOT_HELPER_BLOCKED"] =
+            grokBotHelper == nil || GrokBotHelperManager.isBackgroundAccessBlocked ? "1" : "0"
         if let json = nativeClaudeQuotaJSON() {
             environment["TOKEI_CLAUDE_QUOTA_JSON"] = json
         } else {

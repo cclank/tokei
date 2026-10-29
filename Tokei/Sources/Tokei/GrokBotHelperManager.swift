@@ -1,9 +1,10 @@
 import Darwin
 import Foundation
+import CryptoKit
 
 enum GrokBotHelperManager {
-    /// 安装包里辅助程序的协议版本。2：--grok-bot-data-json 支持 --since 增量拉取。
-    static let requiredProtocolVersion = 2
+    /// 5：所有 macOS 的后台读取均禁止进程交互，保留历史授权。
+    static let requiredProtocolVersion = 5
     /// 已安装的辅助程序不低于这个版本就照常用来采集。换新版会让钥匙串重新弹授权框，
     /// 不能因为 App 升级就把用户授权过的旧版停掉——只在用户主动（重新）授权时换。
     static let minimumProtocolVersion = 1
@@ -13,10 +14,17 @@ enum GrokBotHelperManager {
     private static let resolutionLock = NSLock()
     private static var cachedHelperURL: URL?
     private static var resolvedOnce = false
-    private static var lastAuthorizationRepairAttempt = Date.distantPast
-    private static let authorizationRepairInterval: TimeInterval = 5 * 60
+    private static var backgroundAccessBlocked = false
+    // v1.0.48 官方 Universal 助手缺少旧系统的进程级交互保护。
+    // 精确识别问题产物，保留其他已授权助手的文件与钥匙串 ACL。
+    static let unsafeLegacyHelperDigests: Set<String> = [
+        "1525a5c064142306f108097b68fa2b785d7215f127e8c6c44fdb55994fc3cc9e",
+    ]
 
-    static func resolvedHelperURL() -> URL? {
+    static func resolvedHelperURL(
+        macOSMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
+        blockedHelperDigests: Set<String> = unsafeLegacyHelperDigests
+    ) -> URL? {
         resolutionLock.lock()
         let resolved: URL?
         if resolvedOnce {
@@ -26,33 +34,60 @@ enum GrokBotHelperManager {
             let installed = installedHelperURL
             installedVersion = usableVersion(installed, requireCurrentUserOwner: true)
             if (installedVersion ?? 0) >= minimumProtocolVersion {
-                cachedHelperURL = installed
-            } else {
-                cachedHelperURL = bundledHelperURLs.first {
-                    isUsableHelper($0, requireCurrentUserOwner: false)
+                let unsafe: Bool
+                if (installedVersion ?? 0) < 3 {
+                    unsafe = (try? Data(contentsOf: installed)).map {
+                        blockedHelperDigests.contains(SHA256.hash(data: $0).map {
+                            String(format: "%02x", $0)
+                        }.joined()) || !$0.containsLegacyKeychainSuppression
+                    } ?? true
+                } else {
+                    // Protocols 3/4 suppressed interaction only before macOS 26.
+                    unsafe = macOSMajorVersion >= 26 && (installedVersion ?? 0) < 5
                 }
+                backgroundAccessBlocked = unsafe
+                cachedHelperURL = unsafe ? nil : installed
+            } else {
+                // A bundled executable has a different Keychain identity. Only
+                // explicit authorization may install it; do not probe it on launch.
+                cachedHelperURL = nil
             }
             resolved = cachedHelperURL
         }
         resolutionLock.unlock()
-        if let resolved {
-            repairAuthorizationMarkerIfNeeded(using: resolved)
-        }
         return resolved
+    }
+
+    static func runIfRequested() -> Bool {
+        guard CommandLine.arguments.contains("--grok-bot-resolve-helper") else { return false }
+        let path = resolvedHelperURL()?.path
+        let result: [String: Any] = [
+            "helper": path as Any? ?? NSNull(),
+            "blocked": path == nil || isBackgroundAccessBlocked,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: result) {
+            FileHandle.standardOutput.write(data)
+        }
+        return true
+    }
+
+    static var isBackgroundAccessBlocked: Bool {
+        resolutionLock.lock()
+        defer { resolutionLock.unlock() }
+        return backgroundAccessBlocked
     }
 
     /// 已安装的是能用、但不是最新的辅助程序：提示用户重新授权一次换上新版。
     static var needsReauthorization: Bool {
         resolutionLock.lock()
         defer { resolutionLock.unlock() }
-        return installedVersion.map { $0 < requiredProtocolVersion } ?? false
+        return backgroundAccessBlocked || (installedVersion.map { $0 < 2 } ?? false)
     }
 
     static func installIfNeeded() -> URL? {
         let destination = installedHelperURL
         if isUsableHelper(destination, requireCurrentUserOwner: true) {
             cache(destination)
-            repairAuthorizationMarkerIfNeeded(using: destination)
             return destination
         }
         guard let source = bundledHelperURLs.first(where: {
@@ -91,7 +126,6 @@ enum GrokBotHelperManager {
         resolutionLock.lock()
         installedVersion = requiredProtocolVersion
         resolutionLock.unlock()
-        repairAuthorizationMarkerIfNeeded(using: destination)
         return destination
     }
 
@@ -104,49 +138,6 @@ enum GrokBotHelperManager {
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Tokei/Helpers")
             .appendingPathComponent(helperName)
-    }
-
-    private static var authorizationMarkerURL: URL {
-        if let configured = ProcessInfo.processInfo.environment[
-            "TOKEI_GROK_BOT_AUTH_MARKER"
-        ], !configured.isEmpty {
-            return URL(fileURLWithPath: NSString(string: configured).expandingTildeInPath)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".tokei/grok_bot_keychain_authorized")
-    }
-
-    private static func repairAuthorizationMarkerIfNeeded(using helper: URL) {
-        guard !FileManager.default.fileExists(atPath: authorizationMarkerURL.path) else { return }
-        let now = Date()
-        resolutionLock.lock()
-        let shouldAttempt = now.timeIntervalSince(lastAuthorizationRepairAttempt) >=
-            authorizationRepairInterval
-        if shouldAttempt {
-            lastAuthorizationRepairAttempt = now
-        }
-        resolutionLock.unlock()
-        guard shouldAttempt else {
-            return
-        }
-
-        let process = Process()
-        process.executableURL = helper
-        process.arguments = ["--grok-bot-verify"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do {
-            try process.run()
-        } catch {
-            return
-        }
-        guard finished.wait(timeout: .now() + 5) == .success else {
-            process.terminate()
-            return
-        }
     }
 
     private static var bundledHelperURLs: [URL] {
@@ -226,6 +217,17 @@ enum GrokBotHelperManager {
         resolutionLock.lock()
         cachedHelperURL = url
         resolvedOnce = true
+        backgroundAccessBlocked = false
         resolutionLock.unlock()
+    }
+}
+
+private extension Data {
+    /// Protocols 1/2 predate capability reporting. Their dedicated bridge had
+    /// one Keychain read path. A build without this import cannot suppress the
+    /// legacy ACL prompt. This also detects re-signed and single-arch v1.0.48
+    /// helpers whose whole-file digest differs from the official Universal DMG.
+    var containsLegacyKeychainSuppression: Bool {
+        range(of: Data("_SecKeychainSetUserInteractionAllowed\0".utf8)) != nil
     }
 }

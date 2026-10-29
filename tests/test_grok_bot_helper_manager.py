@@ -25,13 +25,15 @@ class GrokBotHelperManagerTests(unittest.TestCase):
                 check=True,
                 cwd=ROOT,
             )
-            result = subprocess.run(
-                [str(binary)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertIn("grok bot helper manager checks passed", result.stdout)
+            for scenario in (None, "preserve-v2", "blocked-v2", "modern-v2", "unsafe-modern-v2",
+                             "protocol4-old-system", "protocol4-modern", "protocol5-modern",
+                             "unrecognized-v2", "missing-helper", "invalid-helper"):
+                with self.subTest(scenario=scenario):
+                    result = subprocess.run(
+                        [str(binary)] + ([scenario] if scenario else []),
+                        check=True, capture_output=True, text=True,
+                    )
+                    self.assertIn("grok bot helper manager checks passed", result.stdout)
 
     def test_release_package_contains_the_helper(self):
         package = (ROOT / "Tokei/Package.swift").read_text()

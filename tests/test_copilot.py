@@ -544,5 +544,42 @@ class CopilotScanTests(unittest.TestCase):
                 self.assertEqual(USAGE.token_total(day["models"]["gpt-5-mini"]), 20)
 
 
+class CopilotDailyCostsTests(unittest.TestCase):
+    def test_zero_cost_copilot_activity_is_included(self):
+        today = datetime.now().astimezone().date().isoformat()
+        for activity, tokens in (({"out": 13, "reason": 7}, 20),
+                                 ({"credits": 2}, 0)):
+            with self.subTest(activity=activity):
+                ledger = {"tools": {"copilot": {today: {"cost": 0, **activity}}}}
+                with mock.patch.object(USAGE, "_load_ledger", return_value=ledger):
+                    daily = USAGE.build_daily_costs("all", refresh=False, _cache={})["daily"]
+                self.assertEqual(len(daily), 1)
+                self.assertEqual(daily[0]["copilot"], 0)
+                self.assertEqual(daily[0]["total"], 0)
+                self.assertEqual(daily[0]["tokens"], tokens)
+
+    def test_copilot_cost_is_included_in_mixed_tool_total(self):
+        today = datetime.now().astimezone().date().isoformat()
+        ledger = {"tools": {"copilot": {today: {"out": 20, "cost": 1.25}}}}
+        cache = {"claude": {"session": {"days": {
+            today: {"in": 100, "out": 50, "cost": 2.5}}}}}
+        with mock.patch.object(USAGE, "_load_ledger", return_value=ledger):
+            daily = USAGE.build_daily_costs("all", refresh=False, _cache=cache)["daily"]
+        self.assertEqual(len(daily), 1)
+        self.assertEqual(daily[0]["copilot"], 1.25)
+        self.assertEqual(daily[0]["claude"], 2.5)
+        self.assertEqual(daily[0]["total"], 3.75)
+        self.assertEqual(daily[0]["tokens"], 170)
+
+    def test_day_without_copilot_has_zero_copilot_cost(self):
+        today = datetime.now().astimezone().date().isoformat()
+        ledger = {"tools": {"claude": {today: {"out": 20, "cost": 2.5}}}}
+        with mock.patch.object(USAGE, "_load_ledger", return_value=ledger):
+            daily = USAGE.build_daily_costs("all", refresh=False, _cache={})["daily"]
+        self.assertEqual(len(daily), 1)
+        self.assertEqual(daily[0]["copilot"], 0)
+        self.assertEqual(daily[0]["total"], 2.5)
+
+
 if __name__ == "__main__":
     unittest.main()

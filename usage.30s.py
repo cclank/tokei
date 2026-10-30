@@ -18411,7 +18411,7 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
                        "workbuddy": 0.0, "workbuddy_ai": 0.0, "codebuddy": 0.0,
                        "deepseek_harness": 0.0,
                        "opencode": 0.0, "qwencode": 0.0, "kimicode": 0.0,
-                       "musecode": 0.0, "cmdcode": 0.0,
+                       "musecode": 0.0, "cmdcode": 0.0, "copilot": 0.0,
                        "prime_agent": 0.0,
                        "hermes": 0.0, "openclaw": 0.0,
                        "c_in": 0, "c_out": 0, "c_cr": 0, "c_cw": 0,
@@ -18851,13 +18851,15 @@ def build_daily_costs(period="all", refresh=True, _cache=None):
               "kimicode": round(v["kimicode"], 2),
               "musecode": round(v["musecode"], 2),
               "cmdcode": round(v["cmdcode"], 2),
+              "copilot": round(v["copilot"], 2),
               "prime_agent": round(v["prime_agent"], 2),
               "total": round(v["claude"] + v["codex"] + v["codex_reserve"]
                              + v["gemini"] + v["grok"] + v["zcode"]
                              + v["mimocode"] + v["pi"] + v["workbuddy"] + v["workbuddy_ai"]
                              + v["codebuddy"]
                              + v["deepseek_harness"] + v["opencode"] + v["qwencode"]
-                             + v["kimicode"] + v["musecode"] + v["cmdcode"] + v["prime_agent"] + v["hermes"]
+                             + v["kimicode"] + v["musecode"] + v["cmdcode"] + v["copilot"]
+                             + v["prime_agent"] + v["hermes"]
                              + v["openclaw"] + v["devin"] + v["minimax"], 2),
               "c_in": v["c_in"], "c_out": v["c_out"], "c_cr": v["c_cr"], "c_cw": v["c_cw"],
               "x_in": v["x_in"], "x_out": v["x_out"], "x_cached": v["x_cached"], "x_reason": v["x_reason"],

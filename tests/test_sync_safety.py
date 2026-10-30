@@ -5,6 +5,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -97,6 +98,30 @@ class SyncSnapshotSafetyTests(unittest.TestCase):
              mock.patch.object(USAGE, "_load_json", return_value={}), \
              mock.patch.object(USAGE, "_write_configured_sync_snapshot", return_value=False):
             self.assertEqual(USAGE.write_sync_snapshot(), 1)
+
+    def test_explicit_sync_snapshot_preserves_copilot_daily_usage(self):
+        today = date.today().isoformat()
+        for cost in (0, 1.25):
+            with self.subTest(cost=cost), tempfile.TemporaryDirectory() as tmp:
+                ledger = {"tools": {"copilot": {
+                    today: {"out": 13, "reason": 7, "credits": 2, "cost": cost}}}}
+                config = {"sync_dir": tmp, "device_id": "test-device"}
+                with mock.patch.object(USAGE, "compute", return_value={}), \
+                     mock.patch.object(USAGE, "_pricing_metadata", return_value={}), \
+                     mock.patch.object(USAGE, "_load_quota_anchors", return_value={}), \
+                     mock.patch.object(USAGE, "_load_tokei_config", return_value=config), \
+                     mock.patch.object(USAGE, "_load_scan_cache", return_value={}), \
+                     mock.patch.object(USAGE, "_load_ledger", return_value=ledger):
+                    self.assertEqual(USAGE.write_sync_snapshot(), 0)
+                snapshot = json.loads((Path(tmp) / "test-device.json").read_text(encoding="utf-8"))
+                self.assertEqual(snapshot["_device"], "test-device")
+                self.assertEqual(snapshot["_ledger"], ledger)
+                daily = snapshot["_dashboard"]["daily"]
+                self.assertEqual(len(daily), 1)
+                self.assertEqual(daily[0]["date"], today)
+                self.assertEqual(daily[0]["copilot"], cost)
+                self.assertEqual(daily[0]["total"], cost)
+                self.assertEqual(daily[0]["tokens"], 20)
 
 
 if __name__ == "__main__":

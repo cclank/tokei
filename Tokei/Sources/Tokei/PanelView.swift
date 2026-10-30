@@ -2966,6 +2966,7 @@ struct PanelView: View {
 
         }
         .onAppear {
+            guard !Shot.isOffline else { return }
             loginItem.refresh()
             loadProviderSettings()
             if let cfg = SyncManager.loadConfig() {
@@ -3080,28 +3081,22 @@ struct PanelView: View {
     var settingsMenuBarSection: some View {
         settingsSection("menubar.rectangle", L("菜单栏")) {
             settingsStackedValue(L("样式")) {
-                Picker(L("菜单栏样式"), selection: $menuBarStyle) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 6),
+                                    GridItem(.flexible(), spacing: 6)], spacing: 6) {
                     ForEach(MenuBarStyle.allCases) { style in
-                        Text(style.label).tag(style.rawValue)
+                        menuBarStyleTile(style)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.mini)
-                .font(.system(size: Theme.fontSize(9), weight: .medium))
-                .frame(width: settingsMenuPickerWidth)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(L("菜单栏样式"))
             }
 
             settingsStackedValue(L("信息")) {
-                Picker(L("菜单栏信息量"), selection: $menuBarDensity) {
+                settingsFittingPicker(L("菜单栏信息量"), selection: $menuBarDensity) {
                     ForEach(MenuBarDensity.allCases) { density in
                         Text(density.label).tag(density.rawValue)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.mini)
-                .frame(width: settingsMenuPickerWidth)
             }
 
             settingsStackedValue(L("额度来源")) {
@@ -3123,16 +3118,6 @@ struct PanelView: View {
                 .font(.system(size: Theme.fontSize(8.5)))
                 .foregroundStyle(Theme.tTertiary)
                 .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Spacer()
-                MenuBarStylePreview(
-                    style: MenuBarStyle(rawValue: menuBarStyle) ?? .system,
-                    density: MenuBarDensity(rawValue: menuBarDensity) ?? .full,
-                    sources: Array(menuBarQuotaSelectedSources.prefix(2))
-                )
-                Spacer()
-            }
         }
         .onChange(of: menuBarStyle) { _ in
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
@@ -4270,6 +4255,62 @@ struct PanelView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
+    }
+
+    func menuBarStyleTile(_ style: MenuBarStyle) -> some View {
+        let selected = style.rawValue == menuBarStyle
+        return Button {
+            menuBarStyle = style.rawValue
+        } label: {
+            VStack(spacing: 4) {
+                MenuBarStylePreview(
+                    style: style,
+                    density: MenuBarDensity(rawValue: menuBarDensity) ?? .full,
+                    sources: Array(menuBarQuotaSelectedSources.prefix(2))
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.black.opacity(0.28))
+                )
+                Text(style.label)
+                    .font(.system(size: Theme.fontSize(9), weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? Theme.tPrimary : Theme.tSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor : Color.clear, lineWidth: 1.2)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(style.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    func settingsFittingPicker<C: View>(_ title: String, selection: Binding<String>,
+                                        @ViewBuilder options: () -> C) -> some View {
+        let options = options()
+        return ViewThatFits(in: .horizontal) {
+            MeasuredAtWidth(width: settingsMenuPickerWidth) {
+                Picker(title, selection: selection) { options }
+                    .pickerStyle(.segmented)
+            }
+            Picker(title, selection: selection) { options }
+                .pickerStyle(.menu)
+                .fixedSize()
+        }
+        .labelsHidden()
+        .controlSize(.mini)
+        .frame(width: settingsMenuPickerWidth)
     }
 
     func settingsStackedValue<C: View>(_ title: String, @ViewBuilder value: () -> C) -> some View {

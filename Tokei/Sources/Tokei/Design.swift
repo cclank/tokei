@@ -177,6 +177,19 @@ struct EqualHeightGrid: Layout {
     }
 }
 
+struct MeasuredAtWidth: Layout {
+    var width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(ProposedViewSize(width: width, height: proposal.height)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
+                              proposal: ProposedViewSize(width: width, height: bounds.height))
+    }
+}
+
 // 命中率环形仪表 —— 卡片视觉焦点之一。
 struct RingGauge: View {
     var value: Double            // 0...100

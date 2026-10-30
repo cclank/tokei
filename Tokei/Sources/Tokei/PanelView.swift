@@ -2957,6 +2957,7 @@ struct PanelView: View {
 
         }
         .onAppear {
+            guard !Shot.isOffline else { return }
             loginItem.refresh()
             loadProviderSettings()
             if let cfg = SyncManager.loadConfig() {
@@ -3077,6 +3078,8 @@ struct PanelView: View {
                         menuBarStyleTile(style)
                     }
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(L("菜单栏样式"))
             }
 
             settingsStackedValue(L("信息")) {

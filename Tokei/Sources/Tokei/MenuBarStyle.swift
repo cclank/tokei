@@ -221,7 +221,7 @@ enum MenuBarMetricKind: Equatable {
     var nsColor: NSColor {
         switch self {
         case .quota(let source): return source.nsColor
-        case .total: return .secondaryLabelColor
+        case .total: return .labelColor
         }
     }
 
@@ -656,7 +656,7 @@ enum MenuBarTitleRenderer {
                     appendSeparator(" · ", to: title,
                                     color: style == .system
                                         ? NSColor.white.withAlphaComponent(0.72)
-                                        : .secondaryLabelColor)
+                                        : NSColor.labelColor.withAlphaComponent(0.75))
                 }
                 appendValue(metric, color: style == .system ? .white : metric.kind.nsColor,
                             to: title)
@@ -746,7 +746,7 @@ enum MenuBarTitleRenderer {
     }
 
     /// 过期读数的透明度：还看得清，但一眼能和新鲜读数分开。
-    private static let staleAlpha: CGFloat = 0.45
+    private static let staleAlpha: CGFloat = 0.62
 
     private static func appendValue(_ metric: MenuBarMetric, color: NSColor,
                                     to title: NSMutableAttributedString) {

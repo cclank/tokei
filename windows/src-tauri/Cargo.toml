@@ -28,6 +28,11 @@ dirs = "6"
 getrandom = "0.3"
 keyring = { version = "3", features = ["windows-native", "apple-native"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+dbus-secret-service = { version = "4.1", features = ["crypto-rust"] }
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
 

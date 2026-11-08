@@ -1,0 +1,108 @@
+name: Linux desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "usage.30s.py"
+      - "pricing*.json"
+      - "windows/**"
+      - "tests/test_cross_platform_smoke.py"
+      - ".github/workflows/linux.yml"
+  pull_request:
+    paths:
+      - "usage.30s.py"
+      - "pricing*.json"
+      - "windows/**"
+      - "tests/test_cross_platform_smoke.py"
+      - ".github/workflows/linux.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: Linux .deb and desktop smoke test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          check-latest: true
+          cache: pnpm
+          cache-dependency-path: windows/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows/src-tauri
+      - name: Install build and smoke test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            libdbus-1-dev dbus-x11 gnome-keyring xvfb xauth xdotool
+      - name: Install frontend dependencies
+        working-directory: windows
+        run: pnpm install --frozen-lockfile
+      - name: Test the native app and locked Secret Service
+        working-directory: windows/src-tauri
+        run: |
+          test_binary="$(cargo test --locked --lib --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "tokei_lib" and .profile.test) | .executable // empty')"
+          test -x "$test_binary"
+          "$test_binary"
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          env HOME="$fixture" XDG_DATA_HOME="$fixture/data" XDG_CONFIG_HOME="$fixture/config" \
+            TOKEI_TEST_LINUX_KEYRING=1 dbus-run-session -- bash -euo pipefail -c '
+              printf "%s" "tokei-fixture-only" | gnome-keyring-daemon --components=secrets --unlock >/dev/null
+              "$1" --ignored --exact store::linux_tests::linux_keyring_skips_locked_credentials
+            ' bash "$test_binary"
+      - name: Build .deb
+        working-directory: windows
+        run: pnpm tauri build --bundles deb -- --locked
+      - name: Install package and read a compressed Codex rollout
+        run: |
+          deb="$(find windows/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$deb"
+          package="$(dpkg-deb -f "$deb" Package)"
+          test "$package" = tokei-desktop
+          dpkg-deb -f "$deb" Depends | grep -E '(^|, )zstd(,|$)'
+          sudo apt-get install -y --no-install-recommends "./$deb"
+          files="$(dpkg -L "$package")"
+          collector="$(printf '%s\n' "$files" | grep '/collector/usage\.30s\.py$')"
+          test -r "$collector"
+          test ! -e "$(dirname "$collector")/windows_native.py"
+          printf '%s\n' "$files" | grep -Fx /usr/bin/tokei-desktop
+          TOKEI_SMOKE_COLLECTOR="$collector" TOKEI_SMOKE_COMPRESSED_CODEX=1 \
+            /usr/bin/python3 -m unittest tests.test_cross_platform_smoke -v
+      - name: Open the installed app on a virtual display
+        run: |
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "$fixture"' EXIT
+          env HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_DATA_HOME="$fixture/data" \
+            TOKEI_AUTO_PRICING=0 dbus-run-session -- xvfb-run -a bash -euo pipefail -c '
+              /usr/bin/tokei-desktop >"$1/tokei.log" 2>&1 &
+              pid=$!
+              trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
+              for attempt in $(seq 1 45); do
+                if ! kill -0 "$pid" 2>/dev/null; then break; fi
+                if xdotool search --onlyvisible --name "^Tokei$" >/dev/null 2>&1; then exit 0; fi
+                sleep 1
+              done
+              cat "$1/tokei.log"
+              exit 1
+            ' bash "$fixture"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tokei-linux-deb
+          path: windows/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error

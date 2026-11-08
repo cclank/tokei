@@ -1,10 +1,11 @@
 //! 跑采集脚本 `usage.30s.py`，把它打印的 JSON 原样交给前端。
 //!
-//! 安装版：Python 和脚本都在安装目录的资源里（`python/python.exe`、`collector/usage.30s.py`），
-//! 用户不需要自己装 Python。开发时：脚本取仓库根目录那份，Python 用系统里的。
+//! Windows 安装包自带 Python，Linux 安装包使用系统 Python。开发时脚本取仓库根目录那份。
 //! 两样都可以用环境变量 `TOKEI_PYTHON`、`TOKEI_SCRIPT` 指定。
 
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -71,8 +72,15 @@ pub fn resolve(app: &AppHandle) -> Result<Runtime, String> {
     }
 
     let script = script.ok_or_else(|| "找不到采集脚本 usage.30s.py".to_string())?;
-    let python =
-        python.unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
+    let python = python.unwrap_or_else(|| {
+        PathBuf::from(if cfg!(windows) {
+            "python"
+        } else if cfg!(target_os = "linux") {
+            "/usr/bin/python3"
+        } else {
+            "python3"
+        })
+    });
     Ok(Runtime { python, script })
 }
 
@@ -91,7 +99,7 @@ pub struct RawOutput {
     pub stderr: String,
 }
 
-/// 跑一次采集脚本，返回 stdout（UTF-8）。`env` 用来传 Key 这类只给脚本看的值。
+/// 跑一次采集脚本，返回 stdout（UTF-8）。
 pub fn run(app: &AppHandle, args: &[String], env: &[(String, String)]) -> Result<String, String> {
     let raw = run_raw(app, args, env, TIMEOUT)?;
     if raw.timed_out {
@@ -152,6 +160,7 @@ pub fn bridge_command(app: &AppHandle) -> Result<Command, String> {
     Ok(command)
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn run_bridge(app: &AppHandle, mode: &str) -> Result<String, String> {
     let mut command = bridge_command(app)?;
     command
@@ -188,11 +197,29 @@ pub fn run_bridge(app: &AppHandle, mode: &str) -> Result<String, String> {
     String::from_utf8(output).map_err(|_| "Invalid Windows helper response".into())
 }
 
+#[cfg(target_os = "linux")]
+fn credential_pipe(command: &mut Command, credentials: &[(String, String)]) -> Option<Vec<u8>> {
+    for (_, name) in crate::store::SECRETS {
+        command.env_remove(name);
+    }
+    command.env_remove("TOKEI_PROVIDER_KEYS_STDIN");
+    command.env("TOKEI_GROK_BOT_QUOTA", "0");
+    if credentials.is_empty() {
+        return None;
+    }
+    let payload = serde_json::to_vec(credentials).ok()?;
+    if payload.len() > 64 * 1024 {
+        return None;
+    }
+    command.env("TOKEI_PROVIDER_KEYS_STDIN", "1").stdin(Stdio::piped());
+    Some(payload)
+}
+
 fn run_runtime(
     app: &AppHandle,
     runtime: Runtime,
     args: &[String],
-    env: &[(String, String)],
+    credentials: &[(String, String)],
     timeout: Duration,
 ) -> Result<RawOutput, String> {
     let mut command = Command::new(&runtime.python);
@@ -207,7 +234,10 @@ fn run_runtime(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for (key, value) in env {
+    #[cfg(target_os = "linux")]
+    let credential_input = credential_pipe(&mut command, credentials);
+    #[cfg(not(target_os = "linux"))]
+    for (key, value) in credentials {
         command.env(key, value);
     }
     #[cfg(windows)]
@@ -219,6 +249,13 @@ fn run_runtime(
     let mut child = command
         .spawn()
         .map_err(|err| format!("启动 Python 失败（{}）：{err}", runtime.python.display()))?;
+
+    #[cfg(target_os = "linux")]
+    let credential_writer = credential_input.zip(child.stdin.take()).map(|(payload, mut pipe)| {
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(&payload);
+        })
+    });
 
     // 先把输出管道读走，否则输出大于管道缓冲时子进程会卡在写上。
     let mut stdout = child.stdout.take().expect("piped stdout");
@@ -251,6 +288,11 @@ fn run_runtime(
     };
     let elapsed = started.elapsed().as_secs_f64();
 
+    #[cfg(target_os = "linux")]
+    if let Some(writer) = credential_writer {
+        let _ = writer.join();
+    }
+
     let stdout = out_reader.join().unwrap_or_default();
     let stderr = err_reader.join().unwrap_or_default();
     let stdout = String::from_utf8(stdout).map_err(|err| format!("采集输出不是 UTF-8：{err}"))?;
@@ -266,4 +308,45 @@ fn run_runtime(
         stdout,
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn provider_key_reaches_collector_without_reaching_child_environment() {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../usage.30s.py");
+        let mut command = Command::new("/usr/bin/python3");
+        command
+            .args(["-B", "-c", r#"
+import importlib.util
+import os
+import subprocess
+import sys
+import tempfile
+
+with tempfile.TemporaryDirectory() as fixture:
+    os.environ["HOME"] = fixture
+    spec = importlib.util.spec_from_file_location("collector_fixture", sys.argv[1])
+    collector = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = collector
+    spec.loader.exec_module(collector)
+    collector._PIPED_PROVIDER_KEYS = collector._read_provider_keys_from_stdin()
+    assert collector._provider_config_string("SUB2API_API_KEY", "sub2api_api_key") == "fixture-only"
+    assert "SUB2API_API_KEY" not in os.environ
+    subprocess.run(
+        [sys.executable, "-c", "import os; assert 'SUB2API_API_KEY' not in os.environ"],
+        check=True,
+    )
+"#])
+            .arg(script)
+            .env("TOKEI_HOST", "tauri")
+            .env("SUB2API_API_KEY", "inherited-fixture");
+        let credentials = vec![("SUB2API_API_KEY".into(), "fixture-only".into())];
+        let payload = credential_pipe(&mut command, &credentials).unwrap();
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(&payload).unwrap();
+        assert!(child.wait().unwrap().success());
+    }
 }

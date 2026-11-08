@@ -49,6 +49,23 @@ Windows 安装包须等待三个平台的全量测试通过，并额外执行 Ru
 采集检查和前端构建体积检查。Unix 权限位只在支持的平台断言；Windows 仍执行配置链接拒绝、
 缓存隔离、DPAPI 解密和授权撤销等检查。
 
+## Linux 桌面版
+
+Linux 桌面版复用这个目录的 Tauri 界面。Ubuntu 22.04 x64 的构建和安装检查由
+[`.github/workflows/linux.yml`](../.github/workflows/linux.yml) 执行。
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev
+pnpm install --frozen-lockfile
+pnpm tauri build --bundles deb -- --locked
+sudo apt install ./src-tauri/target/release/bundle/deb/*.deb
+```
+
+Linux 包名和命令均为 `tokei-desktop`。安装包使用系统 Python 和 `zstd` 读取 Codex
+压缩归档。`python3-zstandard` 可用于读取 Claude Desktop 等工具的压缩缓存。
+Provider API Key 由 Secret Service 密钥库保存，后台刷新会跳过锁定项。
+Grok Bot 账号授权在 Linux 上暂不可用。开启防休眠需要系统提供 logind。
+
 ## 结构
 
 - `native_bridge.py`：Windows 凭据解密、Grok Bot 授权与官方查询、Claude CLI 查询缓存、应用活跃统计。随安装包放在 `collector/windows_native.py`，使用内嵌 Python 和 cryptography。

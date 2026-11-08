@@ -34,12 +34,8 @@ async fn run_collector(
         return Err("Usage collection belongs to the main window".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let env = if args.iter().any(|arg| arg == "--local-only") {
-            Vec::new()
-        } else {
-            store::secret_environment()
-        };
-        collector::run(&app, &args, &env)
+        let credentials = store::collector_credentials(&args);
+        collector::run(&app, &args, &credentials)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -59,7 +55,7 @@ async fn run_collector_raw(
         collector::run_raw(
             &app,
             &args,
-            &store::secret_environment(),
+            &store::collector_credentials(&args),
             std::time::Duration::from_secs(8),
         )
     })

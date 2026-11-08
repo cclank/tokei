@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=11
+# TOKEI_COLLECTOR_REVISION=12
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -57,9 +57,37 @@ HOME = os.path.expanduser("~")
 APPDATA = os.environ.get("APPDATA") or os.path.join(HOME, "AppData", "Roaming")
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA") or os.path.join(HOME, "AppData", "Local")
 _IS_WINDOWS = os.name == "nt"
+_IS_LINUX = sys.platform.startswith("linux")
 # 托盘应用（没有控制台）启动采集时，Windows 默认会给每个子进程弹一个命令行窗口。
 _NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if _IS_WINDOWS else {}
 _WINDOWS_ABS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+def _linux_xdg_path(env_name, *parts):
+    if not _IS_LINUX:
+        return None
+    root = os.environ.get(env_name, "")
+    if not os.path.isabs(root):
+        fallback = (".config",) if env_name == "XDG_CONFIG_HOME" else (".local", "share")
+        root = os.path.join(HOME, *fallback)
+    return os.path.join(root, *parts)
+
+
+_PIPED_PROVIDER_KEYS = {}
+_PROVIDER_KEY_NAMES = ("SUB2API_API_KEY", "Z_AI_API_KEY", "TOKEI_MINIMAX_API_KEY")
+
+
+def _read_provider_keys_from_stdin():
+    if not (_IS_LINUX and os.environ.get("TOKEI_HOST") == "tauri"
+            and os.environ.pop("TOKEI_PROVIDER_KEYS_STDIN", None) == "1"):
+        return {}
+    try:
+        data = sys.stdin.buffer.read(64 * 1024 + 1)
+        if len(data) > 64 * 1024:
+            return {}
+        keys = dict(json.loads(data))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return {}
+    return {name: keys[name] for name in _PROVIDER_KEY_NAMES if isinstance(keys.get(name), str)}
 
 
 def _is_abs_project_path(path):
@@ -175,7 +203,9 @@ DOUBAOWORK_DIRS = _path_candidates(
     os.path.join(HOME, "Library", "Application Support", "DoubaoWork"),
     os.path.join(APPDATA, "DoubaoWork"),
     os.path.join(LOCALAPPDATA, "DoubaoWork"),
-    os.path.join(LOCALAPPDATA, "DoubaoWork", "User Data"))
+    os.path.join(LOCALAPPDATA, "DoubaoWork", "User Data"),
+    _linux_xdg_path("XDG_CONFIG_HOME", "DoubaoWork"),
+    _linux_xdg_path("XDG_CONFIG_HOME", "DoubaoWork", "User Data"))
 GROK_BOT_SECRET_PATHS = _path_candidates(
     "TOKEI_GROK_BOT_SECRETS",
     os.path.join(HOME, "Library", "Application Support", "Grok Bot",
@@ -192,7 +222,8 @@ QODER_IDE_DB = os.path.join(HOME, "Library", "Application Support", "Qoder",
 QODER_IDE_DB_PATHS = _path_candidates(
     "TOKEI_QODER_IDE_DB", QODER_IDE_DB,
     os.path.join(APPDATA, "Qoder", "SharedClientCache", "cache", "db", "local.db"),
-    os.path.join(LOCALAPPDATA, "Qoder", "SharedClientCache", "cache", "db", "local.db"))
+    os.path.join(LOCALAPPDATA, "Qoder", "SharedClientCache", "cache", "db", "local.db"),
+    _linux_xdg_path("XDG_CONFIG_HOME", "Qoder", "SharedClientCache", "cache", "db", "local.db"))
 
 
 def _qoder_ide_db_path():
@@ -285,7 +316,10 @@ def _writable_path(name):
         return user
     base = os.path.join(BASE_DIR, name)
     if os.path.isfile(base):
-        if ".app/" in BASE_DIR or _IS_WINDOWS:
+        # 安装版的资源目录只读（macOS 的 .app、Windows 的安装目录、Linux 的
+        # /opt 或 /usr/lib），必须复制到 ~/.tokei 才能改价和写缓存；
+        # 开发模式下仓库本身可写，直接用原地那份。
+        if ".app/" in BASE_DIR or _IS_WINDOWS or (_IS_LINUX and not os.access(BASE_DIR, os.W_OK)):
             os.makedirs(_USER_DIR, exist_ok=True)
             import shutil; shutil.copy2(base, user)
             return user
@@ -6747,7 +6781,7 @@ def _provider_quota_enabled(provider):
 
 
 def _provider_config_string(env_key, config_key):
-    value = os.environ.get(env_key)
+    value = _PIPED_PROVIDER_KEYS.get(env_key) or os.environ.get(env_key)
     if not isinstance(value, str) or not value.strip():
         value = _tokei_config().get(config_key)
     return value.strip() if isinstance(value, str) and value.strip() else None
@@ -9886,7 +9920,9 @@ _QODER_DB = os.path.join(HOME, "Library", "Application Support", "QoderWork", "d
 QODER_DB_PATHS = _path_candidates(
     "TOKEI_QODER_DB", _QODER_DB,
     os.path.join(APPDATA, "QoderWork", "data", "agents.db"),
-    os.path.join(LOCALAPPDATA, "QoderWork", "data", "agents.db"))
+    os.path.join(LOCALAPPDATA, "QoderWork", "data", "agents.db"),
+    _linux_xdg_path("XDG_CONFIG_HOME", "QoderWork", "data", "agents.db"),
+    _linux_xdg_path("XDG_DATA_HOME", "QoderWork", "data", "agents.db"))
 
 
 def _qoder_db_path():
@@ -16685,7 +16721,8 @@ CLAUDE_CACHE = os.path.join(
 CLAUDE_CACHE_DIRS = _path_candidates(
     "TOKEI_CLAUDE_CACHE_DIR", CLAUDE_CACHE,
     os.path.join(APPDATA, "Claude", "Cache", "Cache_Data"),
-    os.path.join(LOCALAPPDATA, "Claude", "Cache", "Cache_Data"))
+    os.path.join(LOCALAPPDATA, "Claude", "Cache", "Cache_Data"),
+    _linux_xdg_path("XDG_CONFIG_HOME", "Claude", "Cache", "Cache_Data"))
 
 
 def _claude_cache_records():
@@ -20502,6 +20539,7 @@ def _detect_local_servers(project_paths):
 
 
 if __name__ == "__main__":
+    _PIPED_PROVIDER_KEYS = _read_provider_keys_from_stdin()
     if _IS_WINDOWS:
         # Windows 管道按系统代码页（GBK / cp1252）编码，中文和 ⚡ 这类符号会直接报错；
         # 宿主一律按 UTF-8 读。

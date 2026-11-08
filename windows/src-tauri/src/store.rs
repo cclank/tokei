@@ -3,8 +3,8 @@
 //! - `config.json`：采集脚本读的开关（额度查询、同步目录等），按键合并写入，不整份覆盖，
 //!   和 Mac 版 SyncManager.setConfigValue 一样。
 //! - 其他文件（额度曲线的历史等）：只允许读写 `~/.tokei` 下的单层文件名，防止前端拼出别的路径。
-//! - Key：Windows 存「凭据管理器」，macOS（开发调试）存钥匙串；采集时作为环境变量传给脚本，
-//!   不写进 config.json，也不进同步快照。
+//! - Key：由系统密钥库保存。Windows/macOS 通过环境变量传给采集器，
+//!   Linux 从已解锁的条目读取，再通过管道传给采集器。
 
 use std::fs;
 use std::io::Write;
@@ -19,7 +19,7 @@ const KEYRING_SERVICE: &str = "com.tokei.windows.provider-api-key";
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 /// 与 Mac 版 ProviderCredentialStore.environmentOverrides 同一张表。
-const SECRETS: &[(&str, &str)] = &[
+pub(crate) const SECRETS: &[(&str, &str)] = &[
     ("sub2api", "SUB2API_API_KEY"),
     ("zai", "Z_AI_API_KEY"),
     ("minimax", "TOKEI_MINIMAX_API_KEY"),
@@ -114,17 +114,63 @@ pub fn update_tokei_config(patch: Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(config))
 }
 
-fn secret_entry(provider: &str) -> Result<keyring::Entry, String> {
+fn check_provider(provider: &str) -> Result<(), String> {
     if !SECRETS.iter().any(|(name, _)| *name == provider) {
         return Err(format!("未知的 Provider：{provider}"));
     }
+    Ok(())
+}
+
+fn secret_entry(provider: &str) -> Result<keyring::Entry, String> {
+    check_provider(provider)?;
     keyring::Entry::new(KEYRING_SERVICE, provider).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_secret_service() -> Result<dbus_secret_service::SecretService, dbus_secret_service::Error> {
+    use dbus_secret_service::{EncryptionType, SecretService};
+
+    SecretService::connect_with_max_prompt_timeout(EncryptionType::Dh, 0)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_secret_items<'a>(
+    service: &'a dbus_secret_service::SecretService,
+    provider: &str,
+) -> Result<
+    dbus_secret_service::SearchItemsResult<dbus_secret_service::Item<'a>>,
+    dbus_secret_service::Error,
+> {
+    // Match the attributes used by keyring::Entry to save the credential.
+    service.search_items(std::collections::HashMap::from([
+        ("service", KEYRING_SERVICE),
+        ("username", provider),
+        ("target", "default"),
+    ]))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_secret_value(service: &dbus_secret_service::SecretService, provider: &str) -> Option<String> {
+    let items = linux_secret_items(service, provider).ok()?;
+    if !items.locked.is_empty() || items.unlocked.len() != 1 {
+        return None;
+    }
+    // GetSecret can fail if the item locks after SearchItems. Never call Unlock.
+    String::from_utf8(items.unlocked[0].get_secret().ok()?).ok()
 }
 
 /// 只回答有没有存，不把 Key 本身交给前端。
 #[tauri::command]
 pub async fn has_secret(provider: String) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            check_provider(&provider)?;
+            let service = linux_secret_service().map_err(|e| e.to_string())?;
+            let items = linux_secret_items(&service, &provider).map_err(|e| e.to_string())?;
+            return Ok(!items.locked.is_empty() || !items.unlocked.is_empty());
+        }
+        #[cfg(not(target_os = "linux"))]
         match secret_entry(&provider)?.get_password() {
             Ok(value) => Ok(!value.is_empty()),
             Err(keyring::Error::NoEntry) => Ok(false),
@@ -150,8 +196,46 @@ pub fn delete_secret(provider: String) -> Result<(), String> {
     }
 }
 
-/// 采集时传给脚本的环境变量（Mac 版 environmentOverrides）。
-pub fn secret_environment() -> Vec<(String, String)> {
+/// Read credentials for the current collector invocation.
+pub fn collector_credentials(args: &[String]) -> Vec<(String, String)> {
+    if args.iter().any(|arg| arg == "--local-only") {
+        return Vec::new();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !args.iter().any(|arg| arg == "--json") {
+            return Vec::new();
+        }
+        let config = read_config().unwrap_or_default();
+        let enabled = SECRETS
+            .iter()
+            .filter(|(provider, _)| {
+                let env = format!("TOKEI_{}_QUOTA", provider.to_ascii_uppercase());
+                match std::env::var(env).as_deref() {
+                    Ok("0") => false,
+                    Ok("1") => true,
+                    _ => config.get(&format!("{provider}_quota_enabled")).and_then(Value::as_bool)
+                        == Some(true),
+                }
+            })
+            .collect::<Vec<_>>();
+        if enabled.is_empty() {
+            return Vec::new();
+        }
+        let service = linux_secret_service().ok();
+        return enabled
+            .into_iter()
+            .filter_map(|(provider, name)| {
+                let value = service
+                    .as_ref()
+                    .and_then(|service| linux_secret_value(service, provider))
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| std::env::var(name).ok().filter(|value| !value.is_empty()))?;
+                Some((name.to_string(), value))
+            })
+            .collect();
+    }
+    #[cfg(not(target_os = "linux"))]
     SECRETS
         .iter()
         .filter_map(|(provider, env)| {
@@ -159,4 +243,35 @@ pub fn secret_environment() -> Vec<(String, String)> {
             (!value.is_empty()).then(|| (env.to_string(), value))
         })
         .collect()
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the disposable Secret Service session used by Linux CI"]
+    fn linux_keyring_skips_locked_credentials() {
+        assert_eq!(std::env::var("TOKEI_TEST_LINUX_KEYRING").as_deref(), Ok("1"));
+        set_secret("sub2api".into(), "synthetic-enabled-key".into()).unwrap();
+        set_secret("zai".into(), "synthetic-disabled-key".into()).unwrap();
+        let config = serde_json::json!({"sub2api_quota_enabled": true, "zai_quota_enabled": false});
+        update_tokei_config(config.as_object().unwrap().clone()).unwrap();
+
+        let refresh = vec!["--json".into()];
+        assert_eq!(
+            collector_credentials(&refresh),
+            vec![("SUB2API_API_KEY".into(), "synthetic-enabled-key".into())]
+        );
+        assert!(collector_credentials(&["--json".into(), "--local-only".into()]).is_empty());
+
+        let service = linux_secret_service().unwrap();
+        let collection = service.get_default_collection().unwrap();
+        collection.lock().unwrap();
+        let items = linux_secret_items(&service, "sub2api").unwrap();
+        assert!(items.unlocked.is_empty());
+        assert_eq!(items.locked.len(), 1);
+        assert!(collector_credentials(&refresh).is_empty());
+        assert!(collection.is_locked().unwrap());
+    }
 }

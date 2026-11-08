@@ -32,6 +32,7 @@ struct MenuBarQuotaSourceCheck {
         try checkDensity()
         try checkWindowGlyphsAreDistinct()
         try checkRenderedColor()
+        try checkMenuBarAppearanceChanges()
 
         print("menu bar quota source checks passed")
     }
@@ -237,6 +238,37 @@ struct MenuBarQuotaSourceCheck {
         // Fable 和 Claude 周同为周窗口、符号一样，只能靠颜色分开。
         try expect(MenuBarQuotaSource.claudeFable.nsColor != MenuBarQuotaSource.claudeWeek.nsColor,
                    "Fable needs its own color, the weekly glyph alone cannot separate them")
+    }
+
+    private static func checkMenuBarAppearanceChanges() throws {
+        let light = NSAppearance(named: .vibrantLight)!
+        let dark = NSAppearance(named: .vibrantDark)!
+        let fresh = MenuBarMetric(kind: .quota(.claude5h), value: "80", remaining: 80)
+        let stale = MenuBarMetric(kind: .quota(.codexWeek), value: "65", remaining: 65, stale: true)
+        let color = MenuBarTitleRenderer.render(
+            style: .color, density: .full, keepAwake: false, metrics: [fresh, stale]
+        ).title
+        let palm = MenuBarTitleRenderer.render(
+            style: .palm, density: .full, keepAwake: false, metrics: [stale]
+        ).title
+
+        func resolve(_ title: NSAttributedString, at index: Int, in appearance: NSAppearance) -> NSColor? {
+            var resolved: NSColor?
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = (title.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor)?
+                    .usingColorSpace(.sRGB)
+            }
+            return resolved
+        }
+
+        // Keep the exact attributed title across the appearance change, as the
+        // system does when the same status item moves onto a lighter material.
+        for (title, index) in [(color, 3), (palm, 0)] {
+            let day = resolve(title, at: index, in: light)
+            let night = resolve(title, at: index, in: dark)
+            try expect((day?.redComponent ?? 1) < 0.25 && (night?.redComponent ?? 0) > 0.75,
+                       "separator and stale label must adapt to the menu bar without a title refresh")
+        }
     }
 
     private static func symbolsGlyph(_ source: MenuBarQuotaSource) throws -> Data {

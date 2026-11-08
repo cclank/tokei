@@ -631,6 +631,7 @@ struct MenuBarPresentation {
 
 enum MenuBarTitleRenderer {
     private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+    private static let colorSeparator = textColor(.labelColor, opacity: 0.75)
 
     static func render(style: MenuBarStyle, density: MenuBarDensity, keepAwake: Bool,
                        metrics: [MenuBarMetric], fallbackIcon: Bool = false) -> MenuBarPresentation {
@@ -656,7 +657,7 @@ enum MenuBarTitleRenderer {
                     appendSeparator(" · ", to: title,
                                     color: style == .system
                                         ? NSColor.white.withAlphaComponent(0.72)
-                                        : NSColor.labelColor.withAlphaComponent(0.75))
+                                        : colorSeparator)
                 }
                 appendValue(metric, color: style == .system ? .white : metric.kind.nsColor,
                             to: title)
@@ -738,22 +739,32 @@ enum MenuBarTitleRenderer {
             }
             appendSpace(to: title)
             appendValue(metric, color: .labelColor, to: title)
-        case .compact:
-            appendValue(metric, color: familyColor, to: title)
-        case .system, .color, .artistic, .palm:
-            appendValue(metric, color: familyColor, to: title)
+        case .compact, .system, .color, .artistic, .palm:
+            appendValue(metric, color: metric.kind.nsColor, to: title)
         }
     }
 
     /// 过期读数的透明度：还看得清，但一眼能和新鲜读数分开。
     private static let staleAlpha: CGFloat = 0.62
 
+    private static func textColor(_ color: NSColor, opacity: CGFloat) -> NSColor {
+        // The menu bar can use a different appearance from the app or change
+        // without rebuilding the title. Resolve semantic colors at draw time.
+        NSColor(name: nil) { appearance in
+            var resolved = color
+            appearance.performAsCurrentDrawingAppearance {
+                resolved = (color.usingColorSpace(.sRGB) ?? color).withAlphaComponent(opacity)
+            }
+            return resolved
+        }
+    }
+
     private static func appendValue(_ metric: MenuBarMetric, color: NSColor,
                                     to title: NSMutableAttributedString) {
         title.append(NSAttributedString(string: metric.value, attributes: [
             .font: valueFont,
             .baselineOffset: 1,
-            .foregroundColor: metric.stale ? color.withAlphaComponent(staleAlpha) : color,
+            .foregroundColor: metric.stale ? textColor(color, opacity: staleAlpha) : color,
         ]))
     }
 

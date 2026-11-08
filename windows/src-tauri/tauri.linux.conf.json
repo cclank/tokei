@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.tokei.linux",
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb"
+    ],
+    "category": "Utility",
+    "shortDescription": "Tokei — AI 编码工具用量监控",
+    "longDescription": "Tokei 实时追踪 20+ 款 AI 编程工具的用量、成本和额度。Token 统计以本地日志为主，额度查询使用对应工具已有的本机登录态或用户明确保存的 API Key。Linux 版复用 Windows 版的 Tauri 界面，数据仍由 usage.30s.py 采集。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../native_bridge.py": null,
+      "../../usage.30s.py": "collector/usage.30s.py",
+      "../../pricing.json": "collector/pricing.json",
+      "../../pricing_overrides.json": "collector/pricing_overrides.json"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "python3 (>= 3.8)",
+          "python3-zstandard"
+        ]
+      }
+    }
+  }
+}

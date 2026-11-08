@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "usage.30s.py"
+SCRIPT = Path(os.environ.get("TOKEI_SMOKE_COLLECTOR", ROOT / "usage.30s.py")).resolve()
 PROJECT = "C:\\Users\\dev\\演示项目"
 
 
@@ -77,7 +77,12 @@ class CrossPlatformSmokeTests(unittest.TestCase):
         day = now.strftime("%Y/%m/%d").split("/")
         codex = home / ".codex" / "sessions" / day[0] / day[1] / day[2] / "rollout-smoke.jsonl"
         codex.parent.mkdir(parents=True)
-        codex.write_text("\n".join(_codex_lines(now)) + "\n", encoding="utf-8")
+        rollout = "\n".join(_codex_lines(now)) + "\n"
+        if os.environ.get("TOKEI_SMOKE_COMPRESSED_CODEX") == "1":
+            import zstandard
+            codex.with_suffix(".jsonl.zst").write_bytes(zstandard.ZstdCompressor().compress(rollout.encode("utf-8")))
+        else:
+            codex.write_text(rollout, encoding="utf-8")
 
         cls.sync_dir = home / "sync"
         cls.sync_dir.mkdir()

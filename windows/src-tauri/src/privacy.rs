@@ -115,6 +115,15 @@ async fn authorization(
     mode: &'static str,
 ) -> Result<Authorization, String> {
     main_only(&window)?;
+    // The Linux package does not ship the Windows authorization helper.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (app, mode);
+        return Ok(Authorization {
+            status: "unsupported_platform".into(),
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
     tauri::async_runtime::spawn_blocking(move || {
         let raw = collector::run_bridge(&app, mode)?;
         let value: serde_json::Value =

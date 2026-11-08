@@ -39,6 +39,12 @@ struct DoubaoWorkCheck {
                 "source": "doubaowork-local-cache", "updated": 100]
     }
 
+    static func quotaSnapshot(at epoch: Int) -> [String: Any] {
+        ["version": 1, "status": "connected", "updated": epoch,
+         "windows": [["window_type": 2, "used_percent": 20, "start_time_ms": (epoch - 1000) * 1000,
+                      "end_time_ms": (epoch + 604800) * 1000, "less_than_one_percent": false]]]
+    }
+
     static func peer(_ usage: Usage, now: Date, id: String = "peer") -> PeerDevice {
         let bounds = Dictionary(uniqueKeysWithValues: SyncManager.currentRangeBounds(now: now)
             .map { ($0.key.rawValue, $0.value) })
@@ -84,9 +90,7 @@ struct DoubaoWorkCheck {
         let remote = try fixture(stat([b, c]))
         let now = ISO8601DateFormatter().date(from: "2026-10-29T12:00:00Z")!
         let epoch = Int(now.timeIntervalSince1970)
-        let quotaJSON: [String: Any] = ["version": 1, "status": "connected", "updated": epoch,
-            "windows": [["window_type": 2, "used_percent": 20, "start_time_ms": (epoch - 1000) * 1000,
-                         "end_time_ms": (epoch + 604800) * 1000, "less_than_one_percent": false]]]
+        let quotaJSON = quotaSnapshot(at: epoch)
         var withQuotaJSON = stat([a, b])
         withQuotaJSON["quota"] = quotaJSON
         let withQuota = try fixture(withQuotaJSON)
@@ -151,9 +155,7 @@ struct DoubaoWorkCheck {
                                                visibility: .allVisible)!
         try expect(allLine.sessions == 2 && allLine.activityLabel == "累计会话", "all uses cumulative conversations")
         var liveQuotaStat = stat([a, b])
-        var liveQuota = quotaJSON
-        liveQuota["updated"] = Int(Date().timeIntervalSince1970)
-        liveQuotaStat["quota"] = liveQuota
+        liveQuotaStat["quota"] = quotaSnapshot(at: Int(Date().timeIntervalSince1970))
         let liveQuotaUsage = try fixture(liveQuotaStat)
         let quotaLine = UsageSummaryBuilder.line(forToolID: "doubaowork", usage: liveQuotaUsage,
             range: .today, visibility: .allVisible)!

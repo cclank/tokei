@@ -74,12 +74,14 @@ jobs:
           deb="$(find windows/src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
           test -n "$deb"
           package="$(dpkg-deb -f "$deb" Package)"
+          test "$package" = tokei-desktop
           dpkg-deb -f "$deb" Depends | grep -F python3-zstandard
           sudo apt-get install -y --no-install-recommends "./$deb"
           files="$(dpkg -L "$package")"
           collector="$(printf '%s\n' "$files" | grep '/collector/usage\.30s\.py$')"
           test -r "$collector"
           test ! -e "$(dirname "$collector")/windows_native.py"
+          printf '%s\n' "$files" | grep -Fx /usr/bin/tokei-desktop
           TOKEI_SMOKE_COLLECTOR="$collector" TOKEI_SMOKE_COMPRESSED_CODEX=1 \
             /usr/bin/python3 -m unittest tests.test_cross_platform_smoke -v
       - name: Open the installed app on a virtual display
@@ -88,7 +90,7 @@ jobs:
           trap 'rm -rf "$fixture"' EXIT
           env HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_DATA_HOME="$fixture/data" \
             TOKEI_AUTO_PRICING=0 dbus-run-session -- xvfb-run -a bash -euo pipefail -c '
-              tokei >"$1/tokei.log" 2>&1 &
+              /usr/bin/tokei-desktop >"$1/tokei.log" 2>&1 &
               pid=$!
               trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
               for attempt in $(seq 1 45); do

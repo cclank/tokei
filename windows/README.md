@@ -61,7 +61,8 @@ pnpm tauri build --bundles deb -- --locked
 sudo apt install ./src-tauri/target/release/bundle/deb/*.deb
 ```
 
-安装包使用系统 Python 和 `python3-zstandard` 读取 Codex 压缩归档。Provider API Key 由
+Linux 包名和命令均为 `tokei-desktop`。安装包使用系统 Python 和 `python3-zstandard`
+读取 Codex 压缩归档。Provider API Key 由
 Secret Service 密钥库保存，后台刷新会跳过锁定项。Grok Bot 账号授权在 Linux 上暂不可用。
 开启防休眠需要系统提供 logind。
 

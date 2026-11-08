@@ -1,5 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tokei Desktop",
+  "mainBinaryName": "tokei-desktop",
   "identifier": "com.tokei.linux",
   "bundle": {
     "active": true,

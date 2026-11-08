@@ -75,7 +75,7 @@ jobs:
           test -n "$deb"
           package="$(dpkg-deb -f "$deb" Package)"
           test "$package" = tokei-desktop
-          dpkg-deb -f "$deb" Depends | grep -F python3-zstandard
+          dpkg-deb -f "$deb" Depends | grep -E '(^|, )zstd(,|$)'
           sudo apt-get install -y --no-install-recommends "./$deb"
           files="$(dpkg -L "$package")"
           collector="$(printf '%s\n' "$files" | grep '/collector/usage\.30s\.py$')"

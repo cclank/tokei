@@ -79,8 +79,8 @@ class CrossPlatformSmokeTests(unittest.TestCase):
         codex.parent.mkdir(parents=True)
         rollout = "\n".join(_codex_lines(now)) + "\n"
         if os.environ.get("TOKEI_SMOKE_COMPRESSED_CODEX") == "1":
-            import zstandard
-            codex.with_suffix(".jsonl.zst").write_bytes(zstandard.ZstdCompressor().compress(rollout.encode("utf-8")))
+            compressed = subprocess.check_output(["zstd", "-q", "-c"], input=rollout.encode("utf-8"), timeout=10)
+            codex.with_suffix(".jsonl.zst").write_bytes(compressed)
         else:
             codex.write_text(rollout, encoding="utf-8")
 

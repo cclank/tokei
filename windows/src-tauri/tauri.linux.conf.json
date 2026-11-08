@@ -26,6 +26,9 @@
       "deb": {
         "depends": [
           "python3 (>= 3.8)",
+          "zstd"
+        ],
+        "recommends": [
           "python3-zstandard"
         ]
       }

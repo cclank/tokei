@@ -26,6 +26,8 @@ export interface ModelRow {
   tokCR: number;
   tokCW: number;
   tokReason?: number;
+  webSearches?: number;
+  webFetches?: number;
   /** 输入 / 输出已含缓存、推理（DeepSeek Harness 那种口径）。 */
   componentsAreSubtotals?: boolean;
   priceRef?: string | null;
@@ -54,6 +56,18 @@ function TintTag({ tint, children, title, strong = false }: { tint: RGB; childre
     >
       {children}
     </span>
+  );
+}
+
+function WebToolBadge({ label, count, icon, tint }: { label: string; count: number; icon?: string; tint: RGB }) {
+  return (
+    <TintTag tint={tint} title={label}>
+      {icon ? (
+        <span role="img" aria-label={label} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+          <Icon name={icon} size={fs(9)} />×{count}
+        </span>
+      ) : label}
+    </TintTag>
   );
 }
 
@@ -159,23 +173,51 @@ export function ModelDisclosure({
           <span style={{ fontSize: fs(11), fontWeight: 600, color: T.secondary }}>{L("按模型 · %@", periodLabel)}</span>
           {rows.map((row) => {
             const isExpanded = expanded.has(row.id);
+            const webSearches = row.webSearches ?? 0;
+            const webFetches = row.webFetches ?? 0;
+            const hasWebTools = webSearches > 0 || webFetches > 0;
+            const name = data(row.name);
+            const compactWebTools = name.length > 18 || (webSearches > 0 && webFetches > 0);
             return (
               <div key={row.id} style={{ display: "flex", flexDirection: "column" }}>
                 <button
                   className="plain"
                   onClick={() => row.hasBreakdown && toggle(row.id)}
-                  style={{ display: "flex", alignItems: "flex-start", gap: 7, width: "100%", cursor: row.hasBreakdown ? "pointer" : "default" }}
+                  style={{
+                    display: "flex", alignItems: hasWebTools ? "center" : "flex-start",
+                    gap: 7, width: "100%", cursor: row.hasBreakdown ? "pointer" : "default",
+                  }}
                 >
                   <span style={{ width: 8, height: 16, display: "grid", placeItems: "center", flex: "none" }}>
                     {row.hasBreakdown && (
                       <Icon name={isExpanded ? "chevron.down" : "chevron.right"} size={fs(8)} color={T.tertiary} strokeWidth={3} />
                     )}
                   </span>
-                  <span style={{ width: 5, height: 5, borderRadius: 3, background: rgba(tint, 0.7), marginTop: 6, flex: "none" }} />
-                  <span style={{ fontSize: fs(11.5), color: T.primary, textAlign: "left", minWidth: 0, overflowWrap: "anywhere" }}>
-                    {data(row.name)}
+                  <span style={{ width: 5, height: 5, borderRadius: 3, background: rgba(tint, 0.7), marginTop: hasWebTools ? 0 : 6, flex: "none" }} />
+                  <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, flex: hasWebTools ? "1 1 0" : undefined }}>
+                    <span
+                      title={hasWebTools ? name : undefined}
+                      style={{
+                        fontSize: fs(11.5), color: T.primary, textAlign: "left", minWidth: 0,
+                        ...(hasWebTools ? { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } : { overflowWrap: "anywhere" }),
+                      }}
+                    >
+                      {name}
+                    </span>
+                    {hasWebTools && (
+                      <span style={{ display: "flex", flex: "none", gap: 4, fontSize: fs(9), color: T.secondary, whiteSpace: "nowrap" }}>
+                        {webSearches > 0 && (
+                          <WebToolBadge label={L("搜索 ×%@", webSearches)} count={webSearches}
+                            icon={compactWebTools ? "magnifyingglass" : undefined} tint={tint} />
+                        )}
+                        {webFetches > 0 && (
+                          <WebToolBadge label={L("网页读取 ×%@", webFetches)} count={webFetches}
+                            icon={compactWebTools ? "doc.text" : undefined} tint={tint} />
+                        )}
+                      </span>
+                    )}
                   </span>
-                  <Spacer />
+                  {!hasWebTools && <Spacer />}
                   <HStack gap={6} style={{ flex: "none" }}>
                     {row.total > 0 && <span style={{ fontSize: fs(9.5), fontFamily: MONO, color: T.secondary }}>{Fmt.human(row.total)}</span>}
                     {row.hit > 0 && (

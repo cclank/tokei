@@ -54,6 +54,8 @@ export interface ClaudeModelStat {
   pin: number;
   pout: number;
   pcr?: number | null;
+  web_searches?: number;
+  web_fetches?: number;
 }
 
 export interface ClaudeRange {

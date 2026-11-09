@@ -27,6 +27,8 @@ struct ClaudeModelStat: Codable, Identifiable {
     var pin: Double      // 输入单价 $/M
     var pout: Double     // 输出单价 $/M
     var pcr: Double?     // 缓存读单价 $/M；老数据没有
+    var web_searches: Int? = nil
+    var web_fetches: Int? = nil
     var id: String { name }
     var total: Int { `in` + out + cr + cw }
 }

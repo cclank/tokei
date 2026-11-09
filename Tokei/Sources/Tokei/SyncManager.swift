@@ -805,6 +805,12 @@ final class SyncManager {
                 dst[idx].cr += m.cr
                 dst[idx].cw += m.cw
                 dst[idx].cost += m.cost
+                if let searches = m.web_searches {
+                    dst[idx].web_searches = (dst[idx].web_searches ?? 0) + searches
+                }
+                if let fetches = m.web_fetches {
+                    dst[idx].web_fetches = (dst[idx].web_fetches ?? 0) + fetches
+                }
             } else {
                 dst.append(m)
             }

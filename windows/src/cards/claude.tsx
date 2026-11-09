@@ -74,6 +74,8 @@ function ClaudeCard({ ctx }: { ctx: CardContext }) {
         tokOut: m.out,
         tokCR: m.cr,
         tokCW: m.cw,
+        webSearches: m.web_searches,
+        webFetches: m.web_fetches,
         perf: modelPerf(r.perf, m.name),
         hasBreakdown: true,
       };

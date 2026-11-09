@@ -58,6 +58,7 @@ private enum SyncManagerIntegrationCheck {
         try testPeerClaudeQuotaFreshnessIsRecomputedAtMergeTime()
         try testPeerClaudeQuotaIsReplacedAsOneGroup()
         try testPeerClaudeQuotaTieBreakAndMultiplePeers()
+        try testClaudeWebToolCountsMergeWithOldSnapshot()
         try testForeignRebaseStopsBeforeSnapshotOrCommit()
         try testDetachedHeadStopsBeforeSnapshot()
         try testSecondTransactionCannotEnterLockedRepository()
@@ -74,7 +75,7 @@ private enum SyncManagerIntegrationCheck {
         try testSaveConfigRejectsDeviceIdentityChangeInIsolatedHome()
         try testInheritedGitDirectoryCannotRedirectSync()
         try testPeerLoaderReportsBadFilesIndependently()
-        print("SyncManager integration checks passed: 21")
+        print("SyncManager integration checks passed: 22")
     }
 
     private static func testQwenWorkAbsoluteQuotaDecoding() throws {
@@ -272,6 +273,27 @@ private enum SyncManagerIntegrationCheck {
         try expect(forward.claude.q5 == 2 && backward.claude.q5 == 2,
                    "multiple peers did not resolve to the newest quota: "
                        + "\(String(describing: forward.claude.q5)) / \(String(describing: backward.claude.q5))")
+    }
+
+    private static func testClaudeWebToolCountsMergeWithOldSnapshot() throws {
+        let oldJSON = #"{"name":"Haiku 5.5","in":10,"out":2,"cr":0,"cw":0,"cost":0.01,"pin":0.1,"pout":0.5}"#
+        let old = try JSONDecoder().decode(ClaudeModelStat.self, from: Data(oldJSON.utf8))
+        try expect(old.web_searches == nil && old.web_fetches == nil, "old model snapshot should decode without counts")
+        let local = try usage { $0.ranges.today.models = [old] }
+
+        var searchModel = old
+        searchModel.web_searches = 2
+        let searchPeer = try usage { $0.ranges.today.models = [searchModel] }
+
+        var bothModel = old
+        bothModel.web_searches = 4
+        bothModel.web_fetches = 1
+        let bothPeer = try usage { $0.ranges.today.models = [bothModel] }
+
+        let merged = SyncManager.merge(local: local, peers: [peer("search", searchPeer), peer("both", bothPeer)],
+                                       now: quotaNow).claude.ranges.today.models
+        try expect(merged.count == 1 && merged.first?.web_searches == 6 && merged.first?.web_fetches == 1,
+                   "merge should retain both tool counts in a single model row")
     }
 
     private static func peer(_ id: String, _ usage: Usage) -> PeerDevice {

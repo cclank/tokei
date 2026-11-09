@@ -656,7 +656,8 @@ struct PanelView: View {
                     return ModelRow(name: m.name, pin: m.pin, pout: m.pout, pcr: m.pcr ?? 0,
                                    cost: m.cost, total: m.total, hit: hit,
                                    tokIn: m.in, tokOut: m.out, tokCR: m.cr, tokCW: m.cw,
-                                   perf: r.perf?.model(named: m.name))
+                                   perf: r.perf?.model(named: m.name),
+                                   webSearches: m.web_searches ?? 0, webFetches: m.web_fetches ?? 0)
                 }
                 if !claudeRows.isEmpty {
                     modelDisclosure(claudeRows, open: $claudeModelsOpen, tint: Theme.claude)
@@ -2223,6 +2224,8 @@ struct PanelView: View {
         var tokCR: Int = 0
         var tokCW: Int = 0
         var perf: PerfModelStat? = nil
+        var webSearches: Int = 0
+        var webFetches: Int = 0
         var id: String { name }
     }
 
@@ -2464,6 +2467,9 @@ struct PanelView: View {
                     .foregroundStyle(Theme.tSecondary)
                 ForEach(models) { m in
                     let isExpanded = expandedModels.contains(m.id) || Self.expandModelsForShot
+                    let hasWebTools = m.webSearches > 0 || m.webFetches > 0
+                    let name = L10n.data(m.name)
+                    let compactWebTools = name.count > 18 || (m.webSearches > 0 && m.webFetches > 0)
                     VStack(alignment: .leading, spacing: 0) {
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -2471,18 +2477,34 @@ struct PanelView: View {
                                 else { expandedModels.insert(m.id) }
                             }
                         } label: {
-                            HStack(alignment: .top, spacing: 7) {
+                            HStack(alignment: hasWebTools ? .center : .top, spacing: 7) {
                                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                                     .font(.system(size: Theme.fontSize(7), weight: .bold))
                                     .foregroundStyle(Theme.tTertiary)
                                     .frame(width: 8, height: 16)
                                 Circle().fill(tint.opacity(0.7)).frame(width: 5, height: 5)
-                                    .padding(.top, 5)
-                                Text(L10n.data(m.name)).font(.system(size: Theme.fontSize(11.5))).foregroundStyle(Theme.tPrimary)
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .layoutPriority(1)
-                                Spacer(minLength: 6)
+                                    .padding(.top, hasWebTools ? 0 : 5)
+                                HStack(spacing: 4) {
+                                    Text(name)
+                                        .font(.system(size: Theme.fontSize(11.5)))
+                                        .foregroundStyle(Theme.tPrimary)
+                                        .lineLimit(hasWebTools ? 1 : 2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .help(hasWebTools ? name : "")
+                                    if m.webSearches > 0 {
+                                        webToolBadge(L("搜索 ×%@", m.webSearches), count: m.webSearches,
+                                                     icon: compactWebTools ? "magnifyingglass" : nil, tint: tint)
+                                    }
+                                    if m.webFetches > 0 {
+                                        webToolBadge(L("网页读取 ×%@", m.webFetches), count: m.webFetches,
+                                                     icon: compactWebTools ? "doc.text" : nil, tint: tint)
+                                    }
+                                }
+                                .frame(maxWidth: hasWebTools ? .infinity : nil, alignment: .leading)
+                                .layoutPriority(1)
+                                if !hasWebTools {
+                                    Spacer(minLength: 6)
+                                }
                                 HStack(spacing: 6) {
                                     if m.total > 0 {
                                         Text(Fmt.human(m.total))
@@ -2517,6 +2539,27 @@ struct PanelView: View {
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(Color.primary.opacity(0.05)))
         }
+    }
+
+    private func webToolBadge(_ label: String, count: Int, icon: String?, tint: Color) -> some View {
+        HStack(spacing: 2) {
+            if let icon {
+                Image(systemName: icon)
+                Text("×\(count)")
+            } else {
+                Text(label)
+            }
+        }
+        .font(.system(size: Theme.fontSize(9), weight: .medium))
+        .foregroundStyle(Theme.tSecondary)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(tint.opacity(0.14)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(label))
+        .help(label)
     }
 
     @ViewBuilder

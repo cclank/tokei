@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=12
+# TOKEI_COLLECTOR_REVISION=13
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -2366,6 +2366,10 @@ def _safe_scan(name, fn, fallback, errors):
 
 
 # ---------- Claude Code ----------
+# Claude Code 的网页搜索按 $10 / 1,000 次计费。
+_CLAUDE_WEB_SEARCH_USD = 0.01
+
+
 def _claude_event_cost(event):
     p = price_for(event.get("model"))
     inp = int(event.get("in", 0) or 0)
@@ -2382,9 +2386,9 @@ def _claude_event_cost(event):
     cost = (inp / 1e6 * p["in"] + out / 1e6 * p["out"]
             + cr / 1e6 * p["cache_read"] + write_cost)
     tier = _CLAUDE_LONG_PROMPT_TIERS.get(_resolve_id(event.get("model")))
-    if tier and inp + cr + cw > tier[0]:
+    if tier and not event.get("side") and inp + cr + cw > tier[0]:
         cost *= tier[1]
-    return cost
+    return cost + int(event.get("ws") or 0) * _CLAUDE_WEB_SEARCH_USD
 
 
 def _reprice_claude_events(file_cache, changed_models):
@@ -2416,7 +2420,11 @@ def _prefer_claude_event(candidate, existing):
     existing_total = _claude_event_total(existing)
     if candidate_total != existing_total:
         return candidate_total > existing_total
-    return float(candidate.get("cost", 0) or 0) > float(existing.get("cost", 0) or 0)
+    candidate_cost = float(candidate.get("cost", 0) or 0)
+    existing_cost = float(existing.get("cost", 0) or 0)
+    if candidate_cost != existing_cost:
+        return candidate_cost > existing_cost
+    return candidate.get("wf", 0) > existing.get("wf", 0)
 
 
 def _dedupe_claude_events(file_events):
@@ -2458,9 +2466,119 @@ def _dedupe_claude_events(file_events):
     return selected
 
 
+_CLAUDE_SIDE_FIELDS = ("in", "out", "cr", "cw", "cw5", "cw1", "ws")
+
+
+def _claude_subagent_parent(path):
+    """<项目>/<会话ID>/subagents/agent-*.jsonl → <项目>/<会话ID>.jsonl；不是子代理文件返回 None。"""
+    folder = os.path.dirname(path)
+    if os.path.basename(folder) != "subagents":
+        return None
+    return os.path.dirname(folder) + ".jsonl"
+
+
+def _claude_side_events(path, entry, sub_events=()):
+    """把会话的 cost-state 行换算成侧调用事件。
+
+    Claude Code 只把主对话的回复写成 assistant 消息。Haiku 替主模型搜索、读网页，主模型压缩上下文
+    这类调用不落成消息，用量只出现在会话结束时写的 cost-state 行里：按模型累计，续聊时从上一行恢复后
+    接着累加。逐段计算：本段增量 = 这一行 − 上一行（有数回落说明没有恢复、重新计数，整行就是本段），
+    减去本段里已经按消息记过的用量（含同会话子代理文件里同一时段的消息），剩下的记成一条侧调用事件，
+    时间取本段最后读到的时刻。账本沿用同一份日志的来源标识，重扫不会重复入账。"""
+    states = sorted((s for s in entry.get("costs") or [] if isinstance(s, dict)),
+                    key=lambda s: s.get("line", 0))
+    if not states:
+        return []
+    own = [e for e in entry.get("events", []) if isinstance(e, dict)]
+    timed_subs = []
+    for e in sub_events:
+        dt = parse_ts(e.get("timestamp", ""))
+        if dt is not None:
+            timed_subs.append((dt.timestamp(), e))
+    name = os.path.basename(path)
+    result = []
+    prev, prev_line, prev_at = {}, 0, None
+    for state in states:
+        line, at = state.get("line", 0), state.get("at")
+        usage = state.get("usage") or {}
+        restart = any(
+            int((usage.get(model) or {}).get(key, 0)) < int(before.get(key, 0))
+            for model, before in prev.items() for key in _CLAUDE_SIDE_FIELDS)
+        base = {} if restart else prev
+        segment = [e for e in own if prev_line < e.get("line", 0) < line]
+        if at is not None:
+            segment += [e for t, e in timed_subs if (prev_at is None or t > prev_at) and t <= at]
+        logged = {}
+        for _, e in _dedupe_claude_events((path, e) for e in segment):
+            total = logged.setdefault(e.get("model") or "unknown",
+                                      dict.fromkeys(_CLAUDE_SIDE_FIELDS, 0))
+            for key in _CLAUDE_SIDE_FIELDS:
+                total[key] += int(e.get(key) or 0)
+            total["cost"] = total.get("cost", 0.0) + e["cost"]
+        for model, now in usage.items():
+            before = base.get(model) or {}
+            spent = {key: int(now.get(key, 0)) - int(before.get(key, 0))
+                     for key in _CLAUDE_SIDE_FIELDS}
+            done = logged.get(model) or {}
+            side = {key: max(0, spent[key] - int(done.get(key, 0)))
+                    for key in ("in", "out", "cr", "cw", "ws")}
+            if at is None or not any(side.values()):
+                continue
+            event = {key: side[key] for key in ("in", "out", "cr", "cw")}
+            # 先扣掉已知的消息缓存档位。剩余用量缺少档位时，未分类部分按 5m 计价。
+            w5 = max(0, spent["cw5"] - done.get("cw5", 0))
+            w1 = max(0, spent["cw1"] - done.get("cw1", 0))
+            if w5 + w1 > 0 and event["cw"]:
+                # 消息未记录档位时，两档剩余量可能超过实际剩余总量。
+                event["cw1"] = (round(event["cw"] * w1 / (w5 + w1))
+                                if w5 + w1 > event["cw"] else w1)
+                event["cw5"] = event["cw"] - event["cw1"]
+            else:
+                event["cw5"] = event["cw1"] = None
+            event.update({
+                "model": model, "ws": side["ws"], "cwd": None, "mid": None, "request_id": None,
+                "event_id": f"cost-state:{name}:{line}:{model}", "sidechain": False, "side": True,
+                "timestamp": datetime.fromtimestamp(at, timezone.utc).isoformat(), "line": line})
+            event["cost"] = _claude_event_cost(event)
+            # 长提示门槛按单次请求判断。会话汇总只提供合计，用 CLI 的
+            # 分模型成本差补足可能的分档费用，缺少可信差值时沿用基础价。
+            if _resolve_id(model) in _CLAUDE_LONG_PROMPT_TIERS:
+                latest_cost = now.get("cost_usd")
+                previous_cost = before.get("cost_usd") if before else 0.0
+                if latest_cost is not None and previous_cost is not None:
+                    remaining_cost = latest_cost - previous_cost - done.get("cost", 0.0)
+                    if remaining_cost >= event["cost"] - 1e-9:
+                        event["cost"] = max(event["cost"], remaining_cost)
+            result.append(event)
+        prev, prev_line, prev_at = usage, line, at
+    return result
+
+
+def _claude_events_with_side(file_cache):
+    """[(路径, 事件)]：各文件的消息事件，加上由 cost-state 换算出的侧调用事件（记在主会话文件名下）。"""
+    subs = {}
+    for path, entry in file_cache.items():
+        parent = _claude_subagent_parent(path)
+        if parent and isinstance(entry, dict):
+            subs.setdefault(parent, []).extend(
+                e for e in entry.get("events", []) if isinstance(e, dict))
+    pairs = []
+    for path, entry in file_cache.items():
+        if not isinstance(entry, dict):
+            continue
+        for event in entry.get("events", []):
+            pairs.append((path, event))
+        for event in _claude_side_events(path, entry, subs.get(path, ())):
+            pairs.append((path, event))
+    return pairs
+
+
 # 1：每个请求附上计时（生成秒数、首字延迟），升级后整份重扫一次补上历史。
 # 2：请求起点沿父链跳过附件行，找到真正触发请求的用户消息或工具结果。
-_CLAUDE_PERF_VERSION = 2
+# 3：记下会话结束时写入的 cost-state 行，补上未写成消息的侧调用用量。
+# 4：缓存分模型成本快照，并把已记录的搜索费计入消息成本。
+# 5：保留消息中明确归属到模型的 WebFetch 次数。
+_CLAUDE_PERF_VERSION = 5
 # 顶层的 uuid 和 timestamp 紧挨着，正文里的引号都是转义过的，所以这个模式只会命中顶层字段。
 # 用它取用户消息、工具结果这些行的写入时间，不必整行解析大段的工具输出。
 _CLAUDE_LINE_TIME = re.compile(r'"uuid"\s*:\s*"([0-9a-f-]{36})"\s*,\s*"timestamp"\s*:\s*"([^"]+)"')
@@ -2496,19 +2614,58 @@ _CLAUDE_USER_LINE = re.compile(
     r'(?:"\w+":(?:"[^"\\]*"|true|false|null|-?\d+),)*?"type":"user"')
 
 
-def _claude_parse_lines(handle, offset, line_number, events, when, via):
+def _claude_cost_state(line, line_number, at):
+    """会话结束时的 cost-state 行 → {line, at, usage: {模型: 累计用量}}；不是就返回 None。"""
+    try:
+        o = json.loads(line)
+    except Exception:
+        return None
+    usage = o.get("modelUsage") if isinstance(o, dict) and o.get("type") == "cost-state" else None
+    if not isinstance(usage, dict):
+        return None
+    models = {}
+    for model, u in usage.items():
+        if not isinstance(u, dict):
+            continue
+        try:
+            model_usage = {
+                key: int(u.get(field) or 0) for key, field in (
+                    ("in", "inputTokens"), ("out", "outputTokens"),
+                    ("cr", "cacheReadInputTokens"), ("cw", "cacheCreationInputTokens"),
+                    ("cw5", "cacheCreationEphemeral5mInputTokens"),
+                    ("cw1", "cacheCreationEphemeral1hInputTokens"),
+                    ("ws", "webSearchRequests"))}
+        except (TypeError, ValueError, OverflowError):
+            return None
+        cost = u.get("costUSD")
+        if (not o.get("hasUnknownModelCost") and isinstance(cost, (int, float))
+                and not isinstance(cost, bool) and 0 <= cost < math.inf):
+            model_usage["cost_usd"] = cost
+        models[model] = model_usage
+    return {"line": line_number, "at": at, "usage": models}
+
+
+def _claude_parse_lines(handle, offset, line_number, events, when, via, costs=None):
     """从二进制句柄当前位置往下逐行解析，和以前按文本整份读一样处理每一行（包括没写完的
     最后一行）；切点只取写完整的用户消息行，切点之后的内容下一轮总会重新解析。
+    costs 收集 cost-state 行；它本身没有时间戳，取此前读到的最晚时刻作为写入时刻。
 
     返回 (项目目录, 切点, 读到的字节偏移)；切点是最后一条用户消息行的 [偏移, 行号, 指纹]。"""
     proj = None
     cut = None
+    last_at = None
     for raw in handle:
         line_number += 1
         line = raw.decode("utf-8", "ignore")
         if raw.endswith(b"\n") and _CLAUDE_USER_LINE.match(line):
             cut = [offset, line_number, hashlib.sha1(raw).hexdigest()[:16]]
         offset += len(raw)
+        if costs is not None and '"cost-state"' in line and raw.endswith(b"\n"):
+            seen = [t for t in (last_at, max(when.values()) if when else None) if t is not None]
+            state = _claude_cost_state(line, line_number, max(seen) if seen else None)
+            if state:
+                costs.append(state)
+                continue
         if '"usage"' not in line:
             _claude_note_time(when, line, via)
             continue
@@ -2518,23 +2675,27 @@ def _claude_parse_lines(handle, offset, line_number, events, when, via):
             continue
         if u.get("event_id"):
             when[u["event_id"]] = u["dt"].timestamp()
-        events.append({
+        last_at = u["dt"].timestamp() if last_at is None else max(last_at, u["dt"].timestamp())
+        event = {
             "in": u["in"], "out": u["out"], "cr": u["cr"], "cw": u["cw"],
-            "cw5": u.get("cw5"), "cw1": u.get("cw1"),
+            "cw5": u.get("cw5"), "cw1": u.get("cw1"), "ws": u.get("ws", 0),
             "cost": u["cost"], "model": u.get("model") or "unknown",
             "cwd": u.get("cwd"), "mid": u.get("mid"),
             "request_id": u.get("request_id"), "event_id": u.get("event_id"),
             "sidechain": bool(u.get("sidechain")), "timestamp": u["dt"].isoformat(),
             "line": line_number,
             "parent": u.get("parent"), "think_ms": u.get("think_ms"),
-        })
+        }
+        if u["wf"]:
+            event["wf"] = u["wf"]
+        events.append(event)
         if proj is None and u.get("cwd"):
             proj = u["cwd"]
     return proj, cut, offset
 
 
 def _claude_parse_file(path, entry, size):
-    """(事件, 项目目录, 切点, 已解析到的偏移)；能从上次的切点续读就续读。"""
+    """(事件, 项目目录, 切点, 已解析到的偏移, cost-state 行)；能从上次的切点续读就续读。"""
     cut = entry.get("cut") if isinstance(entry, dict) else None
     with open(path, "rb") as handle:
         if (cut and entry.get("perf_v") == _CLAUDE_PERF_VERSION
@@ -2542,17 +2703,20 @@ def _claude_parse_file(path, entry, size):
             handle.seek(cut[0])
             if hashlib.sha1(handle.readline()).hexdigest()[:16] == cut[2]:
                 handle.seek(cut[0])
-                events, when, via = [], {}, {}
+                events, when, via, costs = [], {}, {}, []
                 proj, new_cut, end = _claude_parse_lines(handle, cut[0], cut[1] - 1,
-                                                         events, when, via)
+                                                         events, when, via, costs)
                 _claude_attach_perf(events, when, via)
                 kept = [event for event in entry.get("events", []) if event.get("line", 0) < cut[1]]
-                return kept + events, entry.get("proj") or proj, new_cut or cut, end
+                kept_costs = [state for state in entry.get("costs") or []
+                              if isinstance(state, dict) and state.get("line", 0) < cut[1]]
+                return (kept + events, entry.get("proj") or proj, new_cut or cut, end,
+                        kept_costs + costs)
             handle.seek(0)
-        events, when, via = [], {}, {}
-        proj, cut, end = _claude_parse_lines(handle, 0, 0, events, when, via)
+        events, when, via, costs = [], {}, {}, []
+        proj, cut, end = _claude_parse_lines(handle, 0, 0, events, when, via, costs)
         _claude_attach_perf(events, when, via)
-        return events, proj, cut, end
+        return events, proj, cut, end, costs
 
 
 def _claude_request_start(parent, when, via):
@@ -2608,6 +2772,14 @@ def _claude_attach_perf(events, when, via=None):
         event.pop("think_ms", None)
 
 
+def _merge_claude_model(models, name, usage):
+    model = models.setdefault(name, {"in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
+    for key in ("in", "out", "cr", "cw", "cost", "ws", "wf"):
+        value = usage.get(key, 0)
+        if value:
+            model[key] = model.get(key, 0) + value
+
+
 def scan_claude(bounds, cache):
     fc = cache.setdefault("claude", {})
     changed = False
@@ -2648,23 +2820,19 @@ def scan_claude(bounds, cache):
         if (not entry or entry.get("sig") != sig
                 or entry.get("perf_v") != _CLAUDE_PERF_VERSION):
             try:
-                events, proj, cut, end = _claude_parse_file(f, entry, size)
+                events, proj, cut, end, costs = _claude_parse_file(f, entry, size)
             except OSError:
                 continue
             events = [event for _, event in _dedupe_claude_events((f, item) for item in events)]
             fc[f] = {"sig": sig, "events": events, "proj": proj, "perf_v": _CLAUDE_PERF_VERSION,
-                     "cut": cut, "end": end}
+                     "cut": cut, "end": end, "costs": costs}
             changed = True
 
     for p in stale:
         fc.pop(p, None)
         changed = True
 
-    all_events = []
-    for path, entry in fc.items():
-        for event in entry.get("events", []):
-            all_events.append((path, event))
-    selected_events = _dedupe_claude_events(all_events)
+    selected_events = _dedupe_claude_events(_claude_events_with_side(fc))
 
     aggregates = {
         path: {"days": {}, "hours": [0] * 24, "day_hours": {}, "dh": set(),
@@ -2686,11 +2854,7 @@ def scan_claude(bounds, cache):
         day["cr"] += event["cr"]; day["cw"] += event["cw"]
         day["cost"] += event["cost"]
         model = event.get("model") or "unknown"
-        model_usage = day["models"].setdefault(
-            model, {"in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
-        model_usage["in"] += event["in"]; model_usage["out"] += event["out"]
-        model_usage["cr"] += event["cr"]; model_usage["cw"] += event["cw"]
-        model_usage["cost"] += event["cost"]
+        _merge_claude_model(day["models"], model, event)
         timing = event.get("perf")
         if timing:
             _perf_add(day.setdefault("perf", {}), model, event["out"], timing[0],
@@ -2737,10 +2901,8 @@ def scan_claude(bounds, cache):
             agg["cr"] += day["cr"]; agg["cw"] += day["cw"]; agg["cost"] += day["cost"]
             if proj_name:
                 day_projects.setdefault(dk, set()).add(proj_name)
-            for mn, mv in day["models"].items():
-                mm = agg["models"].setdefault(mn, {"in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
-                mm["in"] += mv["in"]; mm["out"] += mv["out"]
-                mm["cr"] += mv["cr"]; mm["cw"] += mv["cw"]; mm["cost"] += mv["cost"]
+            for name, model_usage in day["models"].items():
+                _merge_claude_model(agg["models"], name, model_usage)
             if day.get("perf"):
                 _perf_merge(agg.setdefault("perf", {}), day["perf"])
             # 会话数只能来自现存日志(被清日志无从归属)
@@ -2766,11 +2928,8 @@ def scan_claude(bounds, cache):
             b["in"] += day.get("in", 0); b["out"] += day.get("out", 0)
             b["cr"] += day.get("cr", 0); b["cw"] += day.get("cw", 0)
             b["cost"] += day.get("cost", 0.0)
-            for mn, mv in (day.get("models") or {}).items():
-                mm = b["models"].setdefault(mn, {"in": 0, "out": 0, "cr": 0, "cw": 0, "cost": 0.0})
-                mm["in"] += mv.get("in", 0); mm["out"] += mv.get("out", 0)
-                mm["cr"] += mv.get("cr", 0); mm["cw"] += mv.get("cw", 0)
-                mm["cost"] += mv.get("cost", 0.0)
+            for name, model_usage in (day.get("models") or {}).items():
+                _merge_claude_model(b["models"], name, model_usage)
             if day.get("perf"):
                 _perf_merge(b.setdefault("perf", {}), day["perf"])
 
@@ -2815,7 +2974,14 @@ def _claude_usage(line, want_dt=False):
     cc = u.get("cache_creation") or {}
     w5 = cc.get("ephemeral_5m_input_tokens")
     w1 = cc.get("ephemeral_1h_input_tokens")
+    server_tools = u.get("server_tool_use")
+    if not isinstance(server_tools, dict):
+        server_tools = {}
+    searches = server_tools.get("web_search_requests")
+    fetches = server_tools.get("web_fetch_requests")
     res = {"in": inp, "out": out, "cr": cr, "cw": cw, "cw5": w5, "cw1": w1,
+           "ws": searches if type(searches) is int and searches > 0 else 0,
+           "wf": fetches if type(fetches) is int and fetches > 0 else 0,
            "model": msg.get("model"), "cwd": o.get("cwd"), "mid": msg.get("id"),
            "request_id": o.get("requestId") or o.get("request_id"),
            "event_id": o.get("uuid"), "sidechain": o.get("isSidechain") is True,
@@ -17067,9 +17233,14 @@ def compute(local_only=False):
         models = []
         for n, v in sorted(b["models"].items(), key=lambda kv: -kv[1]["cost"]):
             p = price_for(n)
-            models.append({"name": nice_model(n), "in": v["in"], "out": v["out"],
-                           "cr": v["cr"], "cw": v["cw"], "cost": v["cost"],
-                           "pin": p["in"], "pout": p["out"], "pcr": p["cache_read"]})
+            model = {"name": nice_model(n), "in": v["in"], "out": v["out"],
+                     "cr": v["cr"], "cw": v["cw"], "cost": v["cost"],
+                     "pin": p["in"], "pout": p["out"], "pcr": p["cache_read"]}
+            if v.get("ws", 0) > 0:
+                model["web_searches"] = v["ws"]
+            if v.get("wf", 0) > 0:
+                model["web_fetches"] = v["wf"]
+            models.append(model)
         return {"hit": hit, "in": b["in"], "out": b["out"],
                 "cr": b["cr"], "cw": b["cw"], "cost": b["cost"], "models": models,
                 "sessions": len(b["sessions"]), "perf": _perf_summary(b.get("perf"), name=nice_model)}
@@ -19705,13 +19876,8 @@ def _quota_day_hour_bounds(day_key, start, end):
 def _quota_claude_events(cache=None):
     """去重后的 Claude 事件 → [(epoch, 本地日, tokens, cost)]。去重同 scan_claude。"""
     file_cache = (cache if cache is not None else _load_scan_cache()).get("claude") or {}
-    all_events = []
-    for path, entry in file_cache.items():
-        if isinstance(entry, dict):
-            for event in entry.get("events", []):
-                all_events.append((path, event))
     events = []
-    for _path, event in _dedupe_claude_events(all_events):
+    for _path, event in _dedupe_claude_events(_claude_events_with_side(file_cache)):
         dt = parse_ts(event.get("timestamp", ""))
         if dt is None:
             continue

@@ -344,6 +344,28 @@ write_cost:
     = cache_write/1M × write5m_price
 ```
 
+### Claude Code 侧调用（cost-state）
+
+Claude Code 的部分辅助调用没有单独的 `type=assistant` 用量行，例如 Haiku 处理网页搜索和读取、主模型压缩上下文。
+
+会话结束时，Claude Code 将这些用量写入 `cost-state` 的 `modelUsage`，按模型保存整个会话的 Token、缓存档位、搜索次数和估算费用。续聊时从上次记录恢复后继续累加。
+
+Tokei 将每行 `cost-state` 换算成一段用量。
+
+```
+本段增量 = 这一行 − 上一行            （任一数值回落 → 视为重新计数，整行即本段）
+本段已记 = 本段内 assistant 消息用量  （主会话文件按行号；同会话 subagents/*.jsonl 按时间）
+侧调用   = max(0, 本段增量 − 本段已记)，逐个模型、逐个字段
+成本     = 按价格表计 Token + 搜索次数 × $0.01（消息和侧调用分别计入）
+```
+
+- 每段按模型生成事件，以本段最后一条带时间戳的记录归日。缓存写先扣除消息已记录的 5 分钟和 1 小时用量，再对剩余部分计价。
+- 长提示费率取决于单次请求。对有长提示费率的模型，侧调用优先用 Claude Code 的有效 `costUSD` 增量扣除消息费用，缺少有效差值时按基础费率估算。
+- 账本沿用主会话文件的来源标识，重复结算行的增量为 0。
+- 「按模型」的搜索次数来自 `cost-state` 和消息里的 `web_search_requests`，按上述规则去重。网页读取次数只来自模型消息的 `web_fetch_requests`。仅记录工具调用和结果的 WebFetch 日志无法归属到处理网页的模型。
+- 会话还没结束（没有 cost-state）时看不到侧调用，结束后下一轮扫描补上。
+- 实测：`claude-haiku-5-5` 输入 14,092 / 输出 680 / 搜索 1 次，按此口径算得 $0.0117492，与 Claude Code 记录的 `costUSD` 完全一致。
+
 缓存写入价格两档:
 - `write5m` = OpenRouter 的 `cache_write` 价(5 分钟 TTL)
 - `write1h` = Anthropic 为 `2 × input_price`(1 小时 TTL)

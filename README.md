@@ -223,7 +223,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 | WorkBuddy | `~/.workbuddy/projects/<project>/*.jsonl` |
 | WorkBuddy Intl. | `~/.workbuddy-ai/projects/<project>/*.jsonl` |
 | CodeBuddy Code | `~/.codebuddy/projects/**/*.jsonl`（含 `subagents`） |
-| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl.zstd`（App 内置 zstd 解压） |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl.zstd`（优先 App 解压缓存；无缓存平台由采集器直接流式解压） |
 | OpenCode | `~/.local/share/opencode/opencode.db`，旧版回退 `storage/message/` |
 | Qwen Code | `~/.qwen/usage/token-usage-*.jsonl` + `~/.qwen/usage_record.jsonl` |
 | 千问办公（QwenWork） | `~/.qwenworkcn/mcp-adaptor.config` + `.status.json` 文件元数据 + 官方桌面端 `127.0.0.1` MCP（默认关闭；需客户端运行且已登录） |

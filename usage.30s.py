@@ -28,7 +28,8 @@
 #                额度默认关闭；授权后由 Tokei 原生 helper 临时读取 Keychain 登录态
 #   Doubao Work: Application Support / APPDATA / DoubaoWork 的 IndexedDB 缓存
 #                (只统计已缓存的 Agent 新建会话，不估算 Token / 成本 / 速率)
-#   DeepSeek:    ~/.dsh/sessions/**/*.jsonl.zstd (由 App 原生解压后增量扫描)
+#   DeepSeek:    ~/.dsh/sessions/**/*.jsonl.zstd (优先 App 原生解压缓存;
+#                无缓存平台由采集器流式解压直接扫描)
 #   Qwen Code:   ~/.qwen/usage/token-usage-*.jsonl (逐请求,usage_record.jsonl 补历史)
 #   Kimi Code:   ${KIMI_CODE_HOME:-~/.kimi-code}/sessions/*/*/agents/*/wire.jsonl
 #                兼容旧版 ${KIMI_SHARE_DIR:-~/.kimi}/sessions/*/*/wire.jsonl
@@ -217,6 +218,9 @@ GROK_BOT_AUTH_MARKER = _expand_path(os.environ.get(
     os.path.join(HOME, ".tokei", "grok_bot_keychain_authorized")))
 DEEPSEEK_HARNESS_DIR = os.path.abspath(os.path.expanduser(os.environ.get(
     "TOKEI_DSH_DECOMPRESSED_DIR", os.path.join(HOME, ".tokei", "cache", "dsh-sessions"))))
+# 与 Mac 端 DataLoader 的 TOKEI_DSH_DIR 一致：原始（未解压）会话目录。
+DEEPSEEK_HARNESS_RAW_DIR = os.path.abspath(os.path.expanduser(os.environ.get(
+    "TOKEI_DSH_DIR", os.path.join(HOME, ".dsh", "sessions"))))
 QODER_IDE_DB = os.path.join(HOME, "Library", "Application Support", "Qoder",
                             "SharedClientCache", "cache", "db", "local.db")
 QODER_IDE_DB_PATHS = _path_candidates(
@@ -4447,11 +4451,8 @@ class _CodexZstdStream:
                     process.wait(timeout=1)
 
 
-def _open_codex_rollout(path):
-    """Open a rollout without rewriting the compressed source."""
-    path = os.fspath(path)
-    if not path.endswith(".zst"):
-        return open(path, "rb", buffering=0)
+def _open_zstd_stream(path):
+    """Open a zstd-compressed file as a binary stream (stdlib 3.14+ / zstandard / zstd CLI)."""
     stream = None
     try:
         from compression import zstd as _zstd  # Python 3.14+
@@ -4488,6 +4489,14 @@ def _open_codex_rollout(path):
             continue
         return _CodexZstdStream(process.stdout, process)
     raise OSError("no zstd decoder available")
+
+
+def _open_codex_rollout(path):
+    """Open a rollout without rewriting the compressed source."""
+    path = os.fspath(path)
+    if not path.endswith(".zst"):
+        return open(path, "rb", buffering=0)
+    return _open_zstd_stream(path)
 
 
 def _iter_codex_usage_records(path, chunk_size=64 * 1024, header_limit=1024,
@@ -13518,17 +13527,53 @@ def _iter_deepseek_harness_records(file_cache):
         yield path, entry, record
 
 
+class _DshZstdLines:
+    """Iterate a zstd-compressed DeepSeek Harness session as decoded lines."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._stream.__exit__(*exc_info)
+
+    def __iter__(self):
+        while True:
+            raw = self._stream.readline()
+            if not raw:
+                break
+            yield raw.decode("utf-8", "ignore")
+
+
+def _open_dsh_session(path):
+    """Open a harness session for line iteration; raw .jsonl.zstd streams through zstd."""
+    if path.endswith(".zstd"):
+        return _DshZstdLines(_open_zstd_stream(path))
+    return open(path, "r", encoding="utf-8", errors="ignore")
+
+
 def scan_deepseek_harness(bounds, cache):
     ledger_touch("deepseek_harness")
     fc = cache.setdefault("deepseek_harness", {})
     B = _empty_token_ranges()
-    if not os.path.isdir(DEEPSEEK_HARNESS_DIR):
+    # macOS App 先把 ~/.dsh/sessions 解压到 DEEPSEEK_HARNESS_DIR 再增量扫描；
+    # 其余平台没有原生解压方，退回直接流式读原始 .jsonl.zstd。缓存签名按源文件
+    # 的 mtime/size，未变更的会话不会重复解压解析。
+    if os.path.isdir(DEEPSEEK_HARNESS_DIR):
+        source_dir = DEEPSEEK_HARNESS_DIR
+        pattern = "**/*.jsonl"
+    elif os.path.isdir(DEEPSEEK_HARNESS_RAW_DIR):
+        source_dir = DEEPSEEK_HARNESS_RAW_DIR
+        pattern = "**/*.jsonl.zstd"
+    else:
         if fc:
             fc.clear()
             cache["_dirty"] = True
         return {"ranges": B}
 
-    files = set(glob.glob(os.path.join(DEEPSEEK_HARNESS_DIR, "**", "*.jsonl"), recursive=True))
+    files = set(glob.glob(os.path.join(source_dir, pattern), recursive=True))
     stale = set(fc.keys())
     for path in sorted(files):
         stale.discard(path)
@@ -13541,7 +13586,10 @@ def scan_deepseek_harness(bounds, cache):
                 and fc[path].get("cost_version") == _DEEPSEEK_HARNESS_COST_VERSION):
             continue
 
-        session_id = os.path.splitext(os.path.basename(path))[0]
+        name = os.path.basename(path)
+        if name.endswith(".zstd"):
+            name = name[: -len(".zstd")]
+        session_id = os.path.splitext(name)[0]
         project = ""
         current_model = "deepseek-v4-pro"
         current_provider = "deepseek-official"
@@ -13549,7 +13597,7 @@ def scan_deepseek_harness(bounds, cache):
         # 每个 step 的请求开始、第一个内容块、流结束时间（毫秒），重试时从重试那一刻重新算
         timing = {}
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            with _open_dsh_session(path) as handle:
                 for line in handle:
                     if '"type"' not in line or not any(value in line for value in (
                             '"session"', '"request/header"', '"step/start"',

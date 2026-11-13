@@ -2077,6 +2077,31 @@ def _sqlite_ro_uri(path):
     return Path(path).resolve().as_uri() + "?mode=ro"
 
 
+def _sqlite_open_readonly(path, timeout=5.0, module=None):
+    """只读打开 SQLite 库，WAL 库被写方 checkpoint 清掉侧车后仍可打开。
+
+    工具干净退出（如 ZCode）会 checkpoint 并删除 -wal/-shm 侧车，但主库文件头仍是
+    WAL 模式，mode=ro 连接重建 wal-index 需要写权限，会直接 OperationalError。
+    此时主库文件已包含全部已提交行，降级 immutable=1 绕过 wal-index 即可打开；
+    侧车仍存在且非空时保持普通只读连接——immutable 会忽略 WAL，读到旧数据。
+    """
+    module = module or sqlite3
+    try:
+        conn = module.connect(_sqlite_ro_uri(path), uri=True, timeout=timeout)
+        conn.execute("SELECT 1")
+        return conn
+    except module.OperationalError:
+        try:
+            has_pending_wal = os.path.getsize(str(path) + "-wal") > 0
+        except OSError:
+            has_pending_wal = False
+        if has_pending_wal:
+            raise
+        conn = module.connect(_sqlite_ro_uri(path) + "&immutable=1", uri=True, timeout=timeout)
+        conn.execute("SELECT 1")
+        return conn
+
+
 def _sqlite_signature(path):
     parts = []
     # SHM 的 mtime 会被只读 SQLite 连接更新，不能作为数据变化信号。
@@ -5633,7 +5658,7 @@ def _load_antigravity_db(path):
     max_ts = ""
     conn = None
     try:
-        conn = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+        conn = _sqlite_open_readonly(path, timeout=1)
         rows = conn.execute("SELECT idx, data FROM gen_metadata ORDER BY idx ASC").fetchall()
         try:
             step_rows = conn.execute("SELECT idx, metadata FROM steps").fetchall()
@@ -7318,7 +7343,7 @@ def _cursor_app_session(path=None, now_epoch=None):
     if not db_path or not os.path.isfile(db_path):
         return None
     try:
-        connection = sqlite3.connect(_sqlite_ro_uri(db_path), uri=True, timeout=0.25)
+        connection = _sqlite_open_readonly(db_path, timeout=0.25)
         row = connection.execute(
             "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
             ("cursorAuth/accessToken",)).fetchone()
@@ -9630,7 +9655,7 @@ def _devin_plan(db_path):
     rows = []
     conn = None
     try:
-        conn = _sq.connect(_sqlite_ro_uri(db_path), uri=True, timeout=1)
+        conn = _sqlite_open_readonly(db_path, timeout=1)
         conn.execute("PRAGMA query_only=ON")
         for pattern in _DEVIN_PLAN_KEY_PATTERNS:
             found = list(conn.execute(
@@ -10114,7 +10139,7 @@ def scan_qoder(bounds, cache):
         if sig and (not entry or entry.get("sig") != sig):
             conn = None
             try:
-                conn = _sqlite3.connect(_sqlite_ro_uri(qoder_db), uri=True, timeout=1)
+                conn = _sqlite_open_readonly(qoder_db, timeout=1)
                 conn.execute("PRAGMA query_only=ON")
                 # messages: calls, sessions, tokens, duration, turns
                 # 只统计 assistant 行:user 行也可能带 metadata,会虚增任务数
@@ -10278,7 +10303,7 @@ def scan_qoder_ide(bounds, cache):
         latest_model = None
         conn = None
         try:
-            conn = _sq.connect(_sqlite_ro_uri(qoder_ide_db), uri=True, timeout=1)
+            conn = _sqlite_open_readonly(qoder_ide_db, timeout=1)
             conn.execute("PRAGMA query_only=ON")
             # token 用量 & 计数 per day
             for row in conn.execute("""
@@ -10461,7 +10486,7 @@ def _hermes_db_paths():
 def _scan_hermes_db(db_path, _sq):
     days = {}
     try:
-        conn = _sq.connect(_sqlite_ro_uri(db_path), uri=True)
+        conn = _sqlite_open_readonly(db_path)
         conn.row_factory = _sq.Row
 
         tables = {row[0] for row in conn.execute(
@@ -11135,7 +11160,7 @@ def _openclaw_db_paths():
 
 
 def _openclaw_connect(db_path, sqlite_module):
-    conn = sqlite_module.connect(_sqlite_ro_uri(db_path), uri=True, timeout=1)
+    conn = _sqlite_open_readonly(db_path, timeout=1, module=sqlite_module)
     conn.execute("PRAGMA query_only=ON")
     return conn
 
@@ -13838,7 +13863,7 @@ def _scan_opencode_database(path, estimate_missing_cost=False):
     days = {}
     message_ids = set()
     sessions = {}
-    connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+    connection = _sqlite_open_readonly(path, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
         tables = {row[0] for row in connection.execute(
@@ -14042,7 +14067,7 @@ def _scan_zcode_database(path):
 
     days = {}
     sessions = {}
-    connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+    connection = _sqlite_open_readonly(path, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
         rows = connection.execute("""
@@ -14162,7 +14187,7 @@ def _scan_devin_cli_database(path):
     days = {}
     sessions = {}
     seen = set()
-    connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+    connection = _sqlite_open_readonly(path, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
         tables = {row[0] for row in connection.execute(
@@ -14577,7 +14602,7 @@ def _scan_minimax_database(path, pending, runs, through):
         except (TypeError, ValueError, OverflowError):
             return 0
 
-    connection = sqlite3.connect(_sqlite_ro_uri(path), uri=True, timeout=1)
+    connection = _sqlite_open_readonly(path, timeout=1)
     try:
         connection.execute("PRAGMA query_only=ON")
         # 运行中的客户端会继续写入；用量和消息必须读自同一份数据库快照。

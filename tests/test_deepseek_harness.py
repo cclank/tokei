@@ -10,6 +10,11 @@ try:
 except ImportError:
     from test_codex_limits import USAGE
 
+try:
+    import zstandard as _zstandard
+except ImportError:
+    _zstandard = None
+
 
 def harness_event(event_type, timestamp, turn, step, usage, model=None, served=None):
     data = {"turn": turn, "step": step}
@@ -242,6 +247,123 @@ class DeepSeekHarnessTests(unittest.TestCase):
         self.assertFalse(USAGE._names_model("group/auto-glm-5-3-flash"))
         self.assertFalse(USAGE._names_model("qoder/auto"))
         self.assertTrue(USAGE._names_model("zcode/GLM-5.3-Flash"))
+
+
+class DeepSeekHarnessRawZstdTests(unittest.TestCase):
+    """无 App 原生解压缓存的平台（Windows/Linux）直接读原始 .jsonl.zstd。"""
+
+    TIMESTAMP = 1_704_672_000_000
+
+    @staticmethod
+    def _bounds(timestamp):
+        local_day = datetime.fromtimestamp(timestamp / 1000).astimezone().replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        return {
+            "today": local_day,
+            "yesterday": local_day - timedelta(days=1),
+            "week": local_day - timedelta(days=local_day.weekday()),
+            "last_week": local_day - timedelta(days=local_day.weekday() + 7),
+            "last_week_end": local_day - timedelta(days=local_day.weekday()),
+            "month": local_day.replace(day=1),
+            "year": local_day.replace(month=1, day=1),
+        }
+
+    @staticmethod
+    def _session_lines(timestamp, usage):
+        return [
+            {"type": "session", "id": "session-1", "cwd": "/tmp/deepseek-project",
+             "createdAt": timestamp},
+            {"type": "request/header", "time": timestamp - 1,
+             "data": {"header": {"config": {"provider": "deepseek-official",
+                                               "model": "deepseek-v4-pro"}}}},
+            harness_event("assistant/message", timestamp, 1, 1, usage),
+        ]
+
+    def _write_raw_session(self, root, session_id, lines):
+        session_dir = root / "raw" / "project" / session_id
+        session_dir.mkdir(parents=True)
+        payload = "\n".join(json.dumps(item) for item in lines) + "\n"
+        compressed = _zstandard.ZstdCompressor().compress(payload.encode("utf-8"))
+        (session_dir / "session.v4.jsonl.zstd").write_bytes(compressed)
+
+    @unittest.skipIf(_zstandard is None, "zstandard not installed")
+    def test_reads_raw_zstd_sessions_without_app_decompressed_cache(self):
+        timestamp = self.TIMESTAMP
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_raw_session(root, "session-1", self._session_lines(timestamp, {
+                "inputTokens": 100, "outputTokens": 40, "cacheReadTokens": 1_000,
+                "cacheWriteTokens": 5, "reasoningTokens": 15,
+            }))
+
+            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            with mock.patch.object(USAGE, "DEEPSEEK_HARNESS_DIR", str(root / "cache")), \
+                 mock.patch.object(USAGE, "DEEPSEEK_HARNESS_RAW_DIR", str(root / "raw")), \
+                 mock.patch.object(USAGE, "ledger_reconcile",
+                                   side_effect=lambda _tool, days, sources=None: days):
+                result = USAGE.scan_deepseek_harness(self._bounds(timestamp), cache)
+                with mock.patch.object(
+                    USAGE, "_deepseek_harness_usage_record",
+                    side_effect=AssertionError("unchanged log was reparsed"),
+                ):
+                    cached = USAGE.scan_deepseek_harness(self._bounds(timestamp), cache)
+
+        all_usage = result["ranges"]["all"]
+        self.assertEqual(all_usage["in"], 100)
+        self.assertEqual(all_usage["out"], 25)
+        self.assertEqual(all_usage["reason"], 15)
+        self.assertEqual(all_usage["cr"], 1_000)
+        self.assertEqual(all_usage["cw"], 5)
+        self.assertEqual(USAGE.token_total(all_usage), 1_145)
+        self.assertEqual(len(all_usage["sessions"]), 1)
+        self.assertIn("deepseek-v4-pro", all_usage["models"])
+        self.assertEqual(cached["ranges"]["all"]["in"], 100)
+
+    @unittest.skipIf(_zstandard is None, "zstandard not installed")
+    def test_decompressed_cache_takes_precedence_over_raw(self):
+        timestamp = self.TIMESTAMP
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_dir = root / "cache" / "project" / "session-1"
+            cache_dir.mkdir(parents=True)
+            (cache_dir / "session.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in self._session_lines(timestamp, {
+                    "inputTokens": 50, "outputTokens": 5,
+                })) + "\n", encoding="utf-8")
+            self._write_raw_session(root, "session-2", self._session_lines(timestamp, {
+                "inputTokens": 900, "outputTokens": 90,
+            }))
+
+            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            with mock.patch.object(USAGE, "DEEPSEEK_HARNESS_DIR", str(root / "cache")), \
+                 mock.patch.object(USAGE, "DEEPSEEK_HARNESS_RAW_DIR", str(root / "raw")), \
+                 mock.patch.object(USAGE, "ledger_reconcile",
+                                   side_effect=lambda _tool, days, sources=None: days):
+                result = USAGE.scan_deepseek_harness(self._bounds(timestamp), cache)
+
+        all_usage = result["ranges"]["all"]
+        self.assertEqual(all_usage["in"], 50)
+        self.assertEqual(len(all_usage["sessions"]), 1)
+
+    def test_missing_zstd_decoder_skips_raw_files_gracefully(self):
+        timestamp = self.TIMESTAMP
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_dir = root / "raw" / "project" / "session-1"
+            session_dir.mkdir(parents=True)
+            (session_dir / "session.v4.jsonl.zstd").write_bytes(
+                b"\x28\xb5\x2f\xfd not-a-session")
+
+            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            with mock.patch.object(USAGE, "DEEPSEEK_HARNESS_DIR", str(root / "cache")), \
+                 mock.patch.object(USAGE, "DEEPSEEK_HARNESS_RAW_DIR", str(root / "raw")), \
+                 mock.patch.object(USAGE, "_open_zstd_stream",
+                                   side_effect=OSError("no zstd decoder available")), \
+                 mock.patch.object(USAGE, "ledger_reconcile",
+                                   side_effect=lambda _tool, days, sources=None: days):
+                result = USAGE.scan_deepseek_harness(self._bounds(timestamp), cache)
+
+        self.assertEqual(USAGE.token_total(result["ranges"]["all"]), 0)
 
 
 if __name__ == "__main__":

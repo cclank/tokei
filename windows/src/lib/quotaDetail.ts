@@ -25,6 +25,10 @@ export interface QuotaCycle {
   devices: Record<string, number>;
   approx: boolean;
   current: boolean;
+  window_id?: string | null;
+  window_title?: string | null;
+  usage_scope?: string | null;
+  projection_available?: boolean | null;
 }
 
 export interface QuotaDetailPayload {
@@ -40,10 +44,16 @@ export const dailyTotal = (point: QuotaDailyPoint) => point.c + point.x + point.
 /** 重锚会截短周期，月窗口也有长短。 */
 export const cycleDurationDays = (cycle: QuotaCycle) => (cycle.end - cycle.start) / 86400;
 
-/** 一个满额度大约值多少 token —— 按当前进度外推；太早期外推没意义。 */
-export function projectedTotal(cycle: QuotaCycle): number | null {
+function projectionUsage(cycle: QuotaCycle): number | null {
   const used = cycle.used_pct;
-  if (used == null || used < 3 || cycle.tokens <= 0) return null;
+  if (cycle.projection_available === false || used == null || !Number.isFinite(used) || used <= 0 || used > 100) return null;
+  return cycle.tool === "antigravity" || used >= 3 ? used : null;
+}
+
+/** 按已记录用量外推满额度容量；Antigravity 有有效读数就直接估算。 */
+export function projectedTotal(cycle: QuotaCycle): number | null {
+  const used = projectionUsage(cycle);
+  if (used == null || cycle.tokens <= 0) return null;
   const projected = Math.trunc((cycle.tokens / used) * 100);
   return Number.isSafeInteger(projected) ? projected : null;
 }
@@ -54,8 +64,9 @@ export function cycleCostLabel(cycle: QuotaCycle): string | null {
 }
 
 export function projectedCost(cycle: QuotaCycle): number | null {
-  const { cost, used_pct: used } = cycle;
-  if (used == null || !Number.isFinite(used) || used < 3 || cost == null || !Number.isFinite(cost) || cost <= 0) return null;
+  const { cost } = cycle;
+  const used = projectionUsage(cycle);
+  if (used == null || cost == null || !Number.isFinite(cost) || cost <= 0) return null;
   const projected = cost / used * 100;
   return Number.isFinite(projected) ? projected : null;
 }
@@ -90,6 +101,10 @@ function decodeCycle(value: unknown): QuotaCycle | null {
   if (!isNumber(value.start) || !isNumber(value.end) || !isNumber(value.tokens)) return null;
   if (value.window != null && typeof value.window !== "string") return null;
   if (value.cost != null && !isNumber(value.cost)) return null;
+  for (const key of ["window_id", "window_title", "usage_scope"]) {
+    if (value[key] != null && typeof value[key] !== "string") return null;
+  }
+  if (value.projection_available != null && typeof value.projection_available !== "boolean") return null;
   if (typeof value.approx !== "boolean" || typeof value.current !== "boolean" || !isRecord(value.devices)) return null;
   const devices: Record<string, number> = {};
   for (const [name, tokens] of Object.entries(value.devices)) {
@@ -107,6 +122,10 @@ function decodeCycle(value: unknown): QuotaCycle | null {
     devices,
     approx: value.approx,
     current: value.current,
+    window_id: typeof value.window_id === "string" ? value.window_id : null,
+    window_title: typeof value.window_title === "string" ? value.window_title : null,
+    usage_scope: typeof value.usage_scope === "string" ? value.usage_scope : null,
+    projection_available: typeof value.projection_available === "boolean" ? value.projection_available : null,
   };
 }
 

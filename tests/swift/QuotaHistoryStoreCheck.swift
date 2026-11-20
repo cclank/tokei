@@ -103,7 +103,60 @@ struct QuotaHistoryStoreCheck {
         try checkProjection()
         try checkRecovery()
         try checkDailyConsumption()
+        try checkAntigravity(base: base, directory: directory)
         print("quota history store checks passed")
+    }
+
+    private static func checkAntigravity(base: Date, directory: URL) throws {
+        let file = directory.appendingPathComponent("antigravity-history.json")
+        let legacy = """
+        {"version":1,"points":[{"timestamp":1800000000,"claudeWeekRemaining":74,"claudeActivity":[],"codexActivity":[],"antigravityRemaining":{"antigravity-gemini-5h":0}}],
+         "lastClaudeModelTotals":{},"lastCodexModelTotals":{},"hasClaudeBaseline":false,"hasCodexBaseline":false}
+        """
+        try Data(legacy.utf8).write(to: file)
+        let store = QuotaHistoryStore(fileURL: file)
+        try expect(store.points.count == 1, "existing history with old quota windows must load")
+        let gemini = AntigravityHistoryWindow.geminiWeek.rawValue
+        let fiveHour = "antigravity-gemini-5h"
+        let thirdParty = AntigravityHistoryWindow.thirdPartyWeek.rawValue
+        let argon = AntigravityHistoryWindow.argonWeek.rawValue
+        store.record(QuotaCapture(antigravityRemaining: [gemini: 99, thirdParty: 100, argon: 99]), at: base)
+        store.record(QuotaCapture(antigravityRemaining: [gemini: 95, thirdParty: -1, "invalid": .nan]),
+                     at: base.addingTimeInterval(30))
+        try expect(store.points.count == 1, "Antigravity updates aggregate by minute")
+        try expect(store.points[0].claudeWeekRemaining == 74, "adding Antigravity preserves Claude history")
+        try expect(store.points[0].antigravityRemaining?[gemini] == 95, "latest same-minute reading wins")
+        try expect(store.points[0].antigravityRemaining?[thirdParty] == 100, "invalid partial reading cannot replace a valid value")
+        try expect(store.points[0].antigravityRemaining?[fiveHour] == 0, "previously stored history is retained")
+        try expect(AntigravityHistoryWindow.allCases.allSatisfy { $0.rawValue.hasSuffix("-weekly") },
+                   "Antigravity history only offers weekly quotas")
+
+        store.record(QuotaCapture(antigravityRemaining: [gemini: 90, thirdParty: 99, argon: 80]),
+                     at: base.addingTimeInterval(60))
+        store.record(QuotaCapture(), at: base.addingTimeInterval(120))
+        try expect(store.points.count == 2, "missing quotas do not create fabricated samples")
+        try expect(store.points[1].antigravityRemaining?[fiveHour] == nil, "missing windows stay unknown")
+        let projection = QuotaHistoryProjection(points: store.points, tool: .antigravity,
+                                                 selectedWindow: AntigravityHistoryWindow.geminiWeek.title)
+        try expect(projection.windowNames == [AntigravityHistoryWindow.geminiWeek.title], "one selected quota pool per curve")
+        try expect(projection.dropEvents.map(\.drop) == [5], "drops are calculated within the same pool")
+        try expect(projection.activityEvents.isEmpty, "do not attribute other tools' tokens to Antigravity")
+        let argonProjection = QuotaHistoryProjection(points: store.points, tool: .antigravity,
+                                                      selectedWindow: AntigravityHistoryWindow.argonWeek.title)
+        try expect(argonProjection.dropEvents.map(\.drop) == [19], "Argon stays separate from shared Gemini quota")
+
+        store.record(QuotaCapture(antigravityRemaining: [gemini: 100, argon: 99]),
+                     at: base.addingTimeInterval(180))
+        let recovery = QuotaHistoryProjection.latestRecovery(from: store.points, tool: .antigravity,
+                                                             selectedWindow: AntigravityHistoryWindow.geminiWeek.title)
+        try expect(recovery?.remaining == 100 && recovery?.previousRemaining == 90, "recovery belongs to selected pool")
+        let daily = QuotaHistoryProjection.dailyConsumption(from: store.points, tool: .antigravity)
+        try expect(daily.first { $0.window == AntigravityHistoryWindow.geminiWeek.title }?.consumed == 5,
+                   "refills do not subtract consumed quota")
+        let reloaded = QuotaHistoryStore(fileURL: file)
+        try expect(reloaded.points == store.points, "Antigravity and legacy history survive reload together")
+        let encoded = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        try expect(encoded["version"] as? Int == 1, "compatible extension keeps history schema version")
     }
 
     private static func checkRecovery() throws {

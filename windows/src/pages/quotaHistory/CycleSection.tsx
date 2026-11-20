@@ -5,15 +5,17 @@ import * as Fmt from "../../lib/fmt";
 import { data, L } from "../../lib/i18n";
 import { Card, HStack, Spacer, VStack } from "../../ui/kit";
 import { fs, rgba, T, Theme, type RGB } from "../../ui/theme";
-import { MiniSegmented, MONO, oneLine, ROUNDED, WidestOf } from "./chartKit";
+import { MONO, oneLine, ROUNDED, WidestOf } from "./chartKit";
+import { ANTIGRAVITY_WINDOWS } from "./projection";
 import { cycleCostLabel, cycleDurationDays, deviceBreakdown, projectedCost, projectedTotal, type QuotaCycle, type QuotaDetailSnapshot } from "../../lib/quotaDetail";
 
 const COLLAPSED_CYCLE_LIMIT = 8;
 /** 有周期数据的工具按固定顺序排，免得刷新一次卡片就换个位置。 */
-const CYCLE_TOOL_ORDER = ["claude", "codex", "grok"];
+const CYCLE_TOOL_ORDER = ["antigravity", "claude", "codex", "grok"];
 
 export function cycleName(tool: string): string {
   switch (tool) {
+    case "antigravity": return "Antigravity";
     case "claude":
       return "Claude Code";
     case "grok":
@@ -25,6 +27,7 @@ export function cycleName(tool: string): string {
 
 export function cycleTint(tool: string): RGB {
   switch (tool) {
+    case "antigravity": return Theme.gemini;
     case "claude":
       return Theme.claude;
     case "grok":
@@ -85,7 +88,10 @@ function CycleCard({ cycle }: { cycle: QuotaCycle }) {
   return (
     <VStack gap={9}>
       <HStack gap={8} align="baseline">
-        <span style={{ fontSize: fs(12), fontWeight: 700, color: rgba(tint), whiteSpace: "nowrap" }}>{L(cycle.window === "month" ? "%@ 月额度" : "%@ 周额度", cycleName(cycle.tool))}</span>
+        <span style={{ fontSize: fs(12), fontWeight: 700, color: rgba(tint), whiteSpace: "nowrap" }}>
+          {cycle.tool === "antigravity" ? `Antigravity · ${data(cycle.window_title ?? "")}`
+            : L(cycle.window === "month" ? "%@ 月额度" : "%@ 周额度", cycleName(cycle.tool))}
+        </span>
         <Spacer />
         <span style={{ fontSize: fs(9.5), color: T.tertiary, whiteSpace: "nowrap" }}>{L("%@ 后回满", Fmt.countdown(cycle.end))}</span>
       </HStack>
@@ -120,6 +126,7 @@ function CycleCard({ cycle }: { cycle: QuotaCycle }) {
           {breakdown.map((item) => `${data(item.name)} ${Fmt.human(item.tokens)}`).join("  ·  ")}
         </span>
       )}
+      {cycle.usage_scope === "local" && <span style={{ fontSize: fs(9), color: T.tertiary }}>{L("Antigravity 的 Token 和成本来自本机会话，额度为账号级读数。")}</span>}
     </VStack>
   );
 }
@@ -153,7 +160,7 @@ function CompletedCycles({
         <span style={{ fontSize: fs(9), color: T.tertiary }}>{L("不足 7 天的是重置时间被提前重锚，额度提前回满，长度不一样不能直接比。")}</span>
       )}
       {visible.map((cycle) => (
-        <HStack key={`${cycle.tool}-${cycle.start}`} gap={8}>
+        <HStack key={`${cycle.tool}-${cycle.window_id ?? ""}-${cycle.start}`} gap={8}>
           <span style={{ fontSize: fs(9.5), fontFamily: MONO, color: T.tertiary, width: 92, flex: "none", whiteSpace: "nowrap" }}>
             {`${Fmt.day(cycle.start)} → ${Fmt.day(cycle.end)}`}
           </span>
@@ -217,15 +224,18 @@ function CompletedCycles({
 
 export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
   const [cycleTool, setCycleTool] = useState<string | null>(null);
+  const [antigravityWindow, setAntigravityWindow] = useState(ANTIGRAVITY_WINDOWS[0].id);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const payload = detail.payload;
   const allCycles = payload?.cycles ?? [];
   const present = new Set(allCycles.map((cycle) => cycle.tool));
   const cycleTools = CYCLE_TOOL_ORDER.filter((tool) => present.has(tool));
   const visibleTools = cycleTool && cycleTools.includes(cycleTool) ? [cycleTool] : cycleTools;
+  const antigravityWindows = ANTIGRAVITY_WINDOWS.filter(window => allCycles.some(cycle => cycle.tool === "antigravity" && cycle.window_id === window.id));
+  const selectedAntigravityWindow = antigravityWindows.find(window => window.id === antigravityWindow)?.id ?? antigravityWindows[0]?.id;
 
   let subtitle = L("从上次额度回满算到下次回满");
-  if (payload && payload.devices.length > 1) subtitle += L(" · %@ 台设备已合并", payload.devices.length);
+  if (payload && payload.devices.length > 1 && cycleTool !== "antigravity") subtitle += L(" · %@ 台设备已合并", payload.devices.length);
   // 首屏是上次落盘的缓存，刷新完会自己变，标出来免得误当成实时值。
   if (detail.refreshing && payload) subtitle += L(" · 更新中");
 
@@ -238,16 +248,24 @@ export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
     });
 
   const group = (tool: string) => {
-    const current = allCycles.find((cycle) => cycle.tool === tool && cycle.current);
-    const past = allCycles.filter((cycle) => cycle.tool === tool && !cycle.current).sort((a, b) => b.start - a.start);
+    const cycles = allCycles.filter(cycle => cycle.tool === tool && (tool !== "antigravity" || cycle.window_id === selectedAntigravityWindow));
+    const current = cycles.find(cycle => cycle.current);
+    const past = cycles.filter(cycle => !cycle.current).sort((a, b) => b.start - a.start);
     const tint = cycleTint(tool);
     const history = (compactTitle: boolean) => (
       <CompletedCycles tool={tool} cycles={past} compactTitle={compactTitle} expanded={expanded.has(tool)} onToggle={() => toggle(tool)} />
+    );
+    const picker = tool === "antigravity" && (
+      <select aria-label="Antigravity" value={selectedAntigravityWindow} onChange={event => setAntigravityWindow(event.target.value)}
+        style={{ color: T.primary, background: "transparent", border: "1px solid rgba(127,127,127,0.3)", borderRadius: 6, padding: "4px 7px", fontSize: fs(11), alignSelf: "flex-start" }}>
+        {antigravityWindows.map(window => <option key={window.id} value={window.id}>{L(window.title)}</option>)}
+      </select>
     );
     if (current) {
       return (
         <Card key={tool} tint={tint}>
           <VStack gap={12}>
+            {picker}
             <CycleCard cycle={current} />
             {past.length > 0 && (
               <>
@@ -262,7 +280,7 @@ export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
     if (past.length) {
       return (
         <Card key={tool} tint={tint}>
-          {history(false)}
+          <VStack gap={12}>{picker}{history(false)}</VStack>
         </Card>
       );
     }
@@ -278,12 +296,11 @@ export function CycleSection({ detail }: { detail: QuotaDetailSnapshot }) {
         </VStack>
         <Spacer />
         {cycleTools.length > 1 && (
-          <MiniSegmented
-            width={54 * (cycleTools.length + 1) + 24}
-            value={cycleTool && cycleTools.includes(cycleTool) ? cycleTool : null}
-            onChange={setCycleTool}
-            options={[{ value: null as string | null, label: L("全部") }, ...cycleTools.map((tool) => ({ value: tool as string | null, label: cycleName(tool) }))]}
-          />
+          <select aria-label={L("一个额度周期用了多少")} value={cycleTool ?? ""} onChange={event => setCycleTool(event.target.value || null)}
+            style={{ width: 150, color: T.primary, background: "transparent", border: "1px solid rgba(127,127,127,0.3)", borderRadius: 6, padding: "4px 7px", fontSize: fs(11) }}>
+            <option value="">{L("全部")}</option>
+            {cycleTools.map(tool => <option key={tool} value={tool}>{cycleName(tool)}</option>)}
+          </select>
         )}
       </HStack>
       {!payload ? (

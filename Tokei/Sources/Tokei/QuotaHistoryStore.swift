@@ -16,6 +16,8 @@ struct QuotaHistoryPoint: Codable, Equatable, Identifiable {
     var codexWeekRemaining: Double?
     var claudeActivity: [QuotaModelActivity] = []
     var codexActivity: [QuotaModelActivity] = []
+    /// Provider window IDs stay stable across display-language changes.
+    var antigravityRemaining: [String: Double]?
 
     var id: Int { timestamp }
 }
@@ -27,6 +29,7 @@ struct QuotaCapture {
     var codexWeekRemaining: Double?
     var claudeModelTotals: [String: Int]
     var codexModelTotals: [String: Int]
+    var antigravityRemaining: [String: Double]
 
     init(
         claudeFiveHourRemaining: Double? = nil,
@@ -34,7 +37,8 @@ struct QuotaCapture {
         claudeFableWeekRemaining: Double? = nil,
         codexWeekRemaining: Double? = nil,
         claudeModelTotals: [String: Int] = [:],
-        codexModelTotals: [String: Int] = [:]
+        codexModelTotals: [String: Int] = [:],
+        antigravityRemaining: [String: Double] = [:]
     ) {
         self.claudeFiveHourRemaining = claudeFiveHourRemaining
         self.claudeWeekRemaining = claudeWeekRemaining
@@ -42,6 +46,7 @@ struct QuotaCapture {
         self.codexWeekRemaining = codexWeekRemaining
         self.claudeModelTotals = claudeModelTotals
         self.codexModelTotals = codexModelTotals
+        self.antigravityRemaining = antigravityRemaining
     }
 }
 
@@ -138,13 +143,15 @@ final class QuotaHistoryStore: ObservableObject {
             claudeFableWeekRemaining: normalized(capture.claudeFableWeekRemaining),
             codexWeekRemaining: normalized(capture.codexWeekRemaining),
             claudeActivity: claudeActivity,
-            codexActivity: codexActivity
+            codexActivity: codexActivity,
+            antigravityRemaining: normalizedWindows(capture.antigravityRemaining)
         )
 
         let hasUsefulData = incoming.claudeFiveHourRemaining != nil ||
             incoming.claudeWeekRemaining != nil ||
             incoming.claudeFableWeekRemaining != nil ||
             incoming.codexWeekRemaining != nil ||
+            incoming.antigravityRemaining != nil ||
             !incoming.claudeActivity.isEmpty ||
             !incoming.codexActivity.isEmpty
 
@@ -210,6 +217,11 @@ final class QuotaHistoryStore: ObservableObject {
         return min(100, max(0, value))
     }
 
+    private func normalizedWindows(_ windows: [String: Double]) -> [String: Double]? {
+        let valid = windows.filter { !$0.key.isEmpty && $0.value.isFinite && (0...100).contains($0.value) }
+        return valid.isEmpty ? nil : valid
+    }
+
     private func activity(
         current: [String: Int],
         previous: [String: Int],
@@ -271,6 +283,10 @@ final class QuotaHistoryStore: ObservableObject {
             incoming.claudeFableWeekRemaining ?? existing.claudeFableWeekRemaining
         merged.codexWeekRemaining =
             incoming.codexWeekRemaining ?? existing.codexWeekRemaining
+        if let windows = incoming.antigravityRemaining {
+            merged.antigravityRemaining = (existing.antigravityRemaining ?? [:])
+                .merging(windows) { _, latest in latest }
+        }
         merged.claudeActivity = mergeActivity(existing.claudeActivity, incoming.claudeActivity)
         merged.codexActivity = mergeActivity(existing.codexActivity, incoming.codexActivity)
         return merged

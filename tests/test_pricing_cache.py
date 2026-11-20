@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -388,6 +389,60 @@ class PricingCacheTests(unittest.TestCase):
             )
             self.assertEqual(USAGE._resolve_id("claude-opus-5-5"), "anthropic/claude-opus-5.5")
             self.assertEqual(USAGE.price_for("claude-opus-5-5")["in"], 4.0)
+            for model in ("claude-fable-5-2", "claude-fable-5-2-20261109"):
+                with self.subTest(model=model):
+                    self.assertEqual(USAGE._resolve_id(model), "anthropic/claude-fable-5.2")
+                    self.assertEqual(USAGE.price_for(model), {
+                        "in": 8.0, "out": 40.0, "cache_read": 0.20,
+                        "write5m": 10.0, "write1h": 16.0,
+                    })
+
+    def test_fable_52_fast_mode_reprices_unchanged_transcripts_after_upgrade(self):
+        def row(model, speed):
+            return {
+                "type": "assistant",
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "message": {
+                    "id": f"{model}-{speed}",
+                    "model": model,
+                    "usage": {
+                        "speed": speed,
+                        "input_tokens": 10_000, "output_tokens": 10_000,
+                        "cache_read_input_tokens": 10_000, "cache_creation_input_tokens": 20_000,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 10_000, "ephemeral_1h_input_tokens": 10_000,
+                        },
+                        "server_tool_use": {"web_search_requests": 1},
+                    },
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(USAGE, "CLAUDE_DIR", tmp):
+            fable = Path(tmp) / "fable.jsonl"
+            opus = Path(tmp) / "opus.jsonl"
+            fable.write_text("".join(json.dumps(row("claude-fable-5-2", mode)) + "\n"
+                                     for mode in ("standard", "fast")), encoding="utf-8")
+            opus.write_text(json.dumps(row("claude-opus-5-5", "standard")) + "\n", encoding="utf-8")
+            bounds = USAGE.range_bounds()
+            cache = {}
+            with mock.patch.object(USAGE, "_CLAUDE_PERF_VERSION", 5), \
+                 mock.patch.object(USAGE, "_CLAUDE_FAST_PRICE_MULTIPLIERS", {}):
+                before = USAGE.scan_claude(bounds, cache)["ranges"]["today"]
+            for entry in cache["claude"].values():
+                for event in entry["events"]:
+                    event.pop("fast", None)
+
+            with mock.patch.object(USAGE, "_claude_parse_file", wraps=USAGE._claude_parse_file) as parse:
+                after = USAGE.scan_claude(bounds, cache)["ranges"]["today"]
+            self.assertEqual([call.args[0] for call in parse.call_args_list], [str(fable)])
+
+        old_fable = before["models"]["claude-fable-5-2"]
+        new_fable = after["models"]["claude-fable-5-2"]
+        self.assertAlmostEqual(old_fable["cost"], 0.752 * 2)
+        self.assertAlmostEqual(new_fable["cost"], 0.752 + 1.494)
+        self.assertEqual(after["models"]["claude-opus-5-5"], before["models"]["claude-opus-5-5"])
+        for field in ("in", "out", "cr", "cw", "ws"):
+            self.assertEqual(new_fable[field], old_fable[field])
 
     def test_haiku_55_long_prompts_bill_the_whole_request_at_the_higher_tier(self):
         """提示（输入 + 缓存读 + 缓存写）超过 100K 时，这次请求整体按 5 倍计。"""

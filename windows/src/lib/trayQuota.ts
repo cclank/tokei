@@ -1,10 +1,12 @@
 // 托盘的额度来源（Mac 版 MenuBarQuotaSource）：偏好键、默认值、名称与读数和 Mac 版一致。
-// Windows 托盘图标画不了文字，这些开关决定托盘悬停提示里列哪些窗口（trayQuotaTooltip）。
+// Windows 通过托盘悬停提示展示数值；额度模式下由这些开关选择窗口。
 import { L } from "./i18n";
 import { getPref } from "./prefs";
 import type { Usage } from "./types";
 import { hasResetSinceReading } from "../ui/kit";
 import { Theme, type RGB } from "../ui/theme";
+import type { QuotaDetailPayload } from "./quotaDetail";
+import { trayContent, trayTokenTooltip } from "./trayTokens";
 
 interface Reading {
   value: number | null | undefined;
@@ -69,7 +71,8 @@ export function trayQuotaMetrics(usage: Usage): TrayQuotaMetric[] {
 }
 
 /** 托盘悬停提示：「Tokei · Claude 5h 42% · Codex 周 80%」，全关或都没有时只写 Tokei。 */
-export function trayQuotaTooltip(usage: Usage): string {
+export function trayQuotaTooltip(usage: Usage, detail?: QuotaDetailPayload | null): string {
+  if (trayContent() === "tokens") return trayTokenTooltip(usage, detail);
   const parts = trayQuotaMetrics(usage).map(({ source, value }) => `${source.label()} ${value === "—" ? value : `${value}%`}`);
   return parts.length ? `Tokei · ${parts.join(" · ")}` : "Tokei";
 }

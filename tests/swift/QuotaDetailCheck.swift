@@ -39,6 +39,43 @@ struct QuotaDetailCheck {
         numeric.cost = Double.greatestFiniteMagnitude
         numeric.used_pct = 3
         expect(numeric.projectedCost == nil, "overflowing projection hidden")
+        var antigravity = legacy
+        antigravity.tool = "antigravity"
+        antigravity.window = "week"
+        antigravity.window_id = "antigravity-gemini-weekly"
+        antigravity.window_title = "Gemini 周"
+        antigravity.usage_scope = "local"
+        antigravity.cost = 12.5
+        antigravity.projection_available = true
+        expect(antigravity.window == "week" && antigravity.projectedTotal == 400,
+               "Antigravity uses the same weekly projection as the other tools")
+        expect(antigravity.projectedCost == 50, "Antigravity price projection uses the same quota denominator")
+        let agRoundTrip = try JSONDecoder().decode(QuotaCycle.self, from: JSONEncoder().encode(antigravity))
+        expect(agRoundTrip.window_id == antigravity.window_id && agRoundTrip.usage_scope == "local",
+               "pool identity and source scope survive cache reload")
+        antigravity.projection_available = false
+        expect(antigravity.projectedTotal == nil && antigravity.projectedCost == nil,
+               "stale or incomplete readings cannot produce a forecast")
+        antigravity.projection_available = true
+        antigravity.used_pct = 2.99
+        expect(antigravity.projectedTotal == 3344, "Antigravity projects immediately below three percent")
+        expect(abs((antigravity.projectedCost ?? 0) - 418.0602) < 0.001, "early cost uses the same observed ratio")
+        antigravity.used_pct = 0.5
+        expect(antigravity.projectedTotal == 20000 && antigravity.projectedCost == 2500,
+               "small positive readings produce direct token and cost estimates")
+        for invalid in [0.0, -1.0, 101.0, Double.nan, Double.infinity] {
+            antigravity.used_pct = invalid
+            expect(antigravity.projectedTotal == nil && antigravity.projectedCost == nil,
+                   "zero and invalid quota readings never produce nonfinite estimates")
+        }
+        var otherTool = legacy
+        otherTool.used_pct = 2.99
+        otherTool.cost = 12.5
+        expect(otherTool.projectedTotal == nil && otherTool.projectedCost == nil,
+               "existing thresholds for the other tools remain intact")
+        antigravity.used_pct = 3
+        antigravity.tokens = Int.max
+        expect(antigravity.projectedTotal == nil, "large token projection never traps")
         let p = QuotaDetailPayload(daily: [], cycles: [legacy], devices: [], missing: [], now: 1000)
         expect(p.currentCycle(for: "claude", endingAt: 1100, at: 1000) != nil, "matching reset")
         expect(p.currentCycle(for: "claude", endingAt: 1160, at: 1000) != nil, "tolerate positive 60-second drift")

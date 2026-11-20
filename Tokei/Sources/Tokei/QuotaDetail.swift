@@ -25,22 +25,34 @@ struct QuotaCycle: Codable, Identifiable {
     var devices: [String: Int]
     var approx: Bool
     var current: Bool
+    var window_id: String?
+    var window_title: String?
+    var usage_scope: String?
+    var projection_available: Bool?
 
-    var id: String { "\(tool)-\(start)" }
+    var id: String { "\(tool)-\(window_id ?? "")-\(start)" }
     var isMonthly: Bool { window == "month" }
 
     /// 重锚会把周期截短,月窗口也有长短 —— 照实标出来。
     var durationDays: Double { Double(end - start) / 86400 }
 
-    /// 一个满额度大约值多少 token —— 按当前进度外推。太早期外推没意义。
+    private var projectionUsage: Double? {
+        guard projection_available != false, let used = used_pct, used.isFinite,
+              used > 0, used <= 100 else { return nil }
+        guard tool == "antigravity" || used >= 3 else { return nil }
+        return used
+    }
+
+    /// 按已记录用量外推满额度容量；Antigravity 有有效读数就直接估算。
     var projectedTotal: Int? {
-        guard let used = used_pct, used >= 3, tokens > 0 else { return nil }
-        return Int(Double(tokens) / used * 100)
+        guard let used = projectionUsage, tokens > 0 else { return nil }
+        let projected = Double(tokens) / used * 100
+        return projected.isFinite && projected < Double(Int.max) ? Int(projected) : nil
     }
 
     /// 照当前进度外推整个周期的成本，口径同 projectedTotal。
     var projectedCost: Double? {
-        guard let used = used_pct, used.isFinite, used >= 3,
+        guard let used = projectionUsage,
               let cost, cost.isFinite, cost > 0 else { return nil }
         let projected = cost / used * 100
         return projected.isFinite ? projected : nil

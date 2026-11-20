@@ -961,7 +961,7 @@ struct PanelView: View {
                         let hit = denom > 0 ? Double(m.cached) / Double(denom) * 100 : 0
                         return ModelRow(name: m.name, pin: m.pin, pout: m.pout, pcr: m.pcr ?? 0,
                                         cost: m.cost, total: total, hit: hit,
-                                        tokIn: m.in, tokOut: m.out, tokCR: m.cached, tokCW: m.thoughts,
+                                        tokIn: m.in, tokOut: m.out, tokCR: m.cached, tokReason: m.thoughts,
                                         perf: r.perf?.model(named: m.name))
                     }
                     modelDisclosure(geminiRows, open: $geminiModelsOpen, tint: Theme.gemini,
@@ -1267,6 +1267,8 @@ struct PanelView: View {
     ) -> some View {
         let hasActivity = r.sessions > 0 || r.calls > 0 || r.turns > 0
         let hasUsage = usage.totalTokens > 0 || usage.requests > 0
+        let usageStatus = stat.quota.usage_fetch?.status
+        let quotaUpdated = stat.quota.available && !stat.quota.stale && stat.quota.source == "grok-bot-api"
         VStack(alignment: .leading, spacing: 11) {
             cardHead("Grok Bot", tint: Theme.grokBot,
                      sessions: r.sessions > 0 ? r.sessions : usage.sessions,
@@ -1284,6 +1286,15 @@ struct PanelView: View {
                     tint: Theme.grokBot,
                     periodLabel: displayedRange.label
                 )
+                if usageStatus == "unavailable" {
+                    Text(L("官方用量暂未更新 · 显示已保存的记录"))
+                        .font(.system(size: Theme.fontSize(8.5)))
+                        .foregroundStyle(Theme.tTertiary)
+                } else if !stat.quota.stale && usageStatus == "partial" {
+                    Text(L("本次官方用量明细可能不全"))
+                        .font(.system(size: Theme.fontSize(8.5)))
+                        .foregroundStyle(Theme.tTertiary)
+                }
                 if hasActivity {
                     Text(L("本地记录 · %@ 条消息 · %@ 次响应", r.turns, r.calls))
                         .font(.system(size: Theme.fontSize(8.5)))
@@ -1313,11 +1324,13 @@ struct PanelView: View {
                     }
                     return items
                 }(), tint: Theme.grokBot)
-                Text(L("本地活动 · 授权后显示官方 Token、模型和成本"))
-                    .font(.system(size: Theme.fontSize(8.5)))
-                    .foregroundStyle(Theme.tTertiary)
             } else if !stat.quota.available {
                 emptyHint
+            }
+            if !hasUsage && (hasActivity || quotaUpdated) {
+                Text(grokBotActivityCaption(stat.quota))
+                    .font(.system(size: Theme.fontSize(8.5)))
+                    .foregroundStyle(Theme.tTertiary)
             }
             if stat.quota.available {
                 if hasActivity || hasUsage { thinDivider }
@@ -1333,6 +1346,18 @@ struct PanelView: View {
                 grokBotReauthorizePrompt
             }
         }
+    }
+
+    private func grokBotActivityCaption(_ quota: ProviderQuotaStat) -> String {
+        if !quota.available && !grokBotQuotaEnabled {
+            return L("本地活动 · 授权后显示官方 Token、模型和成本")
+        }
+        if quota.available && !quota.stale && quota.source == "grok-bot-api" {
+            return quota.usage_fetch?.status == "complete"
+                ? L("额度已更新 · 该时段暂无官方用量记录")
+                : L("额度已更新 · 该时段用量明细暂不可用")
+        }
+        return L("本地活动 · 该时段用量明细暂不可用")
     }
 
     /// 授权助手有新版时直接在卡片上提示：换新版要重新授权一次，不能指望用户自己去设置里找。
@@ -2223,6 +2248,7 @@ struct PanelView: View {
         var tokOut: Int = 0
         var tokCR: Int = 0
         var tokCW: Int = 0
+        var tokReason: Int = 0
         var perf: PerfModelStat? = nil
         var webSearches: Int = 0
         var webFetches: Int = 0
@@ -2529,6 +2555,7 @@ struct PanelView: View {
                         .buttonStyle(.plain)
                         if isExpanded {
                             modelDetailRow(tokIn: m.tokIn, tokOut: m.tokOut, tokCR: m.tokCR, tokCW: m.tokCW,
+                                           tokReason: m.tokReason,
                                            pin: m.pin, pout: m.pout, pcr: m.pcr, hit: m.hit, tint: tint,
                                            perf: m.perf)
                         }
@@ -2977,6 +3004,12 @@ struct PanelView: View {
     @AppStorage("sitReminderInterval") private var sitReminderInterval = 90
     @AppStorage(MenuBarStyle.defaultsKey) private var menuBarStyle = MenuBarStyle.system.rawValue
     @AppStorage(MenuBarDensity.defaultsKey) private var menuBarDensity = MenuBarDensity.full.rawValue
+    @AppStorage(MenuBarContent.defaultsKey) private var menuBarContent = MenuBarContent.quota.rawValue
+    @AppStorage(MenuBarTokenPeriod.defaultsKey) private var menuBarTokenPeriod = MenuBarTokenPeriod.today.rawValue
+    @AppStorage("menuBarTokenClaude") private var menuBarTokenClaude = true
+    @AppStorage("menuBarTokenCodex") private var menuBarTokenCodex = true
+    @AppStorage("menuBarTokenAntigravity") private var menuBarTokenAntigravity = false
+    @AppStorage("menuBarTokenGrok") private var menuBarTokenGrok = false
     @AppStorage(PanelFontSize.defaultsKey) private var panelFontSize = PanelFontSize.small.rawValue
     /// 空字符串表示没选过，见 AppLanguage.selected。
     @AppStorage(AppLanguage.defaultsKey) private var appLanguage = ""
@@ -3088,6 +3121,23 @@ struct PanelView: View {
         return L("双额度显示：%@。", shown)
     }
 
+    private func menuBarTokenBinding(_ source: MenuBarTokenSource) -> Binding<Bool> {
+        switch source {
+        case .claude: return $menuBarTokenClaude
+        case .codex: return $menuBarTokenCodex
+        case .antigravity: return $menuBarTokenAntigravity
+        case .grok: return $menuBarTokenGrok
+        }
+    }
+
+    private var menuBarTokenSelectedSources: [MenuBarTokenSource] {
+        MenuBarTokenSource.allCases.filter { menuBarTokenBinding($0).wrappedValue }
+    }
+
+    private var menuBarTokenDigest: String {
+        MenuBarTokenSource.allCases.map { menuBarTokenBinding($0).wrappedValue ? "1" : "0" }.joined()
+    }
+
     var settingsAppearanceSection: some View {
         settingsSection("textformat.size", L("界面")) {
             settingsStackedValue(L("语言")) {
@@ -3123,6 +3173,22 @@ struct PanelView: View {
 
     var settingsMenuBarSection: some View {
         settingsSection("menubar.rectangle", L("菜单栏")) {
+            settingsStackedValue(L("显示内容")) {
+                settingsFittingPicker(L("显示内容"), selection: $menuBarContent) {
+                    ForEach(MenuBarContent.allCases) { content in
+                        Text(content.label).tag(content.rawValue)
+                    }
+                }
+            }
+            if menuBarContent == MenuBarContent.tokens.rawValue {
+                settingsStackedValue(L("用量范围")) {
+                    settingsFittingPicker(L("用量范围"), selection: $menuBarTokenPeriod) {
+                        ForEach(MenuBarTokenPeriod.allCases) { period in
+                            Text(period.label).tag(period.rawValue)
+                        }
+                    }
+                }
+            }
             settingsStackedValue(L("样式")) {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 6),
                                     GridItem(.flexible(), spacing: 6)], spacing: 6) {
@@ -3137,30 +3203,56 @@ struct PanelView: View {
             settingsStackedValue(L("信息")) {
                 settingsFittingPicker(L("菜单栏信息量"), selection: $menuBarDensity) {
                     ForEach(MenuBarDensity.allCases) { density in
-                        Text(density.label).tag(density.rawValue)
+                        Text(density.label(for: MenuBarContent(rawValue: menuBarContent) ?? .quota)).tag(density.rawValue)
                     }
                 }
             }
 
-            settingsStackedValue(L("额度来源")) {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
-                                    GridItem(.flexible(), spacing: 7)], spacing: 7) {
-                    ForEach(MenuBarQuotaSource.allCases) { source in
-                        settingsRow(source.label, tint: source.themeColor,
-                                    isOn: menuBarQuotaBinding(source))
+            if menuBarContent == MenuBarContent.tokens.rawValue {
+                settingsStackedValue(L("用量来源")) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
+                                        GridItem(.flexible(), spacing: 7)], spacing: 7) {
+                        ForEach(MenuBarTokenSource.allCases) { source in
+                            settingsRow(source.label, tint: source.themeColor,
+                                        isOn: menuBarTokenBinding(source))
+                        }
                     }
                 }
+                Text(L("双用量按顺序显示前两项，单用量显示用量最大的工具。鼠标悬停可看工具、范围和精确 Token 数；全部关闭时只留图标。"))
+                    .font(.system(size: Theme.fontSize(9), weight: .medium))
+                    .foregroundStyle(Theme.tSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(L("今日沿用卡片的统计范围。本周期按实际额度重置时间统计：Claude、Codex 为周周期，Grok 为周/月周期。没有匹配的周期记录时显示「—」。"))
+                    .font(.system(size: Theme.fontSize(8.5)))
+                    .foregroundStyle(Theme.tTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if menuBarTokenAntigravity {
+                    Text(L("Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。"))
+                        .font(.system(size: Theme.fontSize(8.5)))
+                        .foregroundStyle(Theme.tTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                settingsStackedValue(L("额度来源")) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
+                                        GridItem(.flexible(), spacing: 7)], spacing: 7) {
+                        ForEach(MenuBarQuotaSource.allCases) { source in
+                            settingsRow(source.label, tint: source.themeColor,
+                                        isOn: menuBarQuotaBinding(source))
+                        }
+                    }
+                }
+
+                Text(menuBarQuotaHint)
+                    .font(.system(size: Theme.fontSize(9), weight: .medium))
+                    .foregroundStyle(Theme.tSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(L("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口，状态栏会跳过它；读数过期时照常显示上次的数字（变淡），窗口已重置、还没读到新数时显示「—」。"))
+                    .font(.system(size: Theme.fontSize(8.5)))
+                    .foregroundStyle(Theme.tTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Text(menuBarQuotaHint)
-                .font(.system(size: Theme.fontSize(9), weight: .medium))
-                .foregroundStyle(Theme.tSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(L("只影响状态栏剩余额度，与「显示卡片」无关。每项都是一个具体窗口：5h 是滚动的 5 小时窗口，周是本周配额。双额度按上面的顺序取前两项，单额度只显示剩得最少的那项。「符号」「圆点」两种样式会用沙漏标 5h、横块标周；其余样式只有数字，鼠标放到状态栏上能看到窗口全名。勾了但你的账号没有这个窗口，状态栏会跳过它；读数过期时照常显示上次的数字（变淡），窗口已重置、还没读到新数时显示「—」。"))
-                .font(.system(size: Theme.fontSize(8.5)))
-                .foregroundStyle(Theme.tTertiary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .onChange(of: menuBarStyle) { _ in
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
@@ -3169,6 +3261,15 @@ struct PanelView: View {
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
         .onChange(of: menuBarQuotaDigest) { _ in
+            (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
+        }
+        .onChange(of: menuBarContent) { _ in
+            (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
+        }
+        .onChange(of: menuBarTokenPeriod) { _ in
+            (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
+        }
+        .onChange(of: menuBarTokenDigest) { _ in
             (NSApp.delegate as? AppDelegate)?.updateStatusTitle()
         }
     }
@@ -4309,7 +4410,10 @@ struct PanelView: View {
                 MenuBarStylePreview(
                     style: style,
                     density: MenuBarDensity(rawValue: menuBarDensity) ?? .full,
-                    sources: Array(menuBarQuotaSelectedSources.prefix(2))
+                    sources: Array(menuBarQuotaSelectedSources.prefix(2)),
+                    content: MenuBarContent(rawValue: menuBarContent) ?? .quota,
+                    tokenPeriod: MenuBarTokenPeriod(rawValue: menuBarTokenPeriod) ?? .today,
+                    tokenSources: Array(menuBarTokenSelectedSources.prefix(2))
                 )
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)

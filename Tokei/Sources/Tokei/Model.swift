@@ -1035,6 +1035,14 @@ struct ProviderQuotaDetail: Codable {
     }
 }
 
+struct GrokBotUsageFetch: Codable {
+    let status: String
+    let reported_events: Int?
+    let received_events: Int?
+    let latest_day: String?
+    let complete_from_day: String?
+}
+
 struct ProviderQuotaStat: Codable {
     var available = false
     var plan: String?
@@ -1042,9 +1050,22 @@ struct ProviderQuotaStat: Codable {
     var windows: [ProviderQuotaWindow] = []
     var details: [ProviderQuotaDetail] = []
     var usage: TokenUsageStat? = nil
+    var usage_fetch: GrokBotUsageFetch?
     var source: String?
     var updated: Int?
     var stale = false
+
+    /// Only current, known quota readings may become history points.
+    func remainingByWindow(at date: Date = Date()) -> [String: Double] {
+        guard available, !stale else { return [:] }
+        let now = Int(date.timeIntervalSince1970)
+        return windows.reduce(into: [:]) { result, window in
+            guard !window.id.isEmpty, window.usage_known,
+                  let used = window.used_pct, used.isFinite, (0...100).contains(used),
+                  window.reset.map({ $0 > now }) ?? true else { return }
+            result[window.id] = 100 - used
+        }
+    }
 
     init() {}
 
@@ -1056,6 +1077,7 @@ struct ProviderQuotaStat: Codable {
         windows = (try? c.decodeIfPresent([ProviderQuotaWindow].self, forKey: .windows)) ?? []
         details = (try? c.decodeIfPresent([ProviderQuotaDetail].self, forKey: .details)) ?? []
         usage = try? c.decodeIfPresent(TokenUsageStat.self, forKey: .usage)
+        usage_fetch = try? c.decodeIfPresent(GrokBotUsageFetch.self, forKey: .usage_fetch)
         source = try? c.decodeIfPresent(String.self, forKey: .source)
         updated = try? c.decodeIfPresent(Int.self, forKey: .updated)
         stale = (try? c.decodeIfPresent(Bool.self, forKey: .stale)) ?? false

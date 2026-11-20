@@ -1,5 +1,5 @@
 // 设置页（Mac 版 PanelView.settingsContent）：顶部标题，下面左右两列分块。
-// 左列：显示卡片、Provider 额度、诊断、价格表；右列：界面、额度来源（Mac 的「菜单栏」）、隐私与额度、系统。
+// 左列：显示卡片、Provider 额度、诊断、价格表；右列：界面、托盘显示、隐私与额度、系统。
 // Mac 独有、Windows 上还没有实现的块（版本与更新、久坐提醒、多设备同步、远程采集）不显示。
 import { useEffect, useState } from "react";
 import { CARDS } from "../cards/registry";
@@ -8,7 +8,7 @@ import { call, inTauri } from "../lib/collector";
 import { L, selectedLanguage, setLanguage, type LangSetting } from "../lib/i18n";
 import { autostartEnabled, openExternal, setAutostart } from "../lib/native";
 import { getPref, setPref, usePrefsVersion } from "../lib/prefs";
-import { pushTrayTooltip, useUsageStore } from "../lib/store";
+import { useUsageStore } from "../lib/store";
 import { Icon } from "../ui/Icon";
 import { FONT_SIZE_KEY, fs, rgba, T, Theme } from "../ui/theme";
 import { CARD_CONFIG_KEYS, minimaxKeyStored, writeCollectorFlag } from "./settings/collectorConfig";
@@ -18,6 +18,7 @@ import { DiagnosticsSection, PricingSection } from "./settings/MaintenanceSectio
 import { ProviderQuotaSection } from "./settings/ProviderQuotaSection";
 import { DoubaoWorkQuotaSection } from "./settings/DoubaoWorkQuotaSection";
 import { TRAY_QUOTA_SOURCES, trayQuotaEnabled } from "../lib/trayQuota";
+import { MENU_BAR_CONTENT_KEY, TOKEN_PERIOD_KEY, tokenPeriod, TRAY_TOKEN_SOURCES, trayContent, trayTokenEnabled } from "../lib/trayTokens";
 import { normalizeTrayClickAction, openQuickPanel, TRAY_CLICK_KEY, type TrayClickAction } from "../lib/surface";
 
 const GITHUB_URL = "https://github.com/cclank/tokei";
@@ -221,14 +222,34 @@ function AppearanceSection() {
 }
 
 /**
- * Mac 的「菜单栏」块。Windows 托盘图标画不了文字，样式、信息量、预览都没有意义，
- * 只保留额度来源开关：它们决定托盘悬停提示里列哪些窗口。
+ * Mac「菜单栏」的对应配置：Windows 通过托盘悬停提示展示额度或 Token，
+ * 共用来源和周期偏好；菜单栏文字样式与信息量仅在 Mac 上提供。
  */
-function TrayQuotaSection() {
-  const { usage } = useUsageStore();
+export function TrayQuotaSection() {
+  const content = trayContent();
   return (
-    <SettingsSection icon="menubar.rectangle" title={L("额度来源")}>
-      <ToggleGrid>
+    <SettingsSection icon="menubar.rectangle" title={L("托盘显示")}>
+      <StackedValue title={L("显示内容")}>
+        <Segmented label={L("显示内容")} value={content} options={[
+          { value: "quota", label: L("额度百分比") },
+          { value: "tokens", label: L("Token 用量") },
+        ]} onChange={value => setPref(MENU_BAR_CONTENT_KEY, value)} />
+      </StackedValue>
+      {content === "tokens" ? <>
+        <StackedValue title={L("用量范围")}>
+          <Segmented label={L("用量范围")} value={tokenPeriod()} options={[
+            { value: "today", label: L("今日") },
+            { value: "cycle", label: L("本周期") },
+          ]} onChange={value => setPref(TOKEN_PERIOD_KEY, value)} />
+        </StackedValue>
+        <StackedValue title={L("用量来源")}>
+          <ToggleGrid>{TRAY_TOKEN_SOURCES.map(source => <TintToggleRow key={source.id}
+            name={source.label} tint={source.tint} on={trayTokenEnabled(source)}
+            onChange={enabled => setPref(source.key, enabled)} />)}</ToggleGrid>
+        </StackedValue>
+        <Note>{L("今日沿用卡片的统计范围。本周期按实际额度重置时间统计：Claude、Codex 为周周期，Grok 为周/月周期。没有匹配的周期记录时显示「—」。")}</Note>
+        {getPref("menuBarTokenAntigravity", false) && <Note>{L("Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。")}</Note>}
+      </> : <ToggleGrid>
         {TRAY_QUOTA_SOURCES.map((source) => (
           <TintToggleRow
             key={source.id}
@@ -237,11 +258,11 @@ function TrayQuotaSection() {
             on={trayQuotaEnabled(source)}
             onChange={(enabled) => {
               setPref(source.key, enabled);
-              if (usage) pushTrayTooltip(usage);
             }}
           />
         ))}
-      </ToggleGrid>
+      </ToggleGrid>}
+      <Note>{L("Windows 通过托盘悬停提示展示所选数据。")}</Note>
     </SettingsSection>
   );
 }

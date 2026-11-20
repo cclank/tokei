@@ -395,6 +395,11 @@
 "本周期额度" = "This period's quota";
 "本命模型" = "Top model";
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Local activity · official tokens, models and cost after authorization";
+"本次官方用量明细可能不全" = "Usage details from the latest check may be incomplete";
+"官方用量暂未更新 · 显示已保存的记录" = "Official usage not refreshed · Showing saved records";
+"额度已更新 · 该时段暂无官方用量记录" = "Quota updated · No official usage records for this period";
+"额度已更新 · 该时段用量明细暂不可用" = "Quota updated · Usage details are temporarily unavailable";
+"本地活动 · 该时段用量明细暂不可用" = "Local activity · Usage details are temporarily unavailable";
 "本地缓存" = "Local cache";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Local log · %@ messages · %@ responses";
 "本地验证版不自动检查，可手动检查" = "Local dev builds don't check automatically; you can check manually";
@@ -576,6 +581,8 @@
 "额度比例未知" = "Quota share unknown";
 "额度窗口" = "Quota window";
 "额度轨迹" = "Quota History";
+"Antigravity 的 Token 和成本来自本机会话，额度为账号级读数。" = "Antigravity tokens and costs come from sessions on this device; quota is account-wide.";
+"Antigravity 额度来自本机定时快照；不同额度窗口分别记录，缺失或过期读数会跳过。历史从开始采集后逐步积累。" = "Antigravity quota is sampled on this device. Each quota window is recorded separately; missing or expired readings are skipped. History builds up as sampling continues.";
 "首字延迟：从发出请求到收到第一个 token 的时间" = "Time to first token: from sending the request to receiving the first token";
 "平均输出速度" = "Avg output speed";
 "平均速度" = "Avg speed";
@@ -646,3 +653,21 @@
 "豆包工作额度查询" = "Doubao Work quota query";
 "首次连接时登录豆包官网，登录状态在 Tokei 中保留。之后每 5 分钟静默刷新额度；登录失效时不会自动弹窗。关闭后停止查询，保留登录状态。" = "Sign in to Doubao on first connection. Tokei keeps the session and refreshes quota quietly every 5 minutes. Expired sessions never open a popup automatically. Turning this off stops queries and keeps the session.";
 "额度连接为试验功能，登录兼容性仍在验证。" = "Quota connection is experimental; login compatibility is still being verified.";
+
+/* Menu bar and tray token usage */
+"额度百分比" = "Quota percentage";
+"Token 用量" = "Token usage";
+"本周期" = "Current cycle";
+"双用量" = "Two tools";
+"单用量" = "One tool";
+"%@ 暂无用量统计" = "%@ usage unavailable";
+"%@ 约 %@ Token" = "%@ ≈ %@ tokens";
+"%@ %@ Token" = "%@ %@ tokens";
+"显示内容" = "Display content";
+"用量范围" = "Usage period";
+"用量来源" = "Usage sources";
+"双用量按顺序显示前两项，单用量显示用量最大的工具。鼠标悬停可看工具、范围和精确 Token 数；全部关闭时只留图标。" = "Two tools shows the first two selected sources; One tool shows the highest usage. Hover for the tool, period and exact token count. Turn all sources off to show only the icon.";
+"今日沿用卡片的统计范围。本周期按实际额度重置时间统计：Claude、Codex 为周周期，Grok 为周/月周期。没有匹配的周期记录时显示「—」。" = "Today follows the cards’ device scope. Current cycle follows actual quota resets: weekly for Claude and Codex, weekly or monthly for Grok. A missing matching cycle is shown as “—”.";
+"Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。" = "Today includes Gemini CLI usage. Current cycle sums local usage across Antigravity’s active weekly quota pools.";
+"托盘显示" = "Tray display";
+"Windows 通过托盘悬停提示展示所选数据。" = "Windows shows the selected data in the tray tooltip.";

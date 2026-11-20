@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=13
+# TOKEI_COLLECTOR_REVISION=18
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -359,6 +359,7 @@ ANTIGRAVITY_DAEMON_DIRS = (
 # 内置兜底:pricing.json 缺失时仍能离线工作。常用直连模型按官方 API 价，
 # 其余模型由 pricing.json 的 OpenRouter 目录补齐。
 _DEFAULT_PRICES = {
+    "anthropic/claude-fable-5.2":   {"in": 8.0,   "out": 40.0, "cache_read": 0.20,   "cache_write": 10.0},
     "anthropic/claude-fable-5.1":   {"in": 10.0,  "out": 50.0, "cache_read": 0.25,   "cache_write": 12.5, "write1h": 20.0},
     "anthropic/claude-sonnet-5":    {"in": 2.0,   "out": 10.0, "cache_read": 0.2,    "cache_write": 2.5},
     # OpenRouter 目录还没收录 Sonnet 5.5；官方价与 Sonnet 5 相同。收录后以目录为准。
@@ -384,6 +385,12 @@ _DEFAULT_PRICES = {
     "deepseek/deepseek-v4-pro":      {"in": 0.66,  "out": 1.98, "cache_read": 0.022,  "cache_write": 0.0},
     "google/gemini-3.5-flash":       {"in": 1.5,   "out": 9.0,  "cache_read": 0.15,   "cache_write": 0.0833},
     "google/gemini-3.1-pro-preview": {"in": 2.0,   "out": 12.0, "cache_read": 0.2,    "cache_write": 0.375},
+    # Gemini 4 Standard API rates checked 2026-11-17; Carbon/Argon promotional
+    # rates run through November 30. The online catalog supplies later updates.
+    # https://aistudio.google.com/docs/pricing
+    "google/gemini-4-carbon":      {"in": 2.0,   "out": 10.0, "cache_read": 0.1,    "cache_write": 0.0},
+    "google/gemini-4-argon":       {"in": 2.0,   "out": 10.0, "cache_read": 0.1,    "cache_write": 0.0},
+    "google/gemini-4-hydrogen":    {"in": 1.5,   "out": 7.5,  "cache_read": 0.075,  "cache_write": 0.0},
     "x-ai/grok-4.6":                 {"in": 2.0,   "out": 6.0,  "cache_read": 0.5,    "cache_write": 0.0},
     "x-ai/grok-4.5":                 {"in": 2.0,   "out": 6.0,  "cache_read": 0.3,    "cache_write": 0.0},
     "tencent/hy3":                   {"in": 0.14,  "out": 0.58, "cache_read": 0.035,  "cache_write": 0.0},
@@ -506,7 +513,18 @@ _BUILTIN_OVERRIDE_MODELS = {
         "in": 4.0, "out": 20.0, "cache_read": 0.4, "cache_write": 5.0,
     },
 }
+_ANTIGRAVITY_MODEL_ALIASES = {
+    # https://antigravity.google/docs/models#orchestrator
+    # The paid Pro planner is Argon; the Ultra planner is Carbon. Both use
+    # Hydrogen for implementation. Preserve the logged role as the display name.
+    "gemini-pro-orchestrator-g1-pro": "google/gemini-4-argon",
+    "gemini-pro-orchestrator-argon": "google/gemini-4-argon",
+    "gemini-pro-orchestrator": "google/gemini-4-carbon",
+    "gemini-flash-worker-agy": "google/gemini-4-hydrogen",
+}
 _BUILTIN_OVERRIDE_ALIASES = {
+    **_ANTIGRAVITY_MODEL_ALIASES,
+    **{f"google/{alias}": model for alias, model in _ANTIGRAVITY_MODEL_ALIASES.items()},
     "gpt-5.6": "openai/gpt-5.6-sol",
     "qwen3.8-max-0902": "qwen/qwen3.8-max",
     "qwen3.8-max-2026-09-02": "qwen/qwen3.8-max",
@@ -546,6 +564,10 @@ _OV_MODELS, _OV_ALIASES = _merge_pricing_overrides(_OVERRIDES)
 _CLAUDE_LONG_PROMPT_TIERS = {
     "anthropic/claude-haiku-5.5": (100_000, 5.0),
 }
+# Anthropic Fast mode doubles Fable 5.2's token rates, including prompt caching.
+_CLAUDE_FAST_PRICE_MULTIPLIERS = {
+    "anthropic/claude-fable-5.2": 2.0,
+}
 
 
 def _effective_pricing_map(catalog=None, overrides=None, official=None):
@@ -564,6 +586,8 @@ def _effective_pricing_map(catalog=None, overrides=None, official=None):
         tier = _CLAUDE_LONG_PROMPT_TIERS.get(model)
         if tier:
             result[model]["long_prompt"] = list(tier)
+        if model in _CLAUDE_FAST_PRICE_MULTIPLIERS:
+            result[model]["fast_multiplier"] = _CLAUDE_FAST_PRICE_MULTIPLIERS[model]
         profile = official.get(model, {}).get("long_context")
         if profile:
             result[model]["long_context"] = profile
@@ -591,6 +615,7 @@ _BUILTIN_REPRICE_MODELS = (
     set(_BUILTIN_OVERRIDE_MODELS)
     | set(_BUILTIN_OVERRIDE_ALIASES)
     | set(_BUILTIN_OVERRIDE_ALIASES.values())
+    | set(_CLAUDE_FAST_PRICE_MULTIPLIERS)
     | {
         "anthropic/claude-fable-5.1", "anthropic/claude-sonnet-5",
         "qwen/qwen3.8-max", "qwen/qwen3.8-27b", "x-ai/grok-4.6",
@@ -740,7 +765,8 @@ def _normalize(model: str):
 
 def _override_alias(model: str):
     value = (model or "").strip()
-    return _OV_ALIASES.get(value) or _OV_ALIASES.get(value.lower())
+    return (_OV_ALIASES.get(value) or _OV_ALIASES.get(value.lower())
+            or _OV_ALIASES.get(_normalize(value)))
 
 
 def _resolve_id(model: str):
@@ -2400,7 +2426,8 @@ _CLAUDE_WEB_SEARCH_USD = 0.01
 
 
 def _claude_event_cost(event):
-    p = price_for(event.get("model"))
+    model = event.get("model")
+    p = price_for(model)
     inp = int(event.get("in", 0) or 0)
     out = int(event.get("out", 0) or 0)
     cr = int(event.get("cr", 0) or 0)
@@ -2414,9 +2441,11 @@ def _claude_event_cost(event):
                       + int(w1 or 0) / 1e6 * p["write1h"])
     cost = (inp / 1e6 * p["in"] + out / 1e6 * p["out"]
             + cr / 1e6 * p["cache_read"] + write_cost)
-    tier = _CLAUDE_LONG_PROMPT_TIERS.get(_resolve_id(event.get("model")))
+    tier = _CLAUDE_LONG_PROMPT_TIERS.get(_resolve_id(model))
     if tier and not event.get("side") and inp + cr + cw > tier[0]:
         cost *= tier[1]
+    if event.get("fast") is True:
+        cost *= _CLAUDE_FAST_PRICE_MULTIPLIERS.get(_model_identity_id(model), 1.0)
     return cost + int(event.get("ws") or 0) * _CLAUDE_WEB_SEARCH_USD
 
 
@@ -2607,7 +2636,8 @@ def _claude_events_with_side(file_cache):
 # 3：记下会话结束时写入的 cost-state 行，补上未写成消息的侧调用用量。
 # 4：缓存分模型成本快照，并把已记录的搜索费计入消息成本。
 # 5：保留消息中明确归属到模型的 WebFetch 次数。
-_CLAUDE_PERF_VERSION = 5
+# 6：读取消息实际使用的 Fast 模式，以便对 Fable 5.2 分开计价。
+_CLAUDE_PERF_VERSION = 6
 # 顶层的 uuid 和 timestamp 紧挨着，正文里的引号都是转义过的，所以这个模式只会命中顶层字段。
 # 用它取用户消息、工具结果这些行的写入时间，不必整行解析大段的工具输出。
 _CLAUDE_LINE_TIME = re.compile(r'"uuid"\s*:\s*"([0-9a-f-]{36})"\s*,\s*"timestamp"\s*:\s*"([^"]+)"')
@@ -2717,6 +2747,8 @@ def _claude_parse_lines(handle, offset, line_number, events, when, via, costs=No
         }
         if u["wf"]:
             event["wf"] = u["wf"]
+        if u.get("fast"):
+            event["fast"] = True
         events.append(event)
         if proj is None and u.get("cwd"):
             proj = u["cwd"]
@@ -2846,6 +2878,12 @@ def scan_claude(bounds, cache):
             cur_file = f
         sig = f"{mtime}:{size}"
         entry = fc.get(f)
+        # v5 里只有含 Fable 5.2 的文件需要重新读取原日志，补出请求的 Fast 状态。
+        if (entry and entry.get("perf_v") == 5
+                and not _cached_entry_has_pricing_change(
+                    {"events": entry.get("events")}, _CLAUDE_FAST_PRICE_MULTIPLIERS)):
+            entry["perf_v"] = 6
+            changed = True
         if (not entry or entry.get("sig") != sig
                 or entry.get("perf_v") != _CLAUDE_PERF_VERSION):
             try:
@@ -3015,6 +3053,8 @@ def _claude_usage(line, want_dt=False):
            "request_id": o.get("requestId") or o.get("request_id"),
            "event_id": o.get("uuid"), "sidechain": o.get("isSidechain") is True,
            "parent": o.get("parentUuid"), "think_ms": o.get("thinkingDurationMs")}
+    if u.get("speed") == "fast":
+        res["fast"] = True
     res["cost"] = _claude_event_cost(res)
     if want_dt:
         res["dt"] = dt
@@ -5837,13 +5877,50 @@ def _load_gemini_usage_file(path):
 # 3：TTFT 改存细分桶直方图，取中位数。
 # 账本按「取大」合并，修正后更小的数要靠版本号才能替换掉旧记录。
 _GEMINI_PARSE_VERSION = 3
+# Pricing migration is independent of token parsing: existing source DBs may
+# contain only part of a retained day and must not replace its historical total.
+_ANTIGRAVITY_ROLE_PRICING_VERSION = 1
+
+
+def _gemini_event_cost(model, inp, out, cached, thoughts):
+    price = gemini_price(model)
+    return (max(inp - cached, 0) * price["in"]
+            + cached * price["cache_read"]
+            + (out + thoughts) * price["out"]) / 1e6
+
+
+def _reprice_antigravity_ledger():
+    """Correct retained role-model costs even when the source DB was removed."""
+    changed_days = []
+    for dk, day in _load_ledger().get("tools", {}).get("gemini", {}).items():
+        if day.get("_role_pricing_version", 0) >= _ANTIGRAVITY_ROLE_PRICING_VERSION:
+            continue
+        delta = 0.0
+        matched = False
+        for model, usage in (day.get("models") or {}).items():
+            normalized = _normalize(model)
+            if not normalized or normalized.removeprefix("google/") not in _ANTIGRAVITY_MODEL_ALIASES:
+                continue
+            cost = _gemini_event_cost(model, usage.get("in", 0), usage.get("out", 0),
+                                      usage.get("cached", 0), usage.get("thoughts", 0))
+            delta += cost - usage.get("cost", 0)
+            usage["cost"] = cost
+            matched = True
+        if matched:
+            day["cost"] = max(day.get("cost", 0) + delta, 0.0)
+            day["_role_pricing_version"] = _ANTIGRAVITY_ROLE_PRICING_VERSION
+            changed_days.append(dk)
+    if changed_days:
+        _ledger_mark_dirty(changed_days)
 
 
 def scan_gemini(bounds, cache):
+    _reprice_antigravity_ledger()
     ledger_touch("gemini")
     fc = cache.setdefault("gemini", {})
     files = _gemini_session_files()
     if not files:
+        _remember_antigravity_quota_usage(fc)
         if fc:
             fc.clear()
             cache["_dirty"] = True
@@ -5871,6 +5948,7 @@ def scan_gemini(bounds, cache):
         fc[path] = parsed
         cache["_dirty"] = True
 
+    _remember_antigravity_quota_usage(fc)
     for path in stale:
         fc.pop(path, None)
         cache["_dirty"] = True
@@ -5896,15 +5974,13 @@ def scan_gemini(bounds, cache):
             out = int(tokens.get("output", 0) or 0)
             cached = int(tokens.get("cached", 0) or 0)
             thoughts = int(tokens.get("thoughts", 0) or 0)
-            price = gemini_price(model)
-            cost = (max(inp - cached, 0) / 1e6 * price["in"]
-                    + cached / 1e6 * price["cache_read"]
-                    + (out + thoughts) / 1e6 * price["out"])
+            cost = _gemini_event_cost(model, inp, out, cached, thoughts)
             day_key = dt.date().isoformat()
             day = days.setdefault(
                 day_key, {"in": 0, "out": 0, "cached": 0, "thoughts": 0,
                           "cost": 0.0, "models": {}, "sessions": set(), "hours": [0] * 24,
-                          "_ledger_version": _GEMINI_PARSE_VERSION})
+                          "_ledger_version": _GEMINI_PARSE_VERSION,
+                          "_role_pricing_version": _ANTIGRAVITY_ROLE_PRICING_VERSION})
             timing = event.get("timing")
             if timing:
                 _perf_add(day.setdefault("perf", {}), model, out, timing[1], timing[0])
@@ -7702,13 +7778,21 @@ def _merge_grok_bot_provider_days(cache, provider_quotas, cache_key):
     if cache_key is None or (_IS_WINDOWS and cache_key != _grok_bot_provider_days_cache_key()):
         provider_quotas["grok_bot"] = {}
         return
-    _merge_dashboard_days(
-        cache, cache_key,
-        ((provider_quotas.get("grok_bot") or {}).get("usage") or {}).get("days", {}))
+    quota = dict(provider_quotas.get("grok_bot") or {})
+    incoming = (quota.get("usage") or {}).get("days", {})
+    saved = cache.get(cache_key)
+    complete_from = (quota.get("usage_fetch") or {}).get("complete_from_day")
+    if isinstance(saved, dict) and isinstance(incoming, dict):
+        # The scan cache can still hold fuller totals after an older collector
+        # replaced an event file. A later complete query for recent days is not
+        # authoritative for older days carried over from the archive.
+        incoming = {day: row for day, row in incoming.items()
+                    if (complete_from and not quota.get("stale") and day >= complete_from)
+                    or not _grok_bot_day_has_more_usage(saved.get(day), row)}
+    _merge_dashboard_days(cache, cache_key, incoming)
     days = cache.get(cache_key)
     if not isinstance(days, dict) or not days:
         return
-    quota = dict(provider_quotas.get("grok_bot") or {})
     if not quota:
         quota = {
             "available": False, "plan": None, "account": None,
@@ -7717,6 +7801,12 @@ def _merge_grok_bot_provider_days(cache, provider_quotas, cache_key):
         }
     quota["usage"] = _provider_usage_from_days(days)
     provider_quotas["grok_bot"] = quota
+
+
+def _grok_bot_day_has_more_usage(saved, incoming):
+    return isinstance(saved, dict) and isinstance(incoming, dict) and any(
+        _provider_usage_int(saved.get(field)) > _provider_usage_int(incoming.get(field))
+        for field in ("tokens", "requests"))
 
 
 def _grok_bot_authorization_generation(path=None):
@@ -7871,8 +7961,8 @@ def _grok_bot_helper_take_result(marker):
 
 
 # 用量事件按天存在额度缓存旁边：今年已有上万条，每次从年初全量拉既慢又会撞上
-# 辅助程序的翻页上限。平时只拉最近两天（--since 那天零点起），这两天整天替换，
-# 更早的日子原样留着；还没有存档时才从年初拉一次。只留今年的，跨年自动清掉。
+# 辅助程序的翻页上限。平时从最近存档的前一天起补拉，只有完整结果才覆盖整天。
+# 还没有存档时从年初拉。只留今年的，跨年自动清掉。
 def _grok_bot_event_dir(identity=None):
     directory = os.path.join(os.path.dirname(PROVIDER_QUOTA_CACHE) or ".", "grok_bot_events")
     if _IS_WINDOWS:
@@ -7912,8 +8002,8 @@ def _grok_bot_events_since():
 def _grok_bot_merge_events(payload, *, expected_identity=None):
     """把这次拉到的事件并进按天的存档，返回换成全年事件的 payload。
 
-    拉取窗口从某天零点开始时，窗口内的日子整天替换（拉到的就是那几天的全部）；
-    旧版辅助程序不认 --since、从年初拉，同样按整段替换处理。"""
+    助手报告的总数可能比可用事件多。遇到缺口时只补记录，保留未返回的日期和事件。
+    保存本次查询的状态和计数，避免把全年存档误当作本次成功返回的明细。"""
     if not isinstance(payload, dict):
         return payload
     if _IS_WINDOWS:
@@ -7926,7 +8016,14 @@ def _grok_bot_merge_events(payload, *, expected_identity=None):
         directory = _grok_bot_event_dir()
     year = date.today().year
     events = payload.get("usageEventsDisplay")
+    if "usageFetched" in payload:
+        fetch = {"status": "unavailable"}
+        payload = dict(payload, usageFetch=fetch)
     if payload.get("usageFetched") is True and isinstance(events, list):
+        reported = _provider_integer(payload.get("totalUsageEventsCount"))
+        fetch.update(status="partial", received_events=len(events))
+        if reported is not None and reported >= 0:
+            fetch["reported_events"] = reported
         try:
             start = datetime.fromtimestamp(int(payload.get("usageStartDate")) / 1000)
         except (TypeError, ValueError, OSError, OverflowError):
@@ -7935,30 +8032,44 @@ def _grok_bot_merge_events(payload, *, expected_identity=None):
             first_full_day = start.date() if start.time() == datetime.min.time() \
                 else start.date() + timedelta(days=1)
             by_day = {}
+            seen = set()
             for event in events:
                 try:
-                    day = datetime.fromtimestamp(int(event.get("timestamp")) / 1000).date()
+                    moment = datetime.fromtimestamp(int(event.get("timestamp")) / 1000)
                 except (AttributeError, TypeError, ValueError, OSError, OverflowError):
                     continue
-                if day.year == year:
-                    by_day.setdefault(day.isoformat(), []).append(event)
+                if moment.year != year or moment < start:
+                    continue
+                key = _grok_bot_event_key(event)
+                if key in seen:
+                    continue
+                seen.add(key)
+                by_day.setdefault(moment.date().isoformat(), []).append(event)
+            complete = reported == len(events) == len(seen)
+            fetch["status"] = "complete" if complete else "partial"
+            first_full_day_key = first_full_day.isoformat()
+            if complete:
+                fetch["complete_from_day"] = first_full_day_key
+            if by_day:
+                fetch["latest_day"] = max(by_day)
             os.makedirs(directory, mode=0o700, exist_ok=True)
             stored = _grok_bot_stored_days(directory)
-            for day, path in stored.items():
-                if day >= first_full_day.isoformat() and day not in by_day:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+            if complete:
+                for day, path in stored.items():
+                    if day >= first_full_day_key and day not in by_day:
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
             for day, day_events in by_day.items():
-                if day < start.date().isoformat():
-                    continue
                 path = os.path.join(directory, f"{day}.json")
-                if day < first_full_day.isoformat():
-                    # 窗口从这天中途开始：只补新的，不删旧的
-                    seen = {json.dumps(event, sort_keys=True) for event in day_events}
+                if not complete or day < first_full_day_key:
                     for event in _load_json(path, []) if day in stored else []:
-                        if json.dumps(event, sort_keys=True) not in seen:
+                        if not isinstance(event, dict):
+                            continue
+                        key = _grok_bot_event_key(event)
+                        if key not in seen:
+                            seen.add(key)
                             day_events.append(event)
                 # 和 _atomic_write_json 写出来的一模一样，内容没变就不重写
                 content = json.dumps(day_events, ensure_ascii=False, separators=(",", ":"))
@@ -7991,6 +8102,11 @@ def _grok_bot_merge_events(payload, *, expected_identity=None):
         return payload
     return dict(payload, usageFetched=True, usageEventsDisplay=stored_events,
                 usageStartDate=str(int(datetime(year, 1, 1).timestamp() * 1000)))
+
+
+def _grok_bot_event_key(event):
+    key = event.get("eventKey")
+    return key if isinstance(key, str) and key else json.dumps(event, sort_keys=True, separators=(",", ":"))
 
 
 def _grok_bot_helper_start(marker):
@@ -8089,7 +8205,7 @@ def _grok_bot_usage_from_bridge(payload):
         if not isinstance(event, dict):
             continue
         try:
-            marker = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            marker = _grok_bot_event_key(event)
         except (TypeError, ValueError):
             continue
         if marker in seen:
@@ -8132,6 +8248,8 @@ def _grok_bot_provider_data(payload, *, updated=None):
                 "stale": False,
             }
         quota["usage"] = usage
+    if quota and is_bridge_payload and isinstance(payload.get("usageFetch"), dict):
+        quota["usage_fetch"] = payload["usageFetch"]
     return quota
 
 
@@ -19836,11 +19954,198 @@ _QUOTA_WEEK_HOURS = 7 * 24
 _QUOTA_SELF_DEVICE = "本机"
 _QUOTA_ANCHOR_FILE = os.path.join(HOME, ".tokei", "quota_cycles.json")
 _QUOTA_HISTORY_FILE = os.path.join(HOME, ".tokei", "quota_history.json")
+_ANTIGRAVITY_QUOTA_USAGE_FILE = os.path.join(HOME, ".tokei", "antigravity_quota_usage.json")
+_ANTIGRAVITY_QUOTA_USAGE_LOCK = threading.Lock()
 # resets_in_seconds 是整秒截断的,同一个锚点读出来会有几秒抖动。
 _QUOTA_ANCHOR_JITTER = 120
 _QUOTA_CYCLE_MIN_USED_PCT = 2
 # 有额度周期的三个工具 → 日表里的短键。
 _QUOTA_TOOLS = (("claude", "c"), ("codex", "x"), ("grok", "g"))
+
+
+def _antigravity_cycle_windows():
+    return [("antigravity-" + key, title, "week")
+            for key, title, minutes in (*_ANTIGRAVITY_QUOTA_WINDOWS,
+                                       ("gemini-argon-weekly", "Gemini 4 Argon 周", 10080))
+            if minutes == 10080]
+
+
+def _quota_antigravity_readings(payload, now):
+    quota = (payload or {}).get("antigravity") or {}
+    if not quota.get("available") or quota.get("stale"):
+        return {}
+    known = {key: 7 * 86400
+             for key, _title, window in _antigravity_cycle_windows()}
+    readings = {}
+    for row in quota.get("windows") or []:
+        if not isinstance(row, dict) or row.get("id") not in known or row.get("usage_known") is False:
+            continue
+        used, reset = row.get("used_pct"), row.get("reset")
+        if (type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used <= 100
+                or type(reset) not in (int, float) or not math.isfinite(reset)
+                or reset <= now or reset > now + known[row["id"]] + _QUOTA_ANCHOR_JITTER):
+            continue
+        readings[row["id"]] = (float(used), int(reset))
+    return readings
+
+
+def _remember_antigravity_quota_usage(file_cache, now=None):
+    """Retain metadata-only DB events separately from the combined Gemini ledger.
+
+    JSON/JSONL Gemini CLI sessions never enter this store. Stable session/event
+    identities deduplicate copied DBs; absent sessions are retained after cleanup.
+    Token components, rather than cached prices, allow later pricing corrections.
+    """
+    now = int(datetime.now().timestamp()) if now is None else now
+    selected = {}
+    for path, entry in (file_cache or {}).items():
+        if (not str(path).endswith(".db") or not isinstance(entry, dict)
+                or entry.get("rank") != 3 or entry.get("v") != _GEMINI_PARSE_VERSION):
+            continue
+        sid = str(entry.get("sid") or os.path.basename(path))
+        rank = (str(entry.get("updated") or ""), int(entry.get("mtime", 0)))
+        if sid not in selected or rank > selected[sid][0]:
+            selected[sid] = (rank, entry)
+    path = _ANTIGRAVITY_QUOTA_USAGE_FILE
+    state = {"version": 1, "events": {}, "sources": {}}
+    if not selected and not os.path.isfile(path):
+        return {}
+    import tempfile
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with _ANTIGRAVITY_QUOTA_USAGE_LOCK:
+            fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                _lock_file(fd)
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        loaded = json.load(handle)
+                    if (isinstance(loaded, dict) and loaded.get("version") == 1
+                            and isinstance(loaded.get("events"), dict)
+                            and isinstance(loaded.get("sources"), dict)):
+                        state = loaded
+                except (OSError, ValueError):
+                    pass
+                changed = False
+                for sid, (rank, entry) in selected.items():
+                    source = hashlib.sha256(sid.encode()).hexdigest()[:32]
+                    signature = str(entry.get("sig") or "")
+                    previous = state["sources"].get(source)
+                    previous_signature = previous.get("sig") if isinstance(previous, dict) else previous
+                    if signature and previous_signature == signature:
+                        continue
+                    previous_rank = (str(previous.get("updated") or ""), int(previous.get("mtime", 0))) \
+                        if isinstance(previous, dict) else None
+                    newer = previous_rank is None or rank >= previous_rank
+                    for event in entry.get("events") or []:
+                        if not isinstance(event, dict):
+                            continue
+                        dt = parse_ts(event.get("timestamp", ""))
+                        raw = event.get("tokens") or {}
+                        if not isinstance(raw, dict):
+                            continue
+                        values = [raw.get(key, 0) for key in ("input", "output", "cached", "thoughts")]
+                        model = event.get("model") or "unknown"
+                        if (dt is None or not event.get("id") or not isinstance(model, str)
+                                or not model.isprintable() or len(model) > 120
+                                or any(type(n) is not int or not 0 <= n <= _ANTIGRAVITY_MAX_TOKENS for n in values)
+                                or values[2] > values[0]):
+                            continue
+                        stamp = int(dt.timestamp())
+                        if not _ANTIGRAVITY_MIN_TS <= stamp <= now + 300:
+                            continue
+                        identity = hashlib.sha256((sid + ":" + str(event["id"])).encode()).hexdigest()[:32]
+                        row = [stamp, model, *values]
+                        if (identity not in state["events"] or newer) and state["events"].get(identity) != row:
+                            state["events"][identity] = row
+                            changed = True
+                    if signature and newer:
+                        state["sources"][source] = {"sig": signature, "updated": rank[0], "mtime": rank[1]}
+                        changed = True
+                if changed:
+                    cutoff = now - (_QUOTA_CYCLE_HISTORY + 1) * 7 * 86400
+                    state["events"] = {key: row for key, row in state["events"].items()
+                                       if isinstance(row, list) and len(row) == 6
+                                       and isinstance(row[0], int) and row[0] >= cutoff}
+                    temp_fd, temporary = tempfile.mkstemp(prefix=".antigravity-usage-", dir=os.path.dirname(path))
+                    try:
+                        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+                            json.dump(state, handle, ensure_ascii=False, separators=(",", ":"))
+                        os.replace(temporary, path)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)
+            finally:
+                try:
+                    _unlock_file(fd)
+                finally:
+                    os.close(fd)
+    except OSError:
+        pass
+    return state["events"]
+
+
+def _quota_antigravity_cycles(payload, cache, anchors, now):
+    windows = _antigravity_cycle_windows()
+    if not any(anchors.get(key) for key, _title, _window in windows):
+        return []
+    rows = _remember_antigravity_quota_usage(cache.get("gemini") or {}, now)
+    separate_argon = bool(anchors.get("antigravity-gemini-argon-weekly"))
+    pools = {"gemini": [], "3p": [], "argon": []}
+    unknown = []
+    for row in rows.values():
+        if not isinstance(row, list) or len(row) != 6:
+            continue
+        stamp, model, inp, out, cached, thoughts = row
+        if (type(stamp) is not int or not isinstance(model, str)
+                or any(type(n) is not int or not 0 <= n <= _ANTIGRAVITY_MAX_TOKENS
+                       for n in (inp, out, cached, thoughts)) or cached > inp):
+            continue
+        if inp + out + thoughts == 0:
+            continue
+        resolved = str(_resolve_id(model) or model).lower()
+        family = model.casefold()
+        if "gemini" in family:
+            pool = "argon" if separate_argon and "argon" in resolved else "gemini"
+        elif any(name in family for name in ("claude", "gpt", "openai", "opus", "sonnet", "haiku", "fable")):
+            pool = "3p"
+        else:
+            unknown.append(stamp)
+            continue
+        pools[pool].append((stamp, inp + out + thoughts,
+                            _gemini_event_cost(model, inp, out, cached, thoughts)))
+    # Prefix sums keep a year's cycle history linear in the number of events.
+    import bisect
+    indexes = {}
+    for pool, events in pools.items():
+        events.sort()
+        stamps, totals, costs = [], [0], [0.0]
+        for stamp, amount, cost in events:
+            stamps.append(stamp); totals.append(totals[-1] + amount); costs.append(costs[-1] + cost)
+        indexes[pool] = stamps, totals, costs
+    unknown.sort()
+    readings = _quota_antigravity_readings(payload, now)
+    cycles = []
+    for key, title, _window in windows:
+        pool = "argon" if "argon" in key else "3p" if "-3p-" in key else "gemini"
+        stamps, totals, costs = indexes[pool]
+        for start, end, peak, current, window in _quota_anchor_cycles(anchors, key, _QUOTA_CYCLE_HISTORY, now):
+            through = min(end, now + 1)
+            if start >= through:
+                continue
+            lo, hi = bisect.bisect_left(stamps, start), bisect.bisect_left(stamps, through)
+            reading = readings.get(key)
+            fresh = current and reading and abs(reading[1] - end) <= _QUOTA_ANCHOR_JITTER
+            used = reading[0] if fresh else None if current else peak
+            complete = bisect.bisect_left(unknown, start) == bisect.bisect_left(unknown, through)
+            cycles.append({
+                "tool": "antigravity", "window": window, "window_id": key, "window_title": title,
+                "start": start, "end": end, "used_pct": used, "tokens": totals[hi] - totals[lo],
+                "cost": round(max(0.0, costs[hi] - costs[lo]), 4),
+                "devices": {_QUOTA_SELF_DEVICE: totals[hi] - totals[lo]}, "approx": not complete,
+                "current": current, "usage_scope": "local", "projection_available": bool(fresh),
+            })
+    return cycles
 
 
 def _quota_local_day_range(day_key):
@@ -20188,6 +20493,10 @@ def _record_local_quota_readings(payload, now=None):
         reading = _quota_tool_reading(payload, tool)
         if reading:
             dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now, window=reading[3])
+    for key, _title, window in _antigravity_cycle_windows():
+        reading = _quota_antigravity_readings(payload, now).get(key)
+        if reading:
+            dirty |= _record_quota_anchor(anchors, key, reading[1], reading[0], now, window=window)
     if dirty:
         _save_quota_anchors(anchors)
 
@@ -20385,6 +20694,11 @@ def _quota_cycle_specs(payload, devices, peer_anchors, now):
             if reading:
                 dirty |= _record_quota_anchor(anchors, tool, reading[1], reading[0], now,
                                               window=reading[3])
+    readings = _quota_antigravity_readings(payload, now)
+    for key, _title, window in _antigravity_cycle_windows():
+        if key in readings:
+            used, reset = readings[key]
+            dirty |= _record_quota_anchor(anchors, key, reset, used, now, window=window)
     boundaries = {tool: [dict(row) for row in rows] for tool, rows in anchors.items()}
     for incoming in peer_anchors:
         _merge_quota_anchors(boundaries, incoming)
@@ -20465,6 +20779,8 @@ def build_quota_detail():
             "approx": approx,
             "current": current,
         })
+
+    cycles.extend(_quota_antigravity_cycles(payload, cache, anchors, now))
 
     merged = {}
     for _name, _tools, _snapshot, daily in devices:

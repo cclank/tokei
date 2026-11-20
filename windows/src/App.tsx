@@ -8,6 +8,7 @@ import { currentLanguage, L } from "./lib/i18n";
 import { pushTrayMenu } from "./lib/native";
 import { getPref, setPref, usePrefsVersion } from "./lib/prefs";
 import { loadQuotaDetail, useQuotaDetail } from "./lib/quotaDetail";
+import { needsTrayCycleData } from "./lib/trayTokens";
 import { pushTrayTooltip, rangeLabel, UsageProvider, useUsageStore } from "./lib/store";
 import { DISPLAY_RANGES, type RangeKey, type Usage } from "./lib/types";
 import { hideQuickPanel, isQuickSurface, openMainWindow } from "./lib/surface";
@@ -352,10 +353,25 @@ function Panel({ ready }: { ready: boolean }) {
   );
 }
 
-/** 完整刷新后才更新托盘和历史；预览数据不当作新的额度观测。 */
+/** 完整刷新后才记录历史；预览数据不当作新的额度观测。 */
 function onUsage(usage: Usage) {
-  pushTrayTooltip(usage);
   void import("./lib/quotaHistory").then(({ recordQuotaHistory }) => recordQuotaHistory(usage)).catch(console.error);
+}
+
+/** 主窗口在后台也维护托盘；周期结果或偏好变化后立刻更新，快捷面板不重复采集。 */
+function TrayStatus() {
+  const { usage, refreshing, previewing } = useUsageStore();
+  const detail = useQuotaDetail();
+  const prefsVersion = usePrefsVersion();
+  useEffect(() => {
+    if (usage && !refreshing && !previewing && needsTrayCycleData()) {
+      loadQuotaDetail();
+    }
+  }, [usage, refreshing, previewing, prefsVersion]);
+  useEffect(() => {
+    if (usage && inTauri) pushTrayTooltip(usage, detail.payload);
+  }, [usage, detail.payload, prefsVersion]);
+  return null;
 }
 
 export default function App({ collectorReady }: { collectorReady: Promise<void> }) {
@@ -374,6 +390,7 @@ export default function App({ collectorReady }: { collectorReady: Promise<void> 
   }, [collectorReady]);
   return (
     <UsageProvider onUsage={isQuickSurface ? undefined : onUsage} shared={isQuickSurface} collectorReady={collectorReady}>
+      {!isQuickSurface && <TrayStatus />}
       <Panel ready={ready} />
     </UsageProvider>
   );

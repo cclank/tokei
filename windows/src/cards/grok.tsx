@@ -417,6 +417,16 @@ function GrokBotCard({ ctx }: { ctx: CardContext }) {
   const hasActivity = r.sessions > 0 || r.calls > 0 || r.turns > 0;
   const hasUsage = totalTokens(usage) > 0 || (usage.requests ?? 0) > 0;
   const quotaEnabled = ctx.pref("grokBotQuotaEnabled", false);
+  const usageStatus = quota.usage_fetch?.status;
+  const quotaUpdated = quota.available && !quota.stale && quota.source === "grok-bot-api";
+  let activityCaption = L("本地活动 · 该时段用量明细暂不可用");
+  if (!quota.available && !quotaEnabled) {
+    activityCaption = L("本地活动 · 授权后显示官方 Token、模型和成本");
+  } else if (quotaUpdated) {
+    activityCaption = usageStatus === "complete"
+      ? L("额度已更新 · 该时段暂无官方用量记录")
+      : L("额度已更新 · 该时段用量明细暂不可用");
+  }
   const displayedLabel = rangeLabel(display.key);
   const fallbackNote =
     display.key !== ctx.range ? <Caption size={9.5} text={L("%@暂无活动，显示%@最近记录", ctx.rangeLabel, displayedLabel)} /> : null;
@@ -433,6 +443,8 @@ function GrokBotCard({ ctx }: { ctx: CardContext }) {
         <>
           {fallbackNote}
           <ProviderTokenUsageContent r={usage} tint={Theme.grokBot} ctx={ctx} periodLabel={displayedLabel} />
+          {usageStatus === "unavailable" && <Caption size={8.5} text={L("官方用量暂未更新 · 显示已保存的记录")} />}
+          {!quota.stale && usageStatus === "partial" && <Caption size={8.5} text={L("本次官方用量明细可能不全")} />}
           {hasActivity && <Caption size={8.5} text={L("本地记录 · %@ 条消息 · %@ 次响应", r.turns, r.calls)} />}
         </>
       ) : hasActivity ? (
@@ -440,11 +452,11 @@ function GrokBotCard({ ctx }: { ctx: CardContext }) {
           {fallbackNote}
           <CostHeadline value={Fmt.human(r.calls > 0 ? r.calls : r.turns)} caption={L("%@ 响应", displayedLabel)} />
           <MetricGrid top={activityMetrics} tint={Theme.grokBot} />
-          <Caption size={8.5} text={L("本地活动 · 授权后显示官方 Token、模型和成本")} />
         </>
       ) : (
         !quota.available && <EmptyHint />
       )}
+      {!hasUsage && (hasActivity || quotaUpdated) && <Caption size={8.5} text={activityCaption} />}
       {quota.available ? (
         <>
           {(hasActivity || hasUsage) && <ThinDivider />}

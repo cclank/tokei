@@ -31,6 +31,43 @@ test("quota decoding preserves monthly windows and optional costs from old cache
   assert.doesNotMatch(section([legacy]), /Grok 月额度|\$12\.50/);
 });
 
+test("Antigravity appears in the leading cycle section with per-pool statistics and projections", () => {
+  const ag = cycle({ tool: "antigravity", window: "week", window_id: "antigravity-gemini-weekly",
+    window_title: "Gemini 周", usage_scope: "local", projection_available: true });
+  const thirdParty = cycle({ tool: "antigravity", window: "week", window_id: "antigravity-3p-weekly",
+    window_title: "Claude/GPT 周", usage_scope: "local", projection_available: true });
+  const p = decode([ag, thirdParty]);
+  assert.equal(p.cycles[0].window_id, ag.window_id);
+  assert.equal(p.cycles[1].window, "week");
+  assert.equal(detail.projectedTotal(p.cycles[0]), 493824);
+  assert.equal(detail.projectedCost(p.cycles[0]), 50);
+  const html = section([ag, thirdParty, cycle({ tool: "codex", window: "week" })]);
+  assert.match(html, /Antigravity · Gemini 周/);
+  assert.match(html, /这个周期已经用了/);
+  assert.match(html, /照这个用法，整个周期约/);
+  assert.match(html, /Claude\/GPT 周/);
+  assert.doesNotMatch(html, /Gemini 5h|Claude\/GPT 5h/);
+  assert.match(html, /本机会话/);
+  assert.ok(html.indexOf("Antigravity ·") < html.indexOf("Codex 周额度"));
+  for (const override of [{ projection_available: false }, { used_pct: 0 }]) {
+    const point = decode([cycle({ ...ag, ...override })]).cycles[0];
+    assert.equal(detail.projectedTotal(point), null);
+    assert.equal(detail.projectedCost(point), null);
+    assert.doesNotMatch(section([cycle({ ...ag, ...override })]), /预测积累中/);
+  }
+  const early = decode([cycle({ ...ag, used_pct: 0.5 })]).cycles[0];
+  assert.equal(detail.projectedTotal(early), 24691200);
+  assert.equal(detail.projectedCost(early), 2500);
+  assert.match(section([cycle({ ...ag, used_pct: 0.5 })]), /照这个用法，整个周期约/);
+  assert.doesNotMatch(section([cycle({ ...ag, used_pct: 0.5 })]), /预测积累中/);
+  for (const used of [0, -1, 101, NaN, Infinity]) {
+    assert.equal(detail.projectedTotal({ ...ag, used_pct: used }), null);
+    assert.equal(detail.projectedCost({ ...ag, used_pct: used }), null);
+  }
+  assert.equal(detail.projectedTotal(cycle({ tool: "codex", used_pct: 2.99 })), null);
+  assert.equal(detail.decodeQuotaDetail(JSON.stringify(payload([{ ...ag, projection_available: "false" }]))), null);
+});
+
 test("monthly cycles use monthly labels and never show the short-week warning", () => {
   const html = section([cycle(), cycle({ start: now - 5 * 86400, end: now - 2 * 86400, current: false })]);
   assert.match(html, /Grok 月额度/);

@@ -4,6 +4,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { readTokeiFile, writeTokeiFile } from "./native";
 import type { Usage } from "./types";
+import type { ProviderQuotaStat } from "../cards/providerQuota";
 
 export interface QuotaModelActivity {
   model: string;
@@ -19,6 +20,7 @@ export interface QuotaHistoryPoint {
   codexWeekRemaining?: number;
   claudeActivity: QuotaModelActivity[];
   codexActivity: QuotaModelActivity[];
+  antigravityRemaining?: Record<string, number>;
 }
 
 export interface QuotaCapture {
@@ -28,6 +30,7 @@ export interface QuotaCapture {
   codexWeekRemaining?: number;
   claudeModelTotals: Map<string, number>;
   codexModelTotals: Map<string, number>;
+  antigravityRemaining?: Record<string, number>;
 }
 
 interface QuotaHistoryState {
@@ -92,6 +95,14 @@ function decodeTotals(value: unknown): Map<string, number> {
   return totals;
 }
 
+function decodeWindows(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).filter(([id, remaining]) =>
+    id.length > 0 && typeof remaining === "number" && Number.isFinite(remaining) && remaining >= 0 && remaining <= 100,
+  ).sort(([a], [b]) => a.localeCompare(b));
+  return entries.length ? Object.fromEntries(entries) as Record<string, number> : undefined;
+}
+
 function decodePoint(value: unknown): QuotaHistoryPoint | null {
   if (!isRecord(value)) return null;
   const timestamp = integer(value.timestamp);
@@ -104,6 +115,7 @@ function decodePoint(value: unknown): QuotaHistoryPoint | null {
     codexWeekRemaining: finite(value.codexWeekRemaining),
     claudeActivity: decodeActivity(value.claudeActivity),
     codexActivity: decodeActivity(value.codexActivity),
+    antigravityRemaining: decodeWindows(value.antigravityRemaining),
   };
 }
 
@@ -158,6 +170,7 @@ function encodeState(state: QuotaHistoryState): string {
       codexWeekRemaining: point.codexWeekRemaining,
       claudeActivity: encodeActivity(point.claudeActivity),
       codexActivity: encodeActivity(point.codexActivity),
+      antigravityRemaining: point.antigravityRemaining,
     })),
     lastClaudeModelTotals: encodeTotals(state.lastClaudeModelTotals),
     lastCodexModelTotals: encodeTotals(state.lastCodexModelTotals),
@@ -277,6 +290,7 @@ function merge(existing: QuotaHistoryPoint, incoming: QuotaHistoryPoint): QuotaH
     codexWeekRemaining: incoming.codexWeekRemaining ?? existing.codexWeekRemaining,
     claudeActivity: mergeActivity(existing.claudeActivity, incoming.claudeActivity),
     codexActivity: mergeActivity(existing.codexActivity, incoming.codexActivity),
+    antigravityRemaining: decodeWindows({ ...existing.antigravityRemaining, ...incoming.antigravityRemaining }),
   };
 }
 
@@ -291,6 +305,7 @@ function samePoint(a: QuotaHistoryPoint, b: QuotaHistoryPoint): boolean {
     a.claudeWeekRemaining === b.claudeWeekRemaining &&
     a.claudeFableWeekRemaining === b.claudeFableWeekRemaining &&
     a.codexWeekRemaining === b.codexWeekRemaining &&
+    JSON.stringify(a.antigravityRemaining) === JSON.stringify(b.antigravityRemaining) &&
     sameActivity(a.claudeActivity, b.claudeActivity) &&
     sameActivity(a.codexActivity, b.codexActivity)
   );
@@ -332,12 +347,14 @@ function record(current: QuotaHistoryState, capture: QuotaCapture, date: Date): 
     codexWeekRemaining: normalized(capture.codexWeekRemaining),
     claudeActivity,
     codexActivity,
+    antigravityRemaining: decodeWindows(capture.antigravityRemaining),
   };
   const hasUsefulData =
     incoming.claudeFiveHourRemaining !== undefined ||
     incoming.claudeWeekRemaining !== undefined ||
     incoming.claudeFableWeekRemaining !== undefined ||
     incoming.codexWeekRemaining !== undefined ||
+    incoming.antigravityRemaining !== undefined ||
     incoming.claudeActivity.length > 0 ||
     incoming.codexActivity.length > 0;
 
@@ -369,9 +386,21 @@ function remaining(used: unknown, stale: unknown): number | undefined {
   return value === undefined ? undefined : 100 - value;
 }
 
-export function quotaCapture(usage: Usage): QuotaCapture {
+export function quotaCapture(usage: Usage, now = Date.now() / 1000): QuotaCapture {
   const claude = usage.claude;
   const codex = usage.codex;
+  const quota = usage.antigravity as ProviderQuotaStat | undefined;
+  const antigravityRemaining: Record<string, number> = {};
+  if (quota?.available && !quota.stale) {
+    for (const window of quota.windows ?? []) {
+      const used = finite(window.used_pct);
+      const reset = finite(window.reset);
+      if (!window.id?.startsWith("antigravity-") || !window.id.endsWith("-weekly") ||
+          window.usage_known === false || used === undefined || used < 0 || used > 100 ||
+          (reset !== undefined && reset <= now)) continue;
+      antigravityRemaining[window.id] = 100 - used;
+    }
+  }
   const claudeModelTotals = new Map<string, number>();
   for (const model of claude?.ranges?.today?.models ?? []) {
     if (model.name === SYNTHETIC_MODEL) continue;
@@ -390,6 +419,7 @@ export function quotaCapture(usage: Usage): QuotaCapture {
     codexWeekRemaining: remaining(codex?.pw, codex?.pw_stale),
     claudeModelTotals,
     codexModelTotals,
+    antigravityRemaining: decodeWindows(antigravityRemaining),
   };
 }
 

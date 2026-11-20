@@ -2,9 +2,15 @@
 // 时间一律用 Unix 秒。
 import type { QuotaHistoryPoint, QuotaModelActivity } from "../../lib/quotaHistory";
 
-export type QuotaHistoryTool = "Claude Code" | "Codex";
+export type QuotaHistoryTool = "Claude Code" | "Codex" | "Antigravity";
 
-export const QUOTA_HISTORY_TOOLS: QuotaHistoryTool[] = ["Claude Code", "Codex"];
+export const QUOTA_HISTORY_TOOLS: QuotaHistoryTool[] = ["Claude Code", "Codex", "Antigravity"];
+
+export const ANTIGRAVITY_WINDOWS = [
+  { id: "antigravity-gemini-weekly", title: "Gemini 周" }, // l10n-ignore
+  { id: "antigravity-3p-weekly", title: "Claude/GPT 周" }, // l10n-ignore
+  { id: "antigravity-gemini-argon-weekly", title: "Gemini 4 Argon 周" }, // l10n-ignore
+];
 
 // 数据里的窗口标识（历史记录按它存），显示时再过 L()。
 export const WINDOW_CLAUDE_5H = "5 小时"; // l10n-ignore
@@ -13,6 +19,7 @@ export const WINDOW_CLAUDE_FABLE = "周 · Fable"; // l10n-ignore
 export const WINDOW_CODEX_WEEK = "周"; // l10n-ignore
 
 export function windowNames(tool: QuotaHistoryTool): string[] {
+  if (tool === "Antigravity") return ANTIGRAVITY_WINDOWS.map(window => window.title);
   return tool === "Claude Code" ? [WINDOW_CLAUDE_5H, WINDOW_CLAUDE_WEEK, WINDOW_CLAUDE_FABLE] : [WINDOW_CODEX_WEEK];
 }
 
@@ -78,6 +85,7 @@ export interface QuotaHistoryProjection {
 const datumID = (timestamp: number, window: string) => `${timestamp}:${window}`;
 
 function toolActivity(point: QuotaHistoryPoint, tool: QuotaHistoryTool): QuotaModelActivity[] {
+  if (tool === "Antigravity") return [];
   return tool === "Claude Code" ? point.claudeActivity : point.codexActivity;
 }
 
@@ -88,6 +96,11 @@ function windowActivity(point: QuotaHistoryPoint, window: string, tool: QuotaHis
 }
 
 function windowValue(window: string, point: QuotaHistoryPoint, tool: QuotaHistoryTool): number | undefined {
+  if (tool === "Antigravity") {
+    const id = ANTIGRAVITY_WINDOWS.find(item => item.title === window)?.id;
+    const value = id ? point.antigravityRemaining?.[id] : undefined;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : undefined;
+  }
   if (tool === "Claude Code") {
     if (window === WINDOW_CLAUDE_5H) return point.claudeFiveHourRemaining;
     if (window === WINDOW_CLAUDE_WEEK) return point.claudeWeekRemaining;
@@ -121,8 +134,9 @@ function activitySignature(activity: QuotaModelActivity[]): string | null {
 }
 
 /** 一次算好图表要的全部数据，复杂度与点数成线性。 */
-export function projectQuotaHistory(points: QuotaHistoryPoint[], tool: QuotaHistoryTool): QuotaHistoryProjection {
-  const windows = windowNames(tool);
+export function projectQuotaHistory(points: QuotaHistoryPoint[], tool: QuotaHistoryTool, selectedWindow?: string): QuotaHistoryProjection {
+  const windows = windowNames(tool).filter(window => selectedWindow === undefined || window === selectedWindow);
+  if (tool === "Antigravity") points = points.filter(point => windows.some(window => windowValue(window, point, tool) !== undefined));
   const seriesByWindow = new Map<string, QuotaChartDatum[]>(windows.map((window) => [window, []]));
   const latestValues = new Map<string, number>();
   const latestByWindow = new Map<string, QuotaChartDatum>();

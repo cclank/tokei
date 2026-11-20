@@ -21,11 +21,12 @@ import {
 } from "./projection";
 
 export function toolTint(tool: QuotaHistoryTool): RGB {
-  return tool === "Claude Code" ? Theme.claude : Theme.codex;
+  return tool === "Antigravity" ? Theme.gemini : tool === "Claude Code" ? Theme.claude : Theme.codex;
 }
 
 /** 每个额度窗口的线色。 */
 export function seriesColor(tool: QuotaHistoryTool, window: string): string {
+  if (tool === "Antigravity" && window.startsWith("Claude/GPT")) return rgba(Theme.claude);
   if (tool === "Claude Code") {
     if (window === WINDOW_CLAUDE_5H) return rgba([1.0, 0.43, 0.28]);
     if (window === WINDOW_CLAUDE_WEEK) return rgba([0.66, 0.55, 1.0]);
@@ -100,9 +101,11 @@ export function QuotaEmptyState({ tool }: { tool: QuotaHistoryTool }) {
 }
 
 /** 每天用掉了周额度的多少个百分点（issue #85）。Codex 看周额度，Claude 看周 · 全部。 */
-export function DailyConsumptionSection({ daily, tool }: { daily: QuotaDailyConsumption[]; tool: QuotaHistoryTool }) {
+export function DailyConsumptionSection({ daily, tool, selectedWindow }: {
+  daily: QuotaDailyConsumption[]; tool: QuotaHistoryTool; selectedWindow?: string;
+}) {
   const names = windowNames(tool);
-  const window = tool === "Codex" ? names[0] : names[1];
+  const window = selectedWindow ?? (tool === "Codex" ? names[0] : names[1]);
   const rows = daily.filter((row) => row.window === window).slice(0, 7);
   if (!rows.length) return null;
   const largest = Math.max(Math.max(...rows.map((row) => row.consumed)), 0.1);

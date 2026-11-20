@@ -208,7 +208,10 @@ final class Store: ObservableObject {
             codexWeekRemaining: usage.codex.pw_stale == true
                 ? nil : usage.codex.pw.map { 100 - $0 },
             claudeModelTotals: claudeModels,
-            codexModelTotals: codexModels
+            codexModelTotals: codexModels,
+            antigravityRemaining: usage.antigravity.remainingByWindow().filter {
+                $0.key.hasPrefix("antigravity-") && $0.key.hasSuffix("-weekly")
+            }
         ))
     }
 
@@ -298,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let popoverAnchor = PopoverAnchor()
     private var anchorWindowObservers: [NSObjectProtocol] = []
     private var anchorSpaceObserver: NSObjectProtocol?
+    private var menuBarCycleObserver: AnyCancellable?
 
     // 菜单栏额度颜色(与面板 Theme.claude/codex/grok 一致)。
     static let claudeColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -328,6 +332,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.updateStatusTitle()
             self?.store.refresh()
         }
+        menuBarCycleObserver = QuotaDetailRepository.shared.$payload
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard MenuBarContent.current == .tokens, MenuBarTokenPeriod.current == .cycle else { return }
+                self?.updateStatusTitle()
+            }
 
         let host = NSHostingController(rootView: PanelView(
             store: store,
@@ -423,54 +434,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         var fallbackIcon = false
 
         if let u = store.usage {
-            let ud = UserDefaults.standard
-            // 菜单栏额度来源与「显示卡片」独立：卡片可开，但状态栏只显示用户勾选的窗口。
-            metrics = MenuBarQuotaSource.metrics(in: u)
-            if metrics.isEmpty {
-                // 用户把额度来源全部关掉时：只保留图标，不再回退显示今日 token 总量。
-                let anyQuotaSourceOn = MenuBarQuotaSource.allCases.contains { $0.isEnabled }
-                if !anyQuotaSourceOn {
-                    fallbackIcon = true
-                } else {
-                    let showC = ud.object(forKey: "showClaude") as? Bool ?? true
-                    let showX = ud.object(forKey: "showCodex") as? Bool ?? true
-                    let showP = ud.object(forKey: "showPi") as? Bool ?? true
-                    let showW = ud.object(forKey: "showWorkBuddy") as? Bool ?? true
-                    let showWAI = ud.object(forKey: "showWorkBuddyAI") as? Bool ?? true
-                    let showCB = ud.object(forKey: "showCodeBuddy") as? Bool ?? true
-                    let showD = ud.object(forKey: "showDeepSeekHarness") as? Bool ?? true
-                    let showO = ud.object(forKey: "showOpenCode") as? Bool ?? true
-                    let showQC = ud.object(forKey: "showQwenCode") as? Bool ?? true
-                    let showQ = ud.object(forKey: "showQoderIde") as? Bool ?? false
-                    let showQW = ud.object(forKey: "showQoderWork") as? Bool ?? true
-                    let showQoderCli = ud.object(forKey: "showQoderCli") as? Bool ?? true
-                    let showQoderCliCN = ud.object(forKey: "showQoderCliCN") as? Bool ?? true
-                    let showZ = ud.object(forKey: "showZcode") as? Bool ?? true
-                    let showM = ud.object(forKey: "showMimoCode") as? Bool ?? true
-                    var total = 0
-                    if showC { let r = u.claude.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
-                    if showX {
-                        let r = u.codex.ranges.get(.today)
-                        let reserve = u.codex.reserveRanges?.get(.today) ?? CodexRange()
-                        total += r.tokens + reserve.tokens
-                    }
-                    if showP { let r = u.pi.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if showW { let r = u.workbuddy.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
-                    if showWAI { let r = u.workbuddyAI.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
-                    if showCB { let r = u.codebuddy.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if showD { let r = u.deepseekHarness.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if showO { let r = u.opencode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if showQC { let r = u.qwencode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.reason) }
-                    if showQ { let r = u.qoder.ranges.get(.today); total += Int(r.in + r.out + r.cached) }
-                    if showQW { let r = u.qoderwork.ranges.get(.today); total += r.totalTokens }
-                    if showQoderCli { let r = u.qodercli.ranges.get(.today); total += r.totalTokens }
-                    if showQoderCliCN { let r = u.qodercliCN.ranges.get(.today); total += r.totalTokens }
-                    if showZ { let r = u.zcode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if showM { let r = u.mimocode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
-                    if total > 0 {
-                        metrics.append(.init(kind: .total, value: Fmt.human(total)))
-                    } else {
+            if MenuBarContent.current == .tokens {
+                if MenuBarTokenPeriod.current == .cycle,
+                   MenuBarTokenSource.allCases.contains(where: { $0.isEnabled }) {
+                    // 与曲线页共用缓存和 30 秒去重；不开面板也更新，不另跑扫描器。
+                    QuotaDetailRepository.shared.load()
+                }
+                metrics = MenuBarTokenSource.metrics(
+                    in: u, period: .current, detail: QuotaDetailRepository.shared.payload,
+                    allDevices: store.syncEnabled && store.showAllDevices
+                )
+                fallbackIcon = metrics.isEmpty
+            } else {
+                let ud = UserDefaults.standard
+                // 菜单栏额度来源与「显示卡片」独立：卡片可开，但状态栏只显示用户勾选的窗口。
+                metrics = MenuBarQuotaSource.metrics(in: u)
+                if metrics.isEmpty {
+                    // 用户把额度来源全部关掉时：只保留图标，不再回退显示今日 token 总量。
+                    let anyQuotaSourceOn = MenuBarQuotaSource.allCases.contains { $0.isEnabled }
+                    if !anyQuotaSourceOn {
                         fallbackIcon = true
+                    } else {
+                        let showC = ud.object(forKey: "showClaude") as? Bool ?? true
+                        let showX = ud.object(forKey: "showCodex") as? Bool ?? true
+                        let showP = ud.object(forKey: "showPi") as? Bool ?? true
+                        let showW = ud.object(forKey: "showWorkBuddy") as? Bool ?? true
+                        let showWAI = ud.object(forKey: "showWorkBuddyAI") as? Bool ?? true
+                        let showCB = ud.object(forKey: "showCodeBuddy") as? Bool ?? true
+                        let showD = ud.object(forKey: "showDeepSeekHarness") as? Bool ?? true
+                        let showO = ud.object(forKey: "showOpenCode") as? Bool ?? true
+                        let showQC = ud.object(forKey: "showQwenCode") as? Bool ?? true
+                        let showQ = ud.object(forKey: "showQoderIde") as? Bool ?? false
+                        let showQW = ud.object(forKey: "showQoderWork") as? Bool ?? true
+                        let showQoderCli = ud.object(forKey: "showQoderCli") as? Bool ?? true
+                        let showQoderCliCN = ud.object(forKey: "showQoderCliCN") as? Bool ?? true
+                        let showZ = ud.object(forKey: "showZcode") as? Bool ?? true
+                        let showM = ud.object(forKey: "showMimoCode") as? Bool ?? true
+                        var total = 0
+                        if showC { let r = u.claude.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
+                        if showX {
+                            let r = u.codex.ranges.get(.today)
+                            let reserve = u.codex.reserveRanges?.get(.today) ?? CodexRange()
+                            total += r.tokens + reserve.tokens
+                        }
+                        if showP { let r = u.pi.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if showW { let r = u.workbuddy.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
+                        if showWAI { let r = u.workbuddyAI.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw) }
+                        if showCB { let r = u.codebuddy.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if showD { let r = u.deepseekHarness.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if showO { let r = u.opencode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if showQC { let r = u.qwencode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.reason) }
+                        if showQ { let r = u.qoder.ranges.get(.today); total += Int(r.in + r.out + r.cached) }
+                        if showQW { let r = u.qoderwork.ranges.get(.today); total += r.totalTokens }
+                        if showQoderCli { let r = u.qodercli.ranges.get(.today); total += r.totalTokens }
+                        if showQoderCliCN { let r = u.qodercliCN.ranges.get(.today); total += r.totalTokens }
+                        if showZ { let r = u.zcode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if showM { let r = u.mimocode.ranges.get(.today); total += Int(r.in + r.out + r.cr + r.cw + r.reason) }
+                        if total > 0 {
+                            metrics.append(.init(kind: .total, value: Fmt.human(total)))
+                        } else {
+                            fallbackIcon = true
+                        }
                     }
                 }
             }
@@ -505,17 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         b.contentTintColor = nil
         fitStatusItemWidth(b)
-        var summaryParts = displayedMetrics.map { metric in
-            let name = metric.kind.displayName
-            if metric.stale && metric.remaining == nil {
-                return L("%@ 已重置，等下一次读数", name)
-            }
-            if metric.remaining != nil {
-                return metric.stale ? L("%@ 上次读到剩余 %@%%", name, metric.value)
-                                    : L("%@ 剩余 %@%%", name, metric.value)
-            }
-            return "\(name) \(metric.value)"
-        }
+        var summaryParts = displayedMetrics.map(\.accessibilitySummary)
         if store.keepAwake.active {
             summaryParts.insert(L("保持唤醒已开启"), at: 0)
         }

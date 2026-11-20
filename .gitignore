@@ -15,3 +15,6 @@ Tokei-feature/
 !windows/src-tauri/icons/*.png
 !windows/app-icon.png
 windows/src-tauri/python/
+
+# Local API credentials
+.env.local

@@ -50,6 +50,13 @@ export interface ProviderQuotaStat {
   windows?: ProviderQuotaWindow[];
   details?: ProviderQuotaDetail[];
   usage?: TokenUsageStat | null;
+  usage_fetch?: {
+    status: "complete" | "partial" | "unavailable";
+    reported_events?: number;
+    received_events?: number;
+    latest_day?: string;
+    complete_from_day?: string;
+  };
   source?: string | null;
   updated?: number | null;
   stale?: boolean;

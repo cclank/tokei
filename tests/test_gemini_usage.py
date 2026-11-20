@@ -5,7 +5,8 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -43,6 +44,107 @@ class GeminiUsageTests(unittest.TestCase):
     def tearDown(self):
         USAGE.GEMINI_DIR = self.old_dir
         USAGE.GEMINI_DIRS = self.old_dirs
+
+    def test_orchestrator_roles_use_official_gemini_4_prices_offline(self):
+        aliases = {
+            "gemini-pro-orchestrator-g1-pro": ("google/gemini-4-argon", (2, 10, 0.1)),
+            "gemini-pro-orchestrator-argon": ("google/gemini-4-argon", (2, 10, 0.1)),
+            "gemini-pro-orchestrator": ("google/gemini-4-carbon", (2, 10, 0.1)),
+            "gemini-flash-worker-agy": ("google/gemini-4-hydrogen", (1.5, 7.5, 0.075)),
+        }
+        with mock.patch.object(USAGE, "_PRICING_DB", {}):
+            for alias, (model, rates) in aliases.items():
+                for prefix in ("", "google/"):
+                    with self.subTest(alias=alias, prefix=prefix):
+                        raw = prefix + alias
+                        self.assertEqual(USAGE._resolve_id(raw), model)
+                        price = USAGE.gemini_price(raw)
+                        self.assertEqual(tuple(price[k] for k in ("in", "out", "cache_read")), rates)
+                        self.assertEqual(USAGE._resolve_id(USAGE.nice_model(raw)), model)
+
+    def test_role_prices_recompute_unchanged_logs_without_changing_tokens(self):
+        models = {
+            "gemini-pro-orchestrator-g1-pro": (5_773_214, 2_538_442, 17_810, 16_348, 7.0649682),
+            "gemini-flash-worker-agy": (11_527_793, 11_185_955, 57_358, 21_453, 1.942786125),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session-roles.json"
+            now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+            messages = []
+            for model, (inp, cached, out, thoughts, _) in models.items():
+                event = gemini_message(model, inp, now, model=model)
+                event["tokens"].update(cached=cached, output=out, thoughts=thoughts)
+                messages.append(event)
+            path.write_text(json.dumps({"sessionId": "roles", "messages": messages}))
+            USAGE.GEMINI_DIR = tmp
+            USAGE.GEMINI_DIRS = [tmp]
+            cache = {"v": USAGE._SCAN_CACHE_VERSION}
+            with mock.patch.object(USAGE, "_OV_ALIASES", {}), \
+                    mock.patch.object(USAGE, "_GEMINI_PARSE_VERSION", 3):
+                old = USAGE.scan_gemini(USAGE.range_bounds(), cache)["ranges"]["all"]
+            with mock.patch.object(USAGE, "_load_gemini_usage_file", side_effect=AssertionError("pricing reparsed token logs")):
+                updated = USAGE.scan_gemini(USAGE.range_bounds(), cache)["ranges"]["all"]
+            self.assertAlmostEqual(old["cost"], 10.28707765)
+            self.assertAlmostEqual(updated["cost"], 9.007754325)
+            for field in ("in", "out", "cached", "thoughts", "sessions"):
+                self.assertEqual(updated[field], old[field])
+            for model, (inp, cached, _, _, cost) in models.items():
+                self.assertAlmostEqual(updated["models"][model]["cost"], cost)
+                self.assertAlmostEqual(updated["models"][model]["cached"] / inp, cached / inp)
+            with mock.patch.object(USAGE, "_load_gemini_usage_file", side_effect=AssertionError("warm files reparsed")):
+                again = USAGE.scan_gemini(USAGE.range_bounds(), cache)["ranges"]["all"]
+            self.assertEqual(again, updated)
+
+    def test_role_repricing_preserves_archived_days_and_other_models(self):
+        old_day = (datetime.now().astimezone().date() - timedelta(days=10)).isoformat()
+        model = "gemini-pro-orchestrator-g1-pro"
+        usage = {"in": 5_773_214, "cached": 2_538_442, "out": 17_810,
+                 "thoughts": 16_348, "cost": 7.3871284}
+        other = {"in": 100, "out": 20, "cached": 50, "thoughts": 10, "cost": 3.0}
+        day = {**usage, "models": {model: usage.copy(), "gemini-3.1-pro-preview": other},
+               "cost": usage["cost"] + other["cost"], "_ledger_version": 3,
+               "hours": [5_807_372] + [0] * 23, "perf": {"n": 32, "o": 16_501, "g": 328.78}}
+        ledger = USAGE._load_ledger()
+        ledger["tools"]["gemini"] = {old_day: day}
+        before = deepcopy(day)
+        with mock.patch.object(USAGE, "_gemini_session_files", return_value=[]):
+            USAGE.scan_gemini(USAGE.range_bounds(), {})
+        self.assertEqual(set(ledger["tools"]["gemini"]), {old_day})
+        self.assertAlmostEqual(day["cost"], 10.0649682)
+        self.assertAlmostEqual(day["models"][model]["cost"], 7.0649682)
+        self.assertEqual(day["models"]["gemini-3.1-pro-preview"], before["models"]["gemini-3.1-pro-preview"])
+        for field in ("in", "out", "cached", "thoughts", "hours", "perf"):
+            self.assertEqual(day[field], before[field])
+        self.assertEqual(day["_ledger_version"], before["_ledger_version"])
+        self.assertEqual(day["_role_pricing_version"], USAGE._ANTIGRAVITY_ROLE_PRICING_VERSION)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(USAGE, "_LEDGER_FILE", str(Path(tmp) / "ledger.json")):
+            USAGE.ledger_flush()
+            saved = json.loads(Path(USAGE._LEDGER_FILE).read_text())
+            self.assertAlmostEqual(saved["tools"]["gemini"][old_day]["cost"], 10.0649682)
+        USAGE._reprice_antigravity_ledger()
+        self.assertFalse(USAGE._LEDGER_CACHE["dirty"])
+
+    def test_role_price_migration_does_not_replace_a_partially_deleted_day(self):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        model = "gemini-pro-orchestrator-g1-pro"
+        usage = {"in": 1000, "out": 30, "cached": 800, "thoughts": 10,
+                 "cost": 0.00104}
+        day = {**usage, "models": {model: usage.copy()}, "_ledger_version": 3}
+        USAGE._load_ledger()["tools"]["gemini"] = {now.date().isoformat(): day}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session-partial.json"
+            message = gemini_message("remaining", 100, now.isoformat(), model=model)
+            path.write_text(json.dumps({"sessionId": "partial", "messages": [message]}))
+            USAGE.GEMINI_DIR = tmp
+            USAGE.GEMINI_DIRS = [tmp]
+            usage = USAGE.scan_gemini(USAGE.range_bounds(), {})["ranges"]["all"]
+        self.assertEqual((usage["in"], usage["cached"], usage["out"], usage["thoughts"]),
+                         (1000, 800, 30, 10))
+        self.assertAlmostEqual(usage["cost"], 0.00088)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(USAGE, "_LEDGER_FILE", str(Path(tmp) / "ledger.json")):
+            USAGE.ledger_flush()
+        USAGE._reprice_antigravity_ledger()
+        self.assertFalse(USAGE._LEDGER_CACHE["dirty"], "migration must settle after one write")
 
     def test_jsonl_updates_nested_subagents_and_migration_dedup(self):
         with tempfile.TemporaryDirectory() as tmp:

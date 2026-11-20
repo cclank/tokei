@@ -49,6 +49,15 @@ enum MenuBarDensity: String, CaseIterable, Identifiable {
         }
     }
 
+    func label(for content: MenuBarContent) -> String {
+        guard content == .tokens else { return label }
+        switch self {
+        case .full: return L("双用量")
+        case .lowest: return L("单用量")
+        case .icon: return label
+        }
+    }
+
     static var current: MenuBarDensity {
         guard let raw = UserDefaults.standard.string(forKey: defaultsKey) else { return .full }
         return MenuBarDensity(rawValue: raw) ?? .full
@@ -203,11 +212,13 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
 enum MenuBarMetricKind: Equatable {
     case quota(MenuBarQuotaSource)
     case total
+    case tokens(MenuBarTokenSource, MenuBarTokenPeriod)
 
     var displayName: String {
         switch self {
         case .quota(let source): return source.label
         case .total: return L("今日")
+        case .tokens(let source, let period): return "\(source.label) \(period.label)"
         }
     }
 
@@ -215,6 +226,7 @@ enum MenuBarMetricKind: Equatable {
         switch self {
         case .quota(let source): return source.window
         case .total: return nil
+        case .tokens: return nil
         }
     }
 
@@ -222,6 +234,7 @@ enum MenuBarMetricKind: Equatable {
         switch self {
         case .quota(let source): return source.nsColor
         case .total: return .labelColor
+        case .tokens(let source, _): return source.nsColor
         }
     }
 
@@ -229,6 +242,7 @@ enum MenuBarMetricKind: Equatable {
         switch self {
         case .quota(let source): return source.themeColor
         case .total: return Theme.tSecondary
+        case .tokens(let source, _): return source.themeColor
         }
     }
 }
@@ -239,6 +253,27 @@ struct MenuBarMetric {
     var remaining: Double? = nil
     /// 过期读数：数字照常写，颜色变淡。窗口已重置时 value 为「—」、remaining 为 nil。
     var stale = false
+    var tokens: Int? = nil
+    var approximate = false
+
+    var isTokenUsage: Bool {
+        if case .tokens = kind { return true }
+        return false
+    }
+
+    var accessibilitySummary: String {
+        let name = kind.displayName
+        if isTokenUsage {
+            guard let tokens else { return L("%@ 暂无用量统计", name) }
+            return approximate ? L("%@ 约 %@ Token", name, Fmt.grouped(tokens))
+                               : L("%@ %@ Token", name, Fmt.grouped(tokens))
+        }
+        if stale && remaining == nil { return L("%@ 已重置，等下一次读数", name) }
+        if remaining != nil {
+            return stale ? L("%@ 上次读到剩余 %@%%", name, value) : L("%@ 剩余 %@%%", name, value)
+        }
+        return "\(name) \(value)"
+    }
 }
 
 enum MenuBarArtwork {
@@ -723,8 +758,9 @@ enum MenuBarTitleRenderer {
                                        : metric.kind.nsColor
         switch style {
         case .symbols:
-            appendArtwork(MenuBarArtwork.gauge(remaining: metric.remaining, color: familyColor,
-                                               window: metric.kind.window), to: title)
+            appendArtwork(metric.isTokenUsage ? tokenGlyph(color: familyColor)
+                          : MenuBarArtwork.gauge(remaining: metric.remaining, color: familyColor,
+                                                 window: metric.kind.window), to: title)
             appendSpace(to: title)
             appendValue(metric, color: .labelColor, to: title)
         case .dots:
@@ -791,6 +827,7 @@ enum MenuBarTitleRenderer {
         case .color:
             return MenuBarArtwork.signature()
         case .symbols:
+            if metric?.isTokenUsage == true { return tokenGlyph(color: tint, size: 16) }
             return MenuBarArtwork.gauge(remaining: metric?.remaining, window: kind.window, size: 16)
         case .dots:
             return nil
@@ -816,6 +853,8 @@ enum MenuBarTitleRenderer {
     }
 
     private static func focusedMetric(in metrics: [MenuBarMetric]) -> MenuBarMetric? {
+        if let highest = metrics.filter({ $0.isTokenUsage && $0.tokens != nil })
+            .max(by: { ($0.tokens ?? 0) < ($1.tokens ?? 0) }) { return highest }
         let quotas = metrics.filter { $0.remaining != nil }
         // 单额度挑剩得最少的：先在新鲜读数里挑，别让一个过期的旧数字把它挤掉
         let fresh = quotas.filter { !$0.stale }
@@ -825,6 +864,17 @@ enum MenuBarTitleRenderer {
             return lowest
         }
         return metrics.first
+    }
+
+    static func tokenGlyph(color: NSColor, size: CGFloat = 11) -> NSImage {
+        let image = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: size, weight: .semibold)) ?? MenuBarArtwork.brand()
+        return NSImage(size: NSSize(width: size + 2, height: size + 2), flipped: false) { rect in
+            image.draw(in: rect)
+            color.setFill()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
     }
 
     private static func appendSpace(to title: NSMutableAttributedString) {
@@ -857,23 +907,32 @@ struct MenuBarStylePreview: View {
     var style: MenuBarStyle
     var density: MenuBarDensity
     var sources: [MenuBarQuotaSource] = [.claude5h, .codexWeek]
+    var content: MenuBarContent = .quota
+    var tokenPeriod: MenuBarTokenPeriod = .today
+    var tokenSources: [MenuBarTokenSource] = [.claude, .codex]
 
     private struct Sample: Identifiable {
-        var source: MenuBarQuotaSource
+        var kind: MenuBarMetricKind
         var value: String
-        var id: String { source.rawValue }
+        var id: String { kind.displayName }
     }
 
     /// 样本值从高到低排，最后一项就是「单额度」会挑中的那个。
     private var samples: [Sample] {
+        if content == .tokens {
+            let values = ["12.4M", "8.6M"]
+            return Array(tokenSources.prefix(2)).enumerated().map {
+                Sample(kind: .tokens($1, tokenPeriod), value: values[$0])
+            }
+        }
         let values = ["98", "85"]
         return Array(sources.prefix(values.count)).enumerated().map {
-            Sample(source: $1, value: values[$0])
+            Sample(kind: .quota($1), value: values[$0])
         }
     }
 
     private var visibleSamples: [Sample] {
-        density == .full ? samples : Array(samples.suffix(1))
+        density == .full ? samples : (content == .tokens ? Array(samples.prefix(1)) : Array(samples.suffix(1)))
     }
 
     var body: some View {
@@ -898,7 +957,7 @@ struct MenuBarStylePreview: View {
                 }
             case .dots:
                 if density == .icon {
-                    Circle().fill(visibleSamples[0].source.themeColor).frame(width: 6, height: 6)
+                    Circle().fill(visibleSamples[0].kind.themeColor).frame(width: 6, height: 6)
                 } else {
                     ForEach(visibleSamples) { dot($0) }
                 }
@@ -960,10 +1019,9 @@ struct MenuBarStylePreview: View {
     @ViewBuilder
     private func gauge(_ sample: Sample, showValue: Bool) -> some View {
         let size: CGFloat = density == .icon ? 16 : 11
-        Image(nsImage: MenuBarArtwork.gauge(remaining: Double(sample.value),
-                                            color: sample.source.nsColor,
-                                            window: sample.source.window,
-                                            size: size))
+        Image(nsImage: content == .tokens ? MenuBarTitleRenderer.tokenGlyph(color: sample.kind.nsColor, size: size)
+              : MenuBarArtwork.gauge(remaining: Double(sample.value), color: sample.kind.nsColor,
+                                     window: sample.kind.window, size: size))
         if showValue {
             Text(sample.value).foregroundStyle(Theme.tSecondary)
         }
@@ -971,10 +1029,10 @@ struct MenuBarStylePreview: View {
 
     private func dot(_ sample: Sample) -> some View {
         HStack(spacing: 4) {
-            if sample.source.window == .fiveHour {
-                Image(nsImage: MenuBarArtwork.windowGlyph(.fiveHour, color: sample.source.nsColor))
+            if sample.kind.window == .fiveHour {
+                Image(nsImage: MenuBarArtwork.windowGlyph(.fiveHour, color: sample.kind.nsColor))
             } else {
-                Circle().fill(sample.source.themeColor).frame(width: 5, height: 5)
+                Circle().fill(sample.kind.themeColor).frame(width: 5, height: 5)
             }
             Text(sample.value).foregroundStyle(Theme.tSecondary)
         }
@@ -987,7 +1045,7 @@ struct MenuBarStylePreview: View {
         } else if style == .artistic || style == .palm {
             Text(sample.value).foregroundStyle(Theme.tSecondary)
         } else {
-            Text(sample.value).foregroundStyle(sample.source.themeColor)
+            Text(sample.value).foregroundStyle(sample.kind.themeColor)
         }
     }
 }

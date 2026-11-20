@@ -17,6 +17,12 @@ final class AppDelegate {
     static let kimicodeColor = NSColor(red: 0.20, green: 0.78, blue: 0.66, alpha: 1)
 }
 
+enum DataLoader {
+    static func runScriptRaw(args: [String], timeout: Double) -> (stdout: String, exitCode: Int32, timedOut: Bool) {
+        fatalError("Menu bar model checks must never invoke the collector")
+    }
+}
+
 @main
 struct MenuBarQuotaSourceCheck {
     static func main() throws {
@@ -33,8 +39,74 @@ struct MenuBarQuotaSourceCheck {
         try checkWindowGlyphsAreDistinct()
         try checkRenderedColor()
         try checkMenuBarAppearanceChanges()
+        try checkTokenUsage()
 
         print("menu bar quota source checks passed")
+    }
+
+    private static func checkTokenUsage() throws {
+        let ud = UserDefaults.standard
+        let keys = [MenuBarContent.defaultsKey, MenuBarTokenPeriod.defaultsKey] + MenuBarTokenSource.allCases.map(\.defaultsKey)
+        defer { keys.forEach { ud.removeObject(forKey: $0) } }
+        keys.forEach { ud.removeObject(forKey: $0) }
+        try expect(MenuBarContent.current == .quota, "existing users retain quota mode")
+        try expect(MenuBarTokenPeriod.current == .today, "token mode starts with today")
+        try expect(MenuBarTokenSource.allCases.filter(\.isEnabled) == [.claude, .codex], "default token sources")
+        ud.set("invalid", forKey: MenuBarContent.defaultsKey)
+        try expect(MenuBarContent.current == .quota, "unknown content preference falls back safely")
+        ud.set("tokens", forKey: MenuBarContent.defaultsKey)
+        ud.set("cycle", forKey: MenuBarTokenPeriod.defaultsKey)
+        try expect(MenuBarContent.current == .tokens && MenuBarTokenPeriod.current == .cycle, "preferences persist independently")
+
+        var usage = try decodeFixture(fixtureJSON)
+        usage.claude.ranges.today.in = 100
+        usage.claude.ranges.today.out = 20
+        usage.claude.ranges.today.cr = 30
+        usage.claude.ranges.today.cw = 40
+        usage.codex.ranges.today = CodexRange(in: 100, cached: 200, out: 50, reason: 40)
+        usage.codex.reserveRanges = usage.codex.ranges
+        usage.codex.reserveRanges?.today = CodexRange(in: 10, cached: 20, out: 30, reason: 25)
+        let claude = MenuBarTokenSource.claude.metric(in: usage, period: .today, detail: nil, allDevices: false)
+        let codex = MenuBarTokenSource.codex.metric(in: usage, period: .today, detail: nil, allDevices: false)
+        try expect(claude.tokens == 190, "Claude input, output, cache read and write counted once")
+        try expect(codex.tokens == 410, "Codex reserve included, reasoning never counted twice")
+        try expect(codex.accessibilitySummary.contains("Codex 今日 410 Token"), "tooltip identifies tool, period and exact count")
+        let single = MenuBarTitleRenderer.metricsForDisplay([claude, codex], density: .lowest)
+        try expect(single.first?.tokens == 410, "single token view picks the largest usage")
+        for style in MenuBarStyle.allCases {
+            let title = MenuBarTitleRenderer.render(style: style, density: .full, keepAwake: false, metrics: [claude, codex]).title.string
+            try expect(title.contains("190") && title.contains("410") && !title.contains("%"), "token rendering for \(style)")
+        }
+
+        usage.claude.q7_reset = 2000
+        let json = #"{"daily":[],"cycles":[{"tool":"claude","start":500,"end":2000,"tokens":1000,"devices":{"本机":300,"peer":700},"approx":false,"current":true}],"devices":["本机","peer"],"missing":[],"now":1000}"#
+        var detail = try JSONDecoder().decode(QuotaDetailPayload.self, from: Data(json.utf8))
+        func current(_ value: QuotaDetailPayload?, all: Bool = false, at: Int = 1000) -> MenuBarMetric {
+            MenuBarTokenSource.claude.metric(in: usage, period: .cycle, detail: value, allDevices: all, at: at)
+        }
+        try expect(current(detail).tokens == 300 && current(detail, all: true).tokens == 1000, "cycle respects local/all-device scope")
+        try expect(current(nil).value == "—" && !current(nil).accessibilitySummary.contains("已重置"), "missing cycles never masquerade as zero or quota reset")
+        try expect(current(detail, at: 2000).tokens == nil, "expired cycle cannot leak into a new period")
+        detail.cycles[0].end = 2120
+        try expect(current(detail).tokens == 300, "120-second reset jitter accepted")
+        detail.cycles[0].end = 2121
+        try expect(current(detail).tokens == nil, "different reset rejected")
+        detail.cycles[0].end = 2000
+        detail.cycles[0].approx = true
+        try expect(current(detail).value == "≈300", "approximate period counts are labeled")
+        detail.cycles[0].devices = ["peer": 1000]
+        try expect(current(detail).tokens == 0, "zero local usage remains zero")
+        detail.cycles[0].devices = [:]
+        try expect(current(detail).tokens == nil, "legacy unknown scope cannot use all-device count")
+
+        usage.antigravity = try JSONDecoder().decode(ProviderQuotaStat.self, from: Data(#"{"windows":[{"id":"antigravity-gemini-weekly","reset":2000},{"id":"antigravity-3p-weekly","reset":2500},{"id":"antigravity-gemini-5h","reset":1100}]}"#.utf8))
+        let ag = #"{"daily":[],"cycles":[{"tool":"antigravity","window_id":"antigravity-gemini-weekly","start":500,"end":2000,"tokens":100,"devices":{"本机":100},"usage_scope":"local","approx":false,"current":true},{"tool":"antigravity","window_id":"antigravity-3p-weekly","start":500,"end":2500,"tokens":200,"devices":{"本机":200},"usage_scope":"local","approx":true,"current":true},{"tool":"antigravity","window_id":"antigravity-gemini-5h","start":500,"end":1100,"tokens":9999,"devices":{"本机":9999},"approx":false,"current":true}],"devices":["本机"],"missing":[],"now":1000}"#
+        var agDetail = try JSONDecoder().decode(QuotaDetailPayload.self, from: Data(ag.utf8))
+        let agMetric = MenuBarTokenSource.antigravity.metric(in: usage, period: .cycle, detail: agDetail, allDevices: true, at: 1000)
+        try expect(agMetric.tokens == 300 && agMetric.approximate, "Antigravity sums weekly pools once, never the 5h window")
+        agDetail.cycles.remove(at: 1)
+        try expect(MenuBarTokenSource.antigravity.metric(in: usage, period: .cycle, detail: agDetail, allDevices: false, at: 1000).tokens == nil,
+                   "missing Antigravity pool cannot silently undercount the tool")
     }
 
     private static func checkSourceIdentity() throws {

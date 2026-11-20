@@ -82,7 +82,8 @@ function GeminiCard({ ctx }: { ctx: CardContext }) {
       tokIn: m.in,
       tokOut: m.out,
       tokCR: m.cached,
-      tokCW: m.thoughts,
+      tokCW: 0,
+      tokReason: m.thoughts,
       perf: modelPerf(r.perf, m.name),
       hasBreakdown: true,
     };

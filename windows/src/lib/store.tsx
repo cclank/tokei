@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { call, collectJSON, inTauri } from "./collector";
 import { L } from "./i18n";
 import { trayQuotaTooltip } from "./trayQuota";
+import type { QuotaDetailPayload } from "./quotaDetail";
 import { usePrefsVersion } from "./prefs";
 import { newerSnapshot, type SharedUsageState, type UsageSnapshot } from "./usageSnapshot";
 import { readTokeiFile, writeTokeiFile } from "./native";
@@ -177,8 +178,8 @@ export function UsageProvider({ children, onUsage, shared = false, collectorRead
   return <UsageContext.Provider value={{ usage, error, refreshing, previewing: source !== "live" && refreshing, lastUpdated, refresh }}>{children}</UsageContext.Provider>;
 }
 
-export function pushTrayTooltip(usage: Usage) {
-  void call("set_tray_tooltip", { text: trayQuotaTooltip(usage) });
+export function pushTrayTooltip(usage: Usage, detail?: QuotaDetailPayload | null) {
+  void call("set_tray_tooltip", { text: trayQuotaTooltip(usage, detail) });
 }
 
 // key 写成 L() 的字面量，文案检查才认得出。

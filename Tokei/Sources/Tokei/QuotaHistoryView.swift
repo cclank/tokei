@@ -2,7 +2,13 @@ import Charts
 import SwiftUI
 
 private extension QuotaHistoryTool {
-    var tint: Color { self == .claude ? Theme.claude : Theme.codex }
+    var tint: Color {
+        switch self {
+        case .claude: return Theme.claude
+        case .codex: return Theme.codex
+        case .antigravity: return Theme.gemini
+        }
+    }
 }
 
 private enum QuotaHistorySpan: Int, CaseIterable, Identifiable {
@@ -58,13 +64,15 @@ struct QuotaHistoryView: View {
     @ObservedObject private var detail = QuotaDetailRepository.shared
     @State private var tool: QuotaHistoryTool = .claude
     @State private var span: QuotaHistorySpan = .day
+    @State private var antigravityWindow: AntigravityHistoryWindow = .geminiWeek
     @State private var cycleTool: String?
+    @State private var antigravityCycleWindow: AntigravityHistoryWindow = .geminiWeek
     @State private var expandedCycleHistory: Set<String> = []
 
     /// 有周期数据的工具,固定顺序 —— 免得刷新一次卡片就换个位置。
     private var cycleTools: [String] {
         let present = Set((detail.payload?.cycles ?? []).map(\.tool))
-        return ["claude", "codex", "grok"].filter(present.contains)
+        return ["antigravity", "claude", "codex", "grok"].filter(present.contains)
     }
 
     private var visibleCycleTools: [String] {
@@ -73,13 +81,38 @@ struct QuotaHistoryView: View {
     }
 
     private func currentCycle(_ tool: String) -> QuotaCycle? {
-        (detail.payload?.cycles ?? []).first { $0.tool == tool && $0.current }
+        (detail.payload?.cycles ?? []).first {
+            $0.tool == tool && $0.current &&
+                (tool != "antigravity" || $0.window_id == selectedAntigravityCycleWindow.rawValue)
+        }
     }
 
     private func completedCycles(_ tool: String) -> [QuotaCycle] {
         (detail.payload?.cycles ?? [])
-            .filter { $0.tool == tool && !$0.current }
+            .filter { $0.tool == tool && !$0.current &&
+                (tool != "antigravity" || $0.window_id == selectedAntigravityCycleWindow.rawValue) }
             .sorted { $0.start > $1.start }
+    }
+
+    private var antigravityCycleWindows: [AntigravityHistoryWindow] {
+        let present = Set((detail.payload?.cycles ?? []).filter { $0.tool == "antigravity" }.compactMap(\.window_id))
+        return AntigravityHistoryWindow.allCases.filter { present.contains($0.rawValue) }
+    }
+
+    private var selectedAntigravityCycleWindow: AntigravityHistoryWindow {
+        antigravityCycleWindows.contains(antigravityCycleWindow)
+            ? antigravityCycleWindow : antigravityCycleWindows.first ?? .geminiWeek
+    }
+
+    private var antigravityCyclePicker: some View {
+        Picker("Antigravity", selection: Binding(
+            get: { selectedAntigravityCycleWindow }, set: { antigravityCycleWindow = $0 }
+        )) {
+            ForEach(antigravityCycleWindows) { window in Text(L(window.title)).tag(window) }
+        }
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .fixedSize()
     }
 
     var body: some View {
@@ -101,6 +134,16 @@ struct QuotaHistoryView: View {
         let frame = makeFrame()
         Card(tint: tool.tint) {
             VStack(alignment: .leading, spacing: 12) {
+                if tool == .antigravity {
+                    Picker("Antigravity", selection: $antigravityWindow) {
+                        ForEach(AntigravityHistoryWindow.allCases) { window in
+                            Text(L(window.title)).tag(window)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
                 summary(frame.projection)
                 if let recovery = frame.latestRecovery {
                     recoveryNotice(recovery, start: frame.start)
@@ -114,7 +157,7 @@ struct QuotaHistoryView: View {
         }
         dailyConsumptionSection(frame.daily)
         changesSection(frame.projection)
-        activitySection(frame.projection)
+        if tool != .antigravity { activitySection(frame.projection) }
     }
 
     private func recoveryNotice(_ event: QuotaChangeEvent, start: Date) -> some View {
@@ -144,7 +187,8 @@ struct QuotaHistoryView: View {
     /// 每天用掉了周额度的多少个百分点（issue #85）。Codex 看周额度，Claude 看周 · 全部。
     @ViewBuilder
     private func dailyConsumptionSection(_ daily: [QuotaDailyConsumption]) -> some View {
-        let window = tool == .codex ? tool.windowNames[0] : tool.windowNames[1]
+        let window = tool == .antigravity ? antigravityWindow.title
+            : tool == .codex ? tool.windowNames[0] : tool.windowNames[1]
         let rows = Array(daily.filter { $0.window == window }.prefix(7))
         if !rows.isEmpty {
             let largest = max(rows.map(\.consumed).max() ?? 0, 0.1)
@@ -191,6 +235,8 @@ struct QuotaHistoryView: View {
     private var footnote: some View {
         Text(span.showsDailyTokens
              ? L("长跨度画的是每日真实 token 消耗，已合并所有设备的账本（CLI 清理旧日志也不缩水）；额度百分比快照只保留 7 天，画不了这么长。")
+             : tool == .antigravity
+             ? L("Antigravity 额度来自本机定时快照；不同额度窗口分别记录，缺失或过期读数会跳过。历史从开始采集后逐步积累。")
              : L("额度曲线来自本机定时快照；每日用量是当天剩余额度下降之和，回满不抵扣，当天有一头没采到的标「约」；模型标记来自同一分钟内本地会话 token 增量，仅表示相关活动，不等同于官方逐模型扣费归因。"))
             .font(.system(size: Theme.fontSize(9.5)))
             .foregroundStyle(Theme.tTertiary)
@@ -242,8 +288,8 @@ struct QuotaHistoryView: View {
                         Text(cycleName(tool)).tag(String?.some(tool))
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(width: CGFloat(54 * (cycleTools.count + 1) + 24))
+                .pickerStyle(.menu)
+                .frame(width: 150)
                 .controlSize(.mini)
             }
         }
@@ -251,7 +297,7 @@ struct QuotaHistoryView: View {
 
     private var cycleSubtitle: String {
         var text = L("从上次额度回满算到下次回满")
-        if let devices = detail.payload?.devices, devices.count > 1 {
+        if let devices = detail.payload?.devices, devices.count > 1, cycleTool != "antigravity" {
             text += L(" · %@ 台设备已合并", devices.count)
         }
         // 首屏是上次落盘的缓存,刷新完会自己变,标出来免得误当成实时值。
@@ -268,6 +314,7 @@ struct QuotaHistoryView: View {
         if let cycle = currentCycle(tool) {
             Card(tint: cycleTint(tool)) {
                 VStack(alignment: .leading, spacing: 12) {
+                    if tool == "antigravity" { antigravityCyclePicker }
                     cycleCard(cycle)
                     if !past.isEmpty {
                         Divider()
@@ -278,7 +325,10 @@ struct QuotaHistoryView: View {
             }
         } else if !past.isEmpty {
             Card(tint: cycleTint(tool)) {
-                completedCyclesSection(tool, past, compactTitle: false)
+                VStack(alignment: .leading, spacing: 12) {
+                    if tool == "antigravity" { antigravityCyclePicker }
+                    completedCyclesSection(tool, past, compactTitle: false)
+                }
             }
         }
     }
@@ -303,7 +353,9 @@ struct QuotaHistoryView: View {
     private func cycleCard(_ cycle: QuotaCycle) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(cycle.isMonthly ? L("%@ 月额度", cycleName(cycle.tool))
+                Text(cycle.tool == "antigravity"
+                     ? "Antigravity · \(L10n.data(cycle.window_title ?? ""))"
+                     : cycle.isMonthly ? L("%@ 月额度", cycleName(cycle.tool))
                      : L("%@ 周额度", cycleName(cycle.tool)))
                     .font(.system(size: Theme.fontSize(12), weight: .bold))
                     .foregroundStyle(cycleTint(cycle.tool))
@@ -369,6 +421,11 @@ struct QuotaHistoryView: View {
                     .foregroundStyle(Theme.tTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+            }
+            if cycle.usage_scope == "local" {
+                Text(L("Antigravity 的 Token 和成本来自本机会话，额度为账号级读数。"))
+                    .font(.system(size: Theme.fontSize(9)))
+                    .foregroundStyle(Theme.tTertiary)
             }
         }
     }
@@ -486,6 +543,7 @@ struct QuotaHistoryView: View {
 
     private func cycleName(_ tool: String) -> String {
         switch tool {
+        case "antigravity": return "Antigravity"
         case "claude": return "Claude Code"
         case "grok": return "Grok"
         default: return "Codex"
@@ -494,6 +552,7 @@ struct QuotaHistoryView: View {
 
     private func cycleTint(_ tool: String) -> Color {
         switch tool {
+        case "antigravity": return Theme.gemini
         case "claude": return Theme.claude
         case "grok": return Theme.grok
         default: return Theme.codex
@@ -593,17 +652,17 @@ struct QuotaHistoryView: View {
                         Text(tool.rawValue).tag(tool)
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 164)
+                .pickerStyle(.menu)
+                .frame(width: 136)
                 .controlSize(.mini)
             }
             Picker("", selection: $span) {
-                ForEach(QuotaHistorySpan.allCases) { span in
+                ForEach(QuotaHistorySpan.allCases.filter { tool != .antigravity || !$0.showsDailyTokens }) { span in
                     Text(span.label).tag(span)
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 216)
+            .frame(width: tool == .antigravity ? 148 : 216)
             .controlSize(.mini)
         }
     }
@@ -767,9 +826,13 @@ struct QuotaHistoryView: View {
             start: start,
             projection: QuotaHistoryProjection(
                 points: history.points(since: start),
-                tool: tool
+                tool: tool,
+                selectedWindow: tool == .antigravity ? antigravityWindow.title : nil
             ),
-            latestRecovery: QuotaHistoryProjection.latestRecovery(from: history.points, tool: tool),
+            latestRecovery: QuotaHistoryProjection.latestRecovery(
+                from: history.points, tool: tool,
+                selectedWindow: tool == .antigravity ? antigravityWindow.title : nil
+            ),
             daily: QuotaHistoryProjection.dailyConsumption(from: history.points, tool: tool)
         )
     }
@@ -784,6 +847,8 @@ struct QuotaHistoryView: View {
             return Color(red: 1.00, green: 0.72, blue: 0.16)
         case (.codex, "周"): // l10n-ignore
             return Theme.codex
+        case (.antigravity, "Claude/GPT 周"): // l10n-ignore
+            return Theme.claude
         default:
             return tool.tint
         }

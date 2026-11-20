@@ -326,6 +326,11 @@
 "本周期额度" = "Quota de la période";
 "本命模型" = "Modèle favori";
 "本地活动 · 授权后显示官方 Token、模型和成本" = "Activité locale · tokens, modèles et coûts officiels après autorisation";
+"本次官方用量明细可能不全" = "Les derniers détails d’utilisation peuvent être incomplets";
+"官方用量暂未更新 · 显示已保存的记录" = "Données officielles non actualisées · Affichage des données enregistrées";
+"额度已更新 · 该时段暂无官方用量记录" = "Quota actualisé · Aucune donnée d’utilisation officielle pour cette période";
+"额度已更新 · 该时段用量明细暂不可用" = "Quota actualisé · Détails d’utilisation temporairement indisponibles";
+"本地活动 · 该时段用量明细暂不可用" = "Activité locale · Détails d’utilisation temporairement indisponibles";
 "本地缓存" = "Cache local";
 "本地记录 · %@ 条消息 · %@ 次响应" = "Journal local · %@ messages · %@ réponses";
 "本地验证版不自动检查，可手动检查" = "Les versions de dév local ne vérifient pas automatiquement ; vérification manuelle possible";
@@ -489,6 +494,8 @@
 "额度比例未知" = "Part de quota inconnue";
 "额度窗口" = "Fenêtre de quota";
 "额度轨迹" = "Historique des quotas";
+"Antigravity 的 Token 和成本来自本机会话，额度为账号级读数。" = "Les tokens et coûts Antigravity proviennent des sessions de cet appareil ; le quota concerne tout le compte.";
+"Antigravity 额度来自本机定时快照；不同额度窗口分别记录，缺失或过期读数会跳过。历史从开始采集后逐步积累。" = "Le quota Antigravity est relevé sur cet appareil. Chaque fenêtre est enregistrée séparément ; les relevés absents ou périmés sont ignorés. L’historique se constitue au fil des relevés.";
 "首字延迟：从发出请求到收到第一个 token 的时间" = "Délai du premier token : de l'envoi de la requête à la réception du premier token";
 "平均输出速度" = "Vitesse de sortie moy.";
 "平均速度" = "Vitesse moy.";
@@ -559,3 +566,21 @@
 "豆包工作额度查询" = "Consultation du quota Doubao Work";
 "首次连接时登录豆包官网，登录状态在 Tokei 中保留。之后每 5 分钟静默刷新额度；登录失效时不会自动弹窗。关闭后停止查询，保留登录状态。" = "Connectez-vous à Doubao à la première connexion. Tokei conserve la session et actualise discrètement le quota toutes les 5 minutes. Une session expirée ne déclenche aucune fenêtre. Désactiver arrête les requêtes et conserve la session.";
 "额度连接为试验功能，登录兼容性仍在验证。" = "La connexion au quota est expérimentale ; la compatibilité de connexion reste à vérifier.";
+
+/* Menu bar and tray token usage */
+"额度百分比" = "Pourcentage de quota";
+"Token 用量" = "Consommation de tokens";
+"本周期" = "Cycle en cours";
+"双用量" = "Deux outils";
+"单用量" = "Un outil";
+"%@ 暂无用量统计" = "Statistiques indisponibles pour %@";
+"%@ 约 %@ Token" = "%@ ≈ %@ tokens";
+"%@ %@ Token" = "%@ %@ tokens";
+"显示内容" = "Contenu affiché";
+"用量范围" = "Période d’utilisation";
+"用量来源" = "Sources d’utilisation";
+"双用量按顺序显示前两项，单用量显示用量最大的工具。鼠标悬停可看工具、范围和精确 Token 数；全部关闭时只留图标。" = "Deux outils affiche les deux premières sources sélectionnées ; Un outil affiche la consommation la plus élevée. Survolez pour voir l’outil, la période et le nombre exact de tokens. Désactivez toutes les sources pour ne garder que l’icône.";
+"今日沿用卡片的统计范围。本周期按实际额度重置时间统计：Claude、Codex 为周周期，Grok 为周/月周期。没有匹配的周期记录时显示「—」。" = "Aujourd’hui suit le périmètre des appareils des cartes. Le cycle en cours suit la réinitialisation réelle : hebdomadaire pour Claude et Codex, hebdomadaire ou mensuelle pour Grok. Sans cycle correspondant, « — » est affiché.";
+"Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。" = "La journée inclut Gemini CLI. Le cycle en cours additionne l’utilisation locale des pools de quota hebdomadaires actifs d’Antigravity.";
+"托盘显示" = "Affichage de la zone de notification";
+"Windows 通过托盘悬停提示展示所选数据。" = "Windows affiche les données sélectionnées dans l’infobulle de la zone de notification.";

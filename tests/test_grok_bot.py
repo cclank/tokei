@@ -440,6 +440,7 @@ class GrokBotIncrementalEventsTests(unittest.TestCase):
     def payload(self, start_day, events):
         return {"quotaFetched": True, "usageFetched": True,
                 "usageStartDate": str(self.ms(start_day, 0)), "usageEventsDisplay": events,
+                "totalUsageEventsCount": len(events),
                 "sandUsage": {"hasNonZeroIncludedLimit": True, "usagePercent": 10}}
 
     def merge(self, payload):
@@ -465,9 +466,86 @@ class GrokBotIncrementalEventsTests(unittest.TestCase):
 
     def test_quota_only_payload_still_shows_stored_usage(self):
         self.merge(self.payload(self.today, [self.event(self.today, 70)]))
-        merged = self.merge({"quotaFetched": True, "usageFetched": False})
+        merged = self.merge({"quotaFetched": True, "usageFetched": False,
+                             "sandUsage": {"hasNonZeroIncludedLimit": True, "usagePercent": 15}})
         self.assertEqual(merged["usageEventsDisplay"][0]["tokenUsage"]["inputTokens"], 70,
                          "这次没拉到用量时用存档")
+        quota = USAGE._grok_bot_provider_data(merged)
+        self.assertTrue(quota["available"])
+        self.assertEqual(quota["usage_fetch"], {"status": "unavailable"})
+
+    def test_partial_success_preserves_days_and_adds_new_rows_without_double_counting(self):
+        previous = self.today - timedelta(days=1)
+        if previous.year != self.today.year:
+            self.skipTest("Two days in the current year are required")
+        common = self.event(self.today, 100, 8)
+        self.merge(self.payload(previous, [self.event(previous, 90), common, self.event(self.today, 50, 9)]))
+        old_file = Path(USAGE._grok_bot_stored_days()[previous.isoformat()])
+        old_content = old_file.read_bytes()
+        unknown_model = self.event(self.today, 30, 10)
+        del unknown_model["model"]
+        partial = self.payload(previous, [common, unknown_model])
+        partial["totalUsageEventsCount"] = 4
+
+        self.merge(partial)
+        quota = USAGE._grok_bot_provider_data(self.merge(partial))
+
+        self.assertTrue(quota["available"])
+        self.assertFalse(quota["stale"])
+        self.assertEqual(old_file.read_bytes(), old_content)
+        self.assertEqual(quota["usage"]["ranges"]["yesterday"]["tokens"], 90)
+        today = quota["usage"]["ranges"]["today"]
+        self.assertEqual((today["tokens"], today["requests"]), (180, 3))
+        self.assertTrue(any(m["name"] == "未知" and m["tokens"] == 30 for m in today["models"]))
+        self.assertEqual(quota["usage_fetch"], {
+            "status": "partial", "reported_events": 4, "received_events": 2,
+            "latest_day": self.today.isoformat(),
+        })
+
+        # A later complete response can apply a correction to an earlier event.
+        complete = self.payload(self.today, [common, self.event(self.today, 60, 9), unknown_model])
+        quota = USAGE._grok_bot_provider_data(self.merge(complete))
+        self.assertEqual(quota["usage"]["ranges"]["today"]["tokens"], 190)
+        self.assertEqual(quota["usage_fetch"]["status"], "complete")
+
+    def test_partial_reply_cannot_overwrite_full_totals_saved_by_an_older_scan(self):
+        cache_key = USAGE._grok_bot_provider_days_cache_key()
+        previous = self.today - timedelta(days=1)
+        if previous.year != self.today.year:
+            self.skipTest("Two days in the current year are required")
+        full = self.payload(previous, [self.event(previous, 100), self.event(previous, 50, 13)])
+        cached_quota = USAGE._grok_bot_provider_data(full)
+        cache = {cache_key: cached_quota["usage"]["days"]}
+        self.assertFalse(USAGE._grok_bot_stored_days(), "the event archive is already missing")
+        partial = self.payload(previous, [full["usageEventsDisplay"][0]])
+        partial["totalUsageEventsCount"] = 2
+        quotas = {"grok_bot": USAGE._grok_bot_provider_data(self.merge(partial))}
+
+        USAGE._merge_grok_bot_provider_days(cache, quotas, cache_key)
+
+        day = quotas["grok_bot"]["usage"]["ranges"]["yesterday"]
+        self.assertEqual((day["tokens"], day["requests"]), (150, 2))
+        self.assertEqual(quotas["grok_bot"]["usage_fetch"]["status"], "partial")
+
+        # Yesterday's archive still contains only one event. A complete reply
+        # for today must not lower yesterday's previously saved totals.
+        complete = self.payload(self.today, [self.event(self.today, 20)])
+        quotas["grok_bot"] = USAGE._grok_bot_provider_data(self.merge(complete))
+        USAGE._merge_grok_bot_provider_days(cache, quotas, cache_key)
+        ranges = quotas["grok_bot"]["usage"]["ranges"]
+        self.assertEqual(ranges["today"]["tokens"], 20)
+        self.assertEqual(ranges["yesterday"]["tokens"], 150)
+
+    def test_fresh_quota_distinguishes_complete_empty_from_missing_detail(self):
+        for reported, expected in ((0, "complete"), (287, "partial")):
+            with self.subTest(reported=reported):
+                reply = dict(self.payload(self.today, []), totalUsageEventsCount=reported)
+                quota = USAGE._grok_bot_provider_data(self.merge(reply))
+                self.assertTrue(quota["available"])
+                self.assertNotIn("usage", quota)
+                self.assertEqual(quota["usage_fetch"]["status"], expected)
+                self.assertEqual(quota["usage_fetch"]["received_events"], 0)
+                self.assertEqual(quota["usage_fetch"]["reported_events"], reported)
 
     def test_last_years_files_are_removed(self):
         directory = Path(USAGE._grok_bot_event_dir())

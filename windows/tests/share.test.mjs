@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
 import { testRuntime } from "./runtime.mjs";
 
 const runtime = await testRuntime();
@@ -60,6 +61,24 @@ test("fallback response/message share uses the displayed period and actual drawi
   assert.ok(cells.some(cell => String(cell.value).includes("38")));
   assert.equal(share.shareLineHeadline({ ...line, tokens: 200 }, "上周").caption, "上周 总量");
   assert.equal(share.shareLineHeadline({ id: "empty", name: "Empty" }, "今日"), null);
+});
+
+test("Grok Bot shows missing usage separately from authorization and quota", () => {
+  const activity = { today: { sessions: 1, calls: 2, turns: 2 } };
+  const render = (quota, ranges = activity) => renderToStaticMarkup(grokBotCard.render(ctx({ grok_bot: { ranges, quota } })));
+  const quota = { available: true, source: "grok-bot-api", windows: [{ title: "本周期额度", used_pct: 10 }] };
+  const partial = render({ ...quota, usage_fetch: { status: "partial", reported_events: 287, received_events: 226 } });
+  assert.match(partial, /额度已更新 · 该时段用量明细暂不可用/);
+  assert.match(partial, /90%/);
+  assert.doesNotMatch(partial, /授权后显示/);
+  assert.match(render({ ...quota, usage_fetch: { status: "complete" } }), /该时段暂无官方用量记录/);
+  assert.match(render(quota, {}), /额度已更新 · 该时段用量明细暂不可用/);
+  assert.match(render({ ...quota, stale: true }), /本地活动 · 该时段用量明细暂不可用/);
+  assert.match(render({ ...quota, usage_fetch: { status: "partial" }, usage: { ranges: { today: r } } }),
+    /本次官方用量明细可能不全/);
+  assert.match(render({ ...quota, usage_fetch: { status: "unavailable" }, usage: { ranges: { today: r } } }),
+    /官方用量暂未更新 · 显示已保存的记录/);
+  assert.match(render({}), /授权后显示官方 Token/);
 });
 
 test("quota-only providers stay compact; token or request usage stays standard/copyable", () => {

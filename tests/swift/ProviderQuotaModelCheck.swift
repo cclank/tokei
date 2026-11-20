@@ -105,6 +105,26 @@ struct ProviderQuotaModelCheck {
         try expect(geminiRanges.get(.yesterday).totalTokens == 160,
                    "Gemini selected-range total")
 
+        let historyQuota = try JSONDecoder().decode(ProviderQuotaStat.self, from: Data("""
+        {"available":true,"stale":false,"windows":[
+          {"id":"full","used_pct":0,"reset":2001},
+          {"id":"empty","used_pct":100},
+          {"id":"expired","used_pct":30,"reset":2000},
+          {"id":"unknown","used_pct":0,"usage_known":false},
+          {"id":"missing"},{"id":"invalid","used_pct":-1},
+          {"id":"invalid-high","used_pct":101},{"id":"","used_pct":20}
+        ]}
+        """.utf8))
+        let at = Date(timeIntervalSince1970: 2000)
+        try expect(historyQuota.remainingByWindow(at: at) == ["full": 100, "empty": 0],
+                   "only known, current quota readings may be recorded; retain real 0/100")
+        var staleHistory = historyQuota
+        staleHistory.stale = true
+        try expect(staleHistory.remainingByWindow(at: at).isEmpty, "stale quotas cannot become fresh samples")
+        staleHistory.stale = false
+        staleHistory.available = false
+        try expect(staleHistory.remainingByWindow(at: at).isEmpty, "unavailable quotas are skipped")
+
         print("provider quota model checks passed")
     }
 }

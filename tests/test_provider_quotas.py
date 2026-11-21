@@ -962,11 +962,11 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(process["ls_port"], 51213)
         self.assertEqual(saved["321"], {"token": "fresh-token", "port": 51213})
 
-    def test_antigravity_daemon_file_supplies_token_and_ports(self):
+    def test_antigravity_hub_daemon_file_supplies_token_and_ports(self):
         with tempfile.TemporaryDirectory() as tmp:
             daemon = Path(tmp, "daemon")
             daemon.mkdir()
-            Path(daemon, "ls_fixture.json").write_text(json.dumps({
+            Path(daemon, "hub_63042.json").write_text(json.dumps({
                 "pid": 4321, "httpsPort": 63041, "httpPort": 63042,
                 "csrfToken": "daemon-token",
             }), encoding="utf-8")
@@ -975,6 +975,7 @@ class ProviderQuotaTests(unittest.TestCase):
                     mock.patch.object(USAGE, "_antigravity_listening_ports",
                                       return_value=[63041, 63042]):
                 entries = USAGE._antigravity_daemon_credentials()
+                self.assertEqual(len(entries), 1)
                 processes = USAGE._antigravity_merge_daemon_processes([], entries)
                 endpoints = USAGE._antigravity_endpoints(processes[0])
 

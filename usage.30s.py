@@ -343,7 +343,7 @@ QWENWORK_QUOTA_CACHE = _writable_path("qwenwork_quota_cache.json")
 PROVIDER_QUOTA_CACHE = _writable_path("provider_quota_cache.json")
 ANTIGRAVITY_SCAN_CACHE = _writable_path("antigravity_scan_cache.json")
 ANTIGRAVITY_CREDENTIALS_CACHE = _writable_path("antigravity_credentials.json")
-# IDE 会把语言服务器的 pid / 端口 / CSRF 写进 daemon/ls_*.json；CLI 目前不写。
+# IDE 会把语言服务器的 pid / 端口 / CSRF 写进 daemon/ 下的 ls_*.json 或 hub_*.json；CLI 目前不写。
 # 命令行走不通时靠这些文件兜底，读到之后仍要校验 pid 活着、端口真的在听。
 ANTIGRAVITY_DAEMON_DIRS = (
     os.path.join(HOME, ".gemini", "antigravity", "daemon"),
@@ -9348,7 +9348,8 @@ def _antigravity_daemon_credentials():
     """IDE 的 daemon 发现文件里有 pid/端口/CSRF;命令行拿不到 token 时用它兜底。"""
     found = []
     for directory in ANTIGRAVITY_DAEMON_DIRS:
-        for path in glob.glob(os.path.join(directory, "ls_*.json")):
+        for path in (glob.glob(os.path.join(directory, "ls_*.json"))
+                     + glob.glob(os.path.join(directory, "hub_*.json"))):
             data = _load_json(path, {})
             if not isinstance(data, dict):
                 continue

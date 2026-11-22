@@ -236,8 +236,26 @@ def windows_keys():
     return keys
 
 
+def sync_script_keys():
+    """Messages the sync transaction script prints; the app shows them as the sync detail.
+
+    They sit in a multi-line string, which `swift_keys` skips, so collect them here:
+    `fail <code> "…"` and `printf '…\\n'`, with shell variables and %s turned into %@.
+    """
+    src = (SRC / "SyncManager.swift").read_text(encoding="utf-8")
+    start = src.index("static func transactionScript")
+    opening = src.index('"""', start)
+    body = src[opening:src.index('"""', opening + 3)]
+    keys = set()
+    for m in re.finditer(r"""fail \d+ "([^"]*)"|printf '([^']*)'""", body):
+        message = re.sub(r"\\\\n$", "", m.group(1) or m.group(2) or "")
+        if CJK.search(message):
+            keys.add(re.sub(r"\$\{?\w+\}?|%s", "%@", message))
+    return keys
+
+
 def all_keys():
-    keys = set(swift_keys()) | set(collector_keys()) | DYNAMIC_KEYS
+    keys = set(swift_keys()) | set(collector_keys()) | sync_script_keys() | DYNAMIC_KEYS
     return keys
 
 
@@ -254,6 +272,13 @@ plain = "普通标签"
         self.assertEqual(set(collector_keys(source)), {
             "单日 %@ 亿 token", "周末占 %@%%", "保留 {符号} %@ 个", "普通标签",
         })
+
+    def test_sync_script_messages_are_collected(self):
+        keys = sync_script_keys()
+        self.assertGreater(len(keys), 50)
+        for key in ("多设备同步完成", "push 失败", "同步仓库必须位于 main 分支，当前为 %@",
+                    "检测到其他设备同时更新，正在重试 %@/3"):
+            self.assertIn(key, keys)
 
     def test_every_interface_string_has_an_english_translation(self):
         english = load_strings("en")

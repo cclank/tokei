@@ -234,7 +234,7 @@ final class Store: ObservableObject {
         syncManager.synchronize(snapshotCommand: snapshotCommand) { [weak self] result in
             guard let self else { return }
             self.syncing = false
-            self.syncDetail = result.output
+            self.syncDetail = L10n.syncOutput(result.output)
             if result.succeeded {
                 self.syncSucceeded = true
                 self.syncFailStreak = 0

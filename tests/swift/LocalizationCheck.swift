@@ -69,6 +69,26 @@ struct LocalizationCheck {
         L10n.forcedLanguage = .zh
         expect(Fmt.weekdayLabels == ["一", "二", "三", "四", "五", "六", "日"], "Chinese weekdays")
 
+        // Sync detail: script messages are translated, Git's own lines pass through.
+        let syncFailure = "From github.com:someone/tokei-data\n"
+            + "Tokei sync error: 同步仓库必须位于 main 分支，当前为 feature/x"
+        L10n.forcedLanguage = .en
+        expect(L10n.syncOutput(syncFailure)
+                == "From github.com:someone/tokei-data\n"
+                + "Tokei sync error: The sync repository must be on the main branch; currently on feature/x",
+               "sync failure detail: \(L10n.syncOutput(syncFailure))")
+        expect(L10n.syncOutput("检测到其他设备同时更新，正在重试 2/3\n多设备同步完成")
+                == "Another device updated at the same time; retrying 2/3\nMulti-device sync complete",
+               "sync progress lines: \(L10n.syncOutput("检测到其他设备同时更新，正在重试 2/3\n多设备同步完成"))")
+        expect(L10n.syncOutput("Tokei sync error: 无法检查本地提交 abc123 的本机快照")
+                == "Tokei sync error: Cannot inspect this device’s snapshot in local commit abc123",
+               "the longer commit template wins")
+        expect(L10n.syncOutput("Tokei sync error: 检测到未完成的 MERGE_HEAD，已停止且未改动仓库")
+                == "Tokei sync error: Found an unfinished MERGE_HEAD; stopped without changing the repository",
+               "operation name is kept")
+        L10n.forcedLanguage = .zh
+        expect(L10n.syncOutput(syncFailure) == syncFailure, "Chinese keeps the sync detail as is")
+
         print("localization checks passed")
     }
 }

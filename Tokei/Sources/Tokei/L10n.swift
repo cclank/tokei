@@ -198,6 +198,19 @@ enum L10n {
             .appendingPathComponent("Localization").appendingPathComponent(file))
         return urls
     }
+
+    /// Prefix the sync transaction script puts in front of its failure message.
+    static let syncErrorPrefix = "Tokei sync error: "
+
+    /// Translates the sync transaction's output for display. The script reports in Chinese,
+    /// one message per line, mixed with Git's own output, which is left as is.
+    static func syncOutput(_ output: String) -> String {
+        output.split(whereSeparator: \.isNewline).map { line -> String in
+            let text = String(line)
+            guard text.hasPrefix(syncErrorPrefix) else { return data(text) }
+            return syncErrorPrefix + data(String(text.dropFirst(syncErrorPrefix.count)))
+        }.joined(separator: "\n")
+    }
 }
 
 /// 界面文案。key 是中文原文，见 `L10n`。

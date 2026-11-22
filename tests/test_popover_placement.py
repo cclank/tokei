@@ -80,6 +80,23 @@ class PopoverPlacementTests(unittest.TestCase):
         self.assertEqual(app_source.count("followAnchorWindow(of: "), 2)
         self.assertEqual(app_source.count("popover.show(relativeTo: "), 2, "跟随不能靠重新 show")
 
+    def test_clicking_the_status_item_again_closes_the_panel(self):
+        """With status items hosted by a system process, a click on our own icon also
+        reaches the global mouse monitor.
+
+        The monitor closed the panel on mouse-down, then the action on mouse-up saw it
+        closed and reopened it, so the icon could never hide the panel. Clicks on the
+        icon must skip the close-on-outside-click path and leave the toggle to
+        handleStatusItemClick.
+        """
+        app_source = (ROOT / "Tokei/Sources/Tokei/main.swift").read_text()
+        monitor = app_source.split("NSEvent.addGlobalMonitorForEvents(", 1)[1].split("\n        }\n", 1)[0]
+
+        self.assertIn("PopoverAnchor.statusItem(button, contains: point) { return }", monitor)
+        self.assertLess(monitor.index("PopoverAnchor.statusItem(button, contains: point)"),
+                        monitor.index("self.popover.close()"), "check for a click on the icon before closing the panel")
+        self.assertEqual(app_source.count("NSEvent.addGlobalMonitorForEvents("), 1)
+
     def test_status_item_stays_visible_and_reopening_the_app_shows_the_panel(self):
         """macOS 26 上可变宽度初始化的状态栏项偶发被压没，进程在跑、图标却看不到（issue #8）。"""
         app_source = (ROOT / "Tokei/Sources/Tokei/main.swift").read_text()

@@ -127,7 +127,9 @@
 "今日" = "Today";
 "从上次额度回满算到下次回满" = "From last quota reset to next reset";
 "价格表" = "Price table";
-"价格核对已在后台进行" = "Price verification is already running in the background";
+"已更新 %@ 个在线模型 → %@" = "Updated %@ active models → %@";
+"已更新 %@ 个在线模型，保留 %@ 个历史模型 → %@" = "Updated %@ active models, kept %@ retired models → %@";
+"价格核对已在后台进行" ="Price verification is already running in the background";
 "已核对 %@ 个 OpenAI 官方模型价格" = "Verified official prices for %@ OpenAI models";
 "%@ 价格核对失败，保留已有价格: %@" = "%@ price verification failed; keeping existing prices: %@";
 "任务" = "Tasks";

@@ -136,6 +136,15 @@ enum L10n {
         return text
     }
 
+    /// Translates multi-line collector output (e.g. the price update report) line by line,
+    /// since `data` matches one whole sentence at a time.
+    static func dataLines(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline)
+            .map { data($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
     private static var cachedPatterns: [(String, NSRegularExpression)]?
 
     private static func dataPatterns() -> [(String, NSRegularExpression)] {

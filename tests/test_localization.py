@@ -46,7 +46,7 @@ DYNAMIC_KEYS = {
 
 # 采集器里不进 App 界面的中文：SwiftBar 文本输出、命令行提示、内部异常。
 COLLECTOR_IGNORE = re.compile(
-    r"\{F\}|font=|refresh=|^更新失败|^已更新 |^，保留 |^所有模型价格已匹配|^varint")
+    r"\{F\}|font=|refresh=|^更新失败|^所有模型价格已匹配|^varint")
 
 
 def _swift_literal_end(src, i):

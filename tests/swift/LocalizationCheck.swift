@@ -42,6 +42,22 @@ struct LocalizationCheck {
                "template args pass through: \(L10n.data("合成 (Claude)"))")
         expect(L10n.data("Opus 5.5") == "Opus 5.5", "non-Chinese data is untouched")
 
+        // Price update report: several collector lines, each translated on its own.
+        let priceReport = "已更新 454 个在线模型，保留 144 个历史模型 → /tmp/pricing.json\n"
+            + "已核对 12 个 OpenAI 官方模型价格\n"
+        expect(L10n.dataLines(priceReport)
+                == "Updated 454 active models, kept 144 retired models → /tmp/pricing.json\n"
+                + "Verified official prices for 12 OpenAI models",
+               "price update report: \(L10n.dataLines(priceReport))")
+        expect(L10n.dataLines("已更新 454 个在线模型 → /tmp/pricing.json")
+                == "Updated 454 active models → /tmp/pricing.json",
+               "price update without retired models")
+        L10n.forcedLanguage = .zh
+        expect(L10n.dataLines(priceReport + "\n")
+                == priceReport.trimmingCharacters(in: .newlines),
+               "Chinese keeps the price update report as is")
+        L10n.forcedLanguage = .en
+
         // 数字单位：中文用「亿」，其他语言用 B
         L10n.forcedLanguage = .zh
         expect(Fmt.human(1_500_000_000) == "15.0亿", "Chinese uses 亿: \(Fmt.human(1_500_000_000))")

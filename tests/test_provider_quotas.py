@@ -575,6 +575,70 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(quota["windows"][0]["window_minutes"], 10080)
         self.assertEqual(quota["windows"][1]["window_minutes"], 300)
 
+    def test_antigravity_hub_process_without_argv_csrf_is_discovered(self):
+        for executable in (
+                "/Applications/Antigravity.app/Contents/Resources/bin/language_server",
+                "/opt/antigravity/bin/language_server",
+                '"C:\\Program Files\\Antigravity\\bin\\language_server.exe"'):
+            with self.subTest(executable=executable):
+                command = (f"123 {executable} --standalone --app_data_dir antigravity "
+                           "--subclient_type hub --https_server_port 0")
+                processes = USAGE._antigravity_process_infos(command)
+                self.assertEqual([p["pid"] for p in processes], [123])
+                self.assertEqual(processes[0]["kind"], "ide")
+                self.assertEqual(processes[0]["csrf_token"], "")
+                self.assertEqual(processes[0]["hub_https_port"], 0)
+                self.assertEqual(USAGE._antigravity_process_infos(
+                    command.replace("--standalone ", "")), [])
+                self.assertEqual(USAGE._antigravity_process_infos(
+                    command.replace("--https_server_port 0", "--https_server_port 70000")), [])
+
+    def test_antigravity_hub_server_env_auth_reaches_quota_endpoint(self):
+        output = ("123 /Applications/Antigravity.app/Contents/Resources/bin/language_server "
+                  "--standalone --app_data_dir antigravity --subclient_type hub --https_server_port 0")
+        summary = {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "remainingFraction": 0.82},
+        ]}, {"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "remainingFraction": 0.36},
+        ]}]}
+        def request(url, **kwargs):
+            self.assertEqual(kwargs["headers"]["X-Codeium-Csrf-Token"], "hub-token")
+            self.assertTrue(url.startswith("https://127.0.0.1:63019/"))
+            return summary if url.endswith("RetrieveUserQuotaSummary") else {}
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {
+                "ANTIGRAVITY_CSRF_TOKEN": "unrelated-cli-token",
+                "ANTIGRAVITY_LS_ADDRESS": "127.0.0.1:63022",
+        }):
+            self.isolate_cache(Path(tmp))
+            with mock.patch.object(USAGE, "_IS_WINDOWS", False), \
+                    mock.patch.object(USAGE.subprocess, "run", return_value=mock.Mock(stdout=output)), \
+                    mock.patch.object(USAGE, "_antigravity_daemon_credentials", return_value=[]), \
+                    mock.patch.object(USAGE, "_antigravity_proc_env", return_value={
+                        "ANTIGRAVITY_SERVER_CSRF_TOKEN": "hub-token",
+                        "ANTIGRAVITY_CSRF_TOKEN": "inherited-cli-token",
+                    }) as proc_env, \
+                    mock.patch.object(USAGE, "_discover_antigravity_credentials") as legacy, \
+                    mock.patch.object(USAGE, "_antigravity_listening_ports", return_value=[63019]), \
+                    mock.patch.object(USAGE, "_provider_json_request", side_effect=request) as http:
+                quota = USAGE.fetch_antigravity_quota()
+            proc_env.assert_called_once_with(123)
+            legacy.assert_not_called()
+            self.assertTrue(quota["available"])
+            self.assertEqual(quota["windows"][0]["used_pct"], 18.0)
+            self.assertEqual(quota["windows"][2]["used_pct"], 64.0)
+            self.assertNotIn("hub-token", Path(USAGE.PROVIDER_QUOTA_CACHE).read_text())
+            self.assertNotIn("hub-token", Path(USAGE.ANTIGRAVITY_CREDENTIALS_CACHE).read_text())
+            self.assertEqual(http.call_count, 2)
+
+    def test_antigravity_hub_requires_credentials_and_its_own_listening_port(self):
+        hub = {"pid": 123, "hub_https_port": 63019, "ports": [63019, 63020]}
+        self.assertEqual(USAGE._antigravity_endpoints(hub), [])
+        hub["csrf_token"] = "hub-token"
+        self.assertEqual(USAGE._antigravity_endpoints(hub), [("https", 63019, "hub-token", True)])
+        hub["ports"] = [63020]
+        self.assertEqual(USAGE._antigravity_endpoints(hub), [])
+
     def test_antigravity_flat_quota_summary_matches_live_response(self):
         quota = USAGE._normalize_antigravity_quota_summary({
             "response": {"groups": [

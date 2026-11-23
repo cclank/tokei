@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=18
+# TOKEI_COLLECTOR_REVISION=19
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -9090,14 +9090,23 @@ def _antigravity_process_infos(output):
         if not kind:
             continue
         csrf = _antigravity_extract_flag(command, "--csrf_token")
-        if kind != "cli" and not csrf:
-            continue
+        hub_https_port = None
+        # Hub 2.x 把 CSRF 移到语言服务自身的环境变量;HTTPS 端口 0 表示动态分配。
+        if kind == "ide" and not csrf:
+            if (_antigravity_extract_flag(command, "--subclient_type") != "hub" or
+                    not re.search(r"(?:^|\s)--standalone(?:=true)?(?:\s|$)", command, re.I)):
+                continue
+            hub_https_port = _provider_integer(
+                _antigravity_extract_flag(command, "--https_server_port"))
+            if hub_https_port is None or not 0 <= hub_https_port <= 65535:
+                continue
         extension_port = _provider_integer(
             _antigravity_extract_flag(command, "--extension_server_port"))
         if extension_port is not None and not 0 < extension_port <= 65535:
             extension_port = None
         results.append({
             "pid": pid, "kind": kind, "csrf_token": csrf or "",
+            "hub_https_port": hub_https_port,
             "extension_port": extension_port,
             "extension_csrf_token": _antigravity_extract_flag(
                 command, "--extension_server_csrf_token"),
@@ -9476,8 +9485,18 @@ def _antigravity_running_processes(now_epoch=None):
     if daemons:
         processes = _antigravity_merge_daemon_processes(processes, daemons)
     if processes:
-        discovered = _discover_antigravity_credentials(processes)
-        credentials_to_save = _antigravity_attach_credentials(processes, discovered)
+        legacy_processes = []
+        for proc in processes:
+            if proc.get("hub_https_port") is None:
+                legacy_processes.append(proc)
+                continue
+            # 新版 Hub 只读取该 LS 的环境变量。凭据留在内存，不进入旧版缓存。
+            env = _antigravity_proc_env(proc["pid"])
+            proc["csrf_token"] = env.get("ANTIGRAVITY_SERVER_CSRF_TOKEN") or proc["csrf_token"]
+        credentials_to_save = {}
+        if legacy_processes:
+            discovered = _discover_antigravity_credentials(legacy_processes)
+            credentials_to_save = _antigravity_attach_credentials(legacy_processes, discovered)
         # 每次扫描都整份重写,顺手把已经退出的进程凭据清掉。
         try:
             _atomic_write_json(ANTIGRAVITY_CREDENTIALS_CACHE, {
@@ -9512,6 +9531,14 @@ def _antigravity_listening_ports(pid):
 def _antigravity_endpoints(process):
     endpoints = []
     csrf = process.get("csrf_token") or ""
+    hub_port = process.get("hub_https_port")
+    if hub_port is not None:
+        if not csrf:
+            return []
+        ports = process.get("ports")
+        if ports is None:
+            ports = _antigravity_listening_ports(process["pid"])
+        return [("https", port, csrf, True) for port in ports if hub_port in (0, port)]
     requires_csrf = bool(csrf)
     extension_port = process.get("extension_port")
     if extension_port:

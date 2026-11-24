@@ -113,6 +113,11 @@ struct PanelView: View {
     @AppStorage(MenuBarQuotaSource.kimi5h.defaultsKey) private var menuBarQuotaKimi5h = false
     @AppStorage(MenuBarQuotaSource.kimiSubscription.defaultsKey) private var menuBarQuotaKimiSubscription = false
     @AppStorage(MenuBarQuotaSource.grok.defaultsKey) private var menuBarQuotaGrok = false
+    @AppStorage(MenuBarQuotaSource.antigravityGeminiWeek.defaultsKey) private var menuBarQuotaAntigravityGeminiWeek = false
+    @AppStorage(MenuBarQuotaSource.antigravityGemini5h.defaultsKey) private var menuBarQuotaAntigravityGemini5h = false
+    @AppStorage(MenuBarQuotaSource.antigravityClaudeGPTWeek.defaultsKey) private var menuBarQuotaAntigravityClaudeGPTWeek = false
+    @AppStorage(MenuBarQuotaSource.antigravityClaudeGPT5h.defaultsKey) private var menuBarQuotaAntigravityClaudeGPT5h = false
+    @AppStorage(MenuBarQuotaSource.antigravityArgonWeek.defaultsKey) private var menuBarQuotaAntigravityArgonWeek = false
     @State private var copyFeedback = false
     @State private var copiedToolID: String?
 
@@ -3090,6 +3095,11 @@ struct PanelView: View {
         case .kimi5h: return $menuBarQuotaKimi5h
         case .kimiSubscription: return $menuBarQuotaKimiSubscription
         case .grok: return $menuBarQuotaGrok
+        case .antigravityGeminiWeek: return $menuBarQuotaAntigravityGeminiWeek
+        case .antigravityGemini5h: return $menuBarQuotaAntigravityGemini5h
+        case .antigravityClaudeGPTWeek: return $menuBarQuotaAntigravityClaudeGPTWeek
+        case .antigravityClaudeGPT5h: return $menuBarQuotaAntigravityClaudeGPT5h
+        case .antigravityArgonWeek: return $menuBarQuotaAntigravityArgonWeek
         }
     }
 
@@ -3103,7 +3113,7 @@ struct PanelView: View {
         }
     }
 
-    /// 6 个开关拼成一个值，菜单栏刷新只挂一个 onChange。
+    /// 额度开关合成一个值，菜单栏刷新只挂一个 onChange。
     private var menuBarQuotaDigest: String {
         MenuBarQuotaSource.allCases
             .map { menuBarQuotaBinding($0).wrappedValue ? "1" : "0" }
@@ -3113,12 +3123,21 @@ struct PanelView: View {
     private var menuBarQuotaHint: String {
         let selected = menuBarQuotaSelectedSources
         if selected.isEmpty { return L("全部关闭，状态栏只留图标。") }
-        let shown = selected.prefix(2).map(\.label).joined(separator: " · ")
+        let shown = selected.prefix(2).map(\.displayLabel).joined(separator: " · ")
         if selected.count > 2 {
-            let hidden = selected.dropFirst(2).map(\.label).joined(separator: "、")
+            let hidden = selected.dropFirst(2).map(\.displayLabel).joined(separator: "、")
             return L("双额度显示：%@；%@ 放不下。", shown, hidden)
         }
         return L("双额度显示：%@。", shown)
+    }
+
+    private func menuBarQuotaRows(_ sources: [MenuBarQuotaSource]) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
+                            GridItem(.flexible(), spacing: 7)], spacing: 7) {
+            ForEach(sources) { source in
+                settingsRow(source.label, tint: source.themeColor, isOn: menuBarQuotaBinding(source))
+            }
+        }
     }
 
     private func menuBarTokenBinding(_ source: MenuBarTokenSource) -> Binding<Bool> {
@@ -3234,13 +3253,10 @@ struct PanelView: View {
                 }
             } else {
                 settingsStackedValue(L("额度来源")) {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
-                                        GridItem(.flexible(), spacing: 7)], spacing: 7) {
-                        ForEach(MenuBarQuotaSource.allCases) { source in
-                            settingsRow(source.label, tint: source.themeColor,
-                                        isOn: menuBarQuotaBinding(source))
-                        }
-                    }
+                    menuBarQuotaRows(MenuBarQuotaSource.allCases.filter { $0.antigravityWindowID == nil })
+                }
+                settingsStackedValue("Antigravity") {
+                    menuBarQuotaRows(MenuBarQuotaSource.allCases.filter { $0.antigravityWindowID != nil })
                 }
 
                 Text(menuBarQuotaHint)

@@ -3123,21 +3123,12 @@ struct PanelView: View {
     private var menuBarQuotaHint: String {
         let selected = menuBarQuotaSelectedSources
         if selected.isEmpty { return L("全部关闭，状态栏只留图标。") }
-        let shown = selected.prefix(2).map(\.displayLabel).joined(separator: " · ")
+        let shown = selected.prefix(2).map(\.label).joined(separator: " · ")
         if selected.count > 2 {
-            let hidden = selected.dropFirst(2).map(\.displayLabel).joined(separator: "、")
+            let hidden = selected.dropFirst(2).map(\.label).joined(separator: "、")
             return L("双额度显示：%@；%@ 放不下。", shown, hidden)
         }
         return L("双额度显示：%@。", shown)
-    }
-
-    private func menuBarQuotaRows(_ sources: [MenuBarQuotaSource]) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
-                            GridItem(.flexible(), spacing: 7)], spacing: 7) {
-            ForEach(sources) { source in
-                settingsRow(source.label, tint: source.themeColor, isOn: menuBarQuotaBinding(source))
-            }
-        }
     }
 
     private func menuBarTokenBinding(_ source: MenuBarTokenSource) -> Binding<Bool> {
@@ -3253,10 +3244,13 @@ struct PanelView: View {
                 }
             } else {
                 settingsStackedValue(L("额度来源")) {
-                    menuBarQuotaRows(MenuBarQuotaSource.allCases.filter { $0.antigravityWindowID == nil })
-                }
-                settingsStackedValue("Antigravity") {
-                    menuBarQuotaRows(MenuBarQuotaSource.allCases.filter { $0.antigravityWindowID != nil })
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 7),
+                                        GridItem(.flexible(), spacing: 7)], spacing: 7) {
+                        ForEach(MenuBarQuotaSource.allCases) { source in
+                            settingsRow(source.label, tint: source.themeColor,
+                                        isOn: menuBarQuotaBinding(source))
+                        }
+                    }
                 }
 
                 Text(menuBarQuotaHint)

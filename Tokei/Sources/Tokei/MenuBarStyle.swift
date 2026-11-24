@@ -99,11 +99,11 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .kimi5h: return "Kimi 5h"
         case .kimiSubscription: return L("Kimi 订阅")
         case .grok: return "Grok"
-        case .antigravityGeminiWeek: return L("Gemini 周")
-        case .antigravityGemini5h: return "Gemini 5h"
-        case .antigravityClaudeGPTWeek: return L("Claude/GPT 周")
-        case .antigravityClaudeGPT5h: return "Claude/GPT 5h"
-        case .antigravityArgonWeek: return L("Gemini 4 Argon 周")
+        case .antigravityGeminiWeek: return "Antigravity \(L("Gemini 周"))"
+        case .antigravityGemini5h: return "Antigravity Gemini 5h"
+        case .antigravityClaudeGPTWeek: return "Antigravity \(L("Claude/GPT 周"))"
+        case .antigravityClaudeGPT5h: return "Antigravity Claude/GPT 5h"
+        case .antigravityArgonWeek: return "Antigravity \(L("Gemini 4 Argon 周"))"
         }
     }
 
@@ -146,11 +146,6 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .antigravityArgonWeek: return "antigravity-gemini-argon-weekly"
         default: return nil
         }
-    }
-
-    var displayLabel: String {
-        if antigravityWindowID != nil { return "Antigravity \(label)" }
-        return label
     }
 
     private func antigravityWindow(in usage: Usage) -> ProviderQuotaWindow? {
@@ -262,7 +257,7 @@ enum MenuBarMetricKind: Equatable {
 
     var displayName: String {
         switch self {
-        case .quota(let source): return source.displayLabel
+        case .quota(let source): return source.label
         case .total: return L("今日")
         case .tokens(let source, let period): return "\(source.label) \(period.label)"
         }

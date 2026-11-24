@@ -134,7 +134,8 @@ struct MenuBarQuotaSourceCheck {
         let labels = MenuBarQuotaSource.allCases.map(\.label)
         try expect(labels == ["Claude 5h", "Claude 周", "Claude Fable",
                               "Codex 5h", "Codex 周", "Kimi 5h", "Kimi 订阅", "Grok",
-                              "Gemini 周", "Gemini 5h", "Claude/GPT 周", "Claude/GPT 5h", "Gemini 4 Argon 周"],
+                              "Antigravity Gemini 周", "Antigravity Gemini 5h", "Antigravity Claude/GPT 周",
+                              "Antigravity Claude/GPT 5h", "Antigravity Gemini 4 Argon 周"],
                    "window labels changed: \(labels)")
 
         let defaultOn = MenuBarQuotaSource.allCases.filter(\.defaultEnabled).map(\.rawValue)

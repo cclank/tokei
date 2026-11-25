@@ -95,7 +95,7 @@ class CrossPlatformSmokeTests(unittest.TestCase):
         }, ensure_ascii=False), encoding="utf-8")
 
         env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("TOKEI_", "CODEX_", "CLAUDE_", "GROK_"))}
+               if key != "T3CODE_HOME" and not key.startswith(("TOKEI_", "CODEX_", "CLAUDE_", "GROK_"))}
         env.update({
             "HOME": str(home), "USERPROFILE": str(home),
             "APPDATA": str(home / "AppData" / "Roaming"),

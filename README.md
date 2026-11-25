@@ -208,7 +208,7 @@ chmod +x ~/.tokei/tokei-sync.sh
 |------|----------|
 | Claude Code | `~/.claude/projects/<proj>/<session>.jsonl` |
 | Codex CLI | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` |
-| Gemini / Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db` + `~/.gemini/gemini-cli/conversations/*.json` |
+| Gemini / Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db`、`~/.gemini/gemini-cli/conversations/*.json`、`${T3CODE_HOME:-~/.t3}/userdata/providers/antigravity/*/antigravity-acp/conversations/*.db` |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` 登录态 + Cursor usage summary / usage-events API（卡片默认关闭） |
 | Zed | `~/.config/zed/settings.json` + Zed Keychain 登录态 + Cloud API（卡片默认关闭） |
 | Sub2API | macOS Keychain API Key + 自定义 Base URL 的 `/v1/usage`（卡片默认关闭） |

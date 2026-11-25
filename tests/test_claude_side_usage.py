@@ -43,7 +43,7 @@ def assistant(message_id, when, model=OPUS, inp=0, out=0, cr=0, cw=0, searches=0
                     "message": {"id": message_id, "model": model, "usage": usage}})
 
 
-def cost_state(session_id, models):
+def cost_state(session_id, models, start_time=0):
     usage = {}
     for model, u in models.items():
         usage[model] = {"inputTokens": u.get("in", 0), "outputTokens": u.get("out", 0),
@@ -56,7 +56,7 @@ def cost_state(session_id, models):
     return compact({"type": "cost-state", "sessionId": session_id, "totalCostUSD": 0,
                     "totalAPIDuration": 0, "totalAPIDurationWithoutRetries": 0,
                     "totalToolDuration": 0, "totalLinesAdded": 0, "totalLinesRemoved": 0,
-                    "totalDuration": 0, "startTime": 0, "modelUsage": usage,
+                    "totalDuration": 0, "startTime": start_time, "modelUsage": usage,
                     "hasUnknownModelCost": False})
 
 
@@ -268,6 +268,170 @@ class ClaudeSideUsageTests(unittest.TestCase):
         self.scan()
         totals = sorted(tokens for _, _, tokens, _ in USAGE._quota_claude_events(self.cache))
         self.assertEqual(totals, [10, 1000])
+
+    def test_context_window_suffix_in_cost_state_matches_logged_base_model(self):
+        self.write("project/ctx1m.jsonl", [
+            user("00000000-0000-0000-0000-000000000011", self.now),
+            assistant("m1", self.now, model=OPUS, inp=100, out=50, cr=50_000, cw=1_000),
+            cost_state("ctx1m", {
+                f"{OPUS}[1m]": {"in": 120, "out": 60, "cr": 52_000, "cw": 1_000},
+                HAIKU: {"in": 400, "out": 20, "ws": 1},
+            }, start_time=1_790_115_954_465),
+        ])
+        usage = self.scan()
+        self.assertEqual(set(usage["models"]), {OPUS, HAIKU})
+        opus = usage["models"][OPUS]
+        self.assertEqual((opus["in"], opus["out"], opus["cr"], opus["cw"]), (120, 60, 52_000, 1_000))
+        expected_opus_cost = USAGE._claude_event_cost({
+            "model": OPUS, "in": 120, "out": 60, "cr": 52_000, "cw": 1_000,
+        })
+        self.assertAlmostEqual(opus["cost"], expected_opus_cost, places=9)
+        self.assertEqual(USAGE._normalize(f"{OPUS}[1m]"), USAGE._normalize(OPUS))
+        self.assertEqual(USAGE.price_for(f"{OPUS}[1m]"), USAGE.price_for(OPUS))
+
+    def test_cost_state_merges_base_and_context_suffix_variants(self):
+        self.write("project/ctx-mix.jsonl", [
+            assistant("m1", self.now, model=OPUS, inp=100, cr=10_000),
+            cost_state("ctx-mix", {
+                OPUS: {"in": 40, "cr": 4_000},
+                f"{OPUS}[1m]": {"in": 80, "cr": 7_000},
+            }, start_time=1_790_115_954_466),
+        ])
+        usage = self.scan()
+        self.assertEqual(set(usage["models"]), {OPUS})
+        self.assertEqual((usage["models"][OPUS]["in"], usage["models"][OPUS]["cr"]), (120, 11_000))
+
+    def test_resumed_session_in_new_file_uses_prior_cost_state_as_baseline(self):
+        earlier = self.now - timedelta(days=1)
+        start_time = 1_791_000_000_000
+        replayed = assistant("m-old", earlier, model=OPUS, inp=1_000, out=200, cr=100_000, cw=5_000)
+        self.write("project/session-a.jsonl", [
+            user("00000000-0000-0000-0000-000000000021", earlier),
+            replayed,
+            # A 累计含之前已压缩的历史用量（远大于现存的 m-old）
+            cost_state("session-a", {
+                OPUS: {"in": 20_000, "out": 5_000, "cr": 6_000_000_000, "cw": 100_000},
+                HAIKU: {"in": 50_000, "out": 1_000, "ws": 2},
+            }, start_time=start_time),
+        ])
+        # B 续接 A：重放 m-old + 新增 m-new，首条 cost-state 继承 A 的累计值并加上本段新增与侧调用
+        self.write("project/session-b.jsonl", [
+            replayed,
+            user("00000000-0000-0000-0000-000000000022", self.now),
+            assistant("m-new", self.now, model=OPUS, inp=500, out=100, cr=3_000_000, cw=2_000),
+            cost_state("session-b", {
+                OPUS: {"in": 20_700, "out": 5_150, "cr": 6_003_500_000, "cw": 102_000},
+                HAIKU: {"in": 53_000, "out": 1_200, "ws": 3},
+            }, start_time=start_time),
+            user("00000000-0000-0000-0000-000000000023", self.now + timedelta(minutes=5)),
+            assistant("m-new-2", self.now + timedelta(minutes=5), model=OPUS, inp=100, out=50, cr=1_000_000),
+            cost_state("session-b", {
+                OPUS: {"in": 20_800, "out": 5_200, "cr": 6_004_500_000, "cw": 102_000},
+                HAIKU: {"in": 53_000, "out": 1_200, "ws": 3},
+            }, start_time=start_time),
+        ])
+        today = self.scan("today")
+        yesterday = self.scan("yesterday")
+        # 昨日只含 A 的 60 亿；今日只含 B 两段的新增（Opus cr = 3.5M + 1M = 4.5M，Haiku = 3000 in / 200 out / 1 ws）
+        self.assertEqual(yesterday["models"][OPUS]["cr"], 6_000_000_000)
+        self.assertEqual(today["models"][OPUS]["cr"], 4_500_000)
+        self.assertEqual(today["models"][OPUS]["in"], 800)
+        self.assertEqual(today["models"][OPUS]["out"], 200)
+        self.assertEqual(today["models"][HAIKU]["in"], 3_000)
+        self.assertEqual(today["models"][HAIKU]["out"], 200)
+        self.assertEqual(today["models"][HAIKU]["ws"], 1)
+
+    def test_multi_hop_resumed_chain_and_independent_sessions(self):
+        t1 = self.now - timedelta(days=2)
+        t2 = self.now - timedelta(days=1)
+        t3 = self.now
+        chain_start = 1_792_000_000_000
+        self.write("project/chain-a.jsonl", [
+            assistant("c1", t1, model=OPUS, cr=1_000),
+            cost_state("chain-a", {OPUS: {"cr": 10_000}}, start_time=chain_start),
+        ])
+        self.write("project/chain-b.jsonl", [
+            assistant("c1", t1, model=OPUS, cr=1_000),
+            assistant("c2", t2, model=OPUS, cr=2_000),
+            cost_state("chain-b", {OPUS: {"cr": 12_500}}, start_time=chain_start),
+        ])
+        self.write("project/chain-c.jsonl", [
+            assistant("c1", t1, model=OPUS, cr=1_000),
+            assistant("c2", t2, model=OPUS, cr=2_000),
+            assistant("c3", t3, model=OPUS, cr=3_000),
+            cost_state("chain-c", {OPUS: {"cr": 16_000}}, start_time=chain_start),
+        ])
+        # 独立新会话（不同 startTime）仍从零算起
+        self.write("project/independent.jsonl", [
+            assistant("ind-1", t3, model=OPUS, cr=100),
+            cost_state("independent", {OPUS: {"cr": 10_500}}, start_time=chain_start + 999),
+        ])
+        total = self.scan("all")
+        today = self.scan("today")
+        # 链路总计 16,000 + 独立会话 10,500 = 26,500
+        self.assertEqual(total["models"][OPUS]["cr"], 26_500)
+        # 今日 = chain-c 增量 3,500 + independent 10,500 = 14,000
+        self.assertEqual(today["models"][OPUS]["cr"], 14_000)
+
+    def test_accounting_version_replaces_inflated_v1_ledger_and_clears_phantom_day(self):
+        import hashlib
+        earlier = self.now - timedelta(days=1)
+        phantom_day = (self.now - timedelta(days=2)).date().isoformat()
+        today_key = self.now.date().isoformat()
+        start_time = 1_793_000_000_000
+        self.write("project/old-a.jsonl", [
+            assistant("oa1", earlier, model=OPUS, cr=100),
+            cost_state("old-a", {OPUS: {"cr": 5_000_000}}, start_time=start_time),
+        ])
+        self.write("project/resumed-b.jsonl", [
+            assistant("oa1", earlier, model=OPUS, cr=100),
+            assistant("ob1", self.now, model=OPUS, cr=1_000),
+            cost_state("resumed-b", {OPUS: {"cr": 5_001_200}}, start_time=start_time),
+        ])
+        sid_b = hashlib.sha256(b"resumed-b.jsonl").hexdigest()
+        sid_deleted = hashlib.sha256(b"archived-deleted.jsonl").hexdigest()
+        ledger = USAGE._load_ledger()
+        ledger["tools"]["claude"] = {
+            today_key: {
+                "in": 0, "out": 0, "cr": 5_001_200, "cw": 0, "cost": 1.0,
+                "models": {OPUS: {"in": 0, "out": 0, "cr": 5_001_200, "cw": 0, "cost": 1.0}},
+                "_sources": {
+                    sid_b: {
+                        "in": 0, "out": 0, "cr": 5_001_200, "cw": 0, "cost": 1.0,
+                        "models": {OPUS: {"in": 0, "out": 0, "cr": 5_001_200, "cw": 0, "cost": 1.0}},
+                        "_accounting_version": 1,
+                    },
+                },
+            },
+            phantom_day: {
+                "in": 0, "out": 0, "cr": 900_000, "cw": 0, "cost": 0.5,
+                "models": {f"{OPUS}[1m]": {"in": 0, "out": 0, "cr": 900_000, "cw": 0, "cost": 0.5}},
+                "_sources": {
+                    sid_b: {
+                        "in": 0, "out": 0, "cr": 800_000, "cw": 0, "cost": 0.4,
+                        "models": {f"{OPUS}[1m]": {"in": 0, "out": 0, "cr": 800_000, "cw": 0, "cost": 0.4}},
+                        "_accounting_version": 1,
+                    },
+                    sid_deleted: {
+                        "in": 0, "out": 0, "cr": 100_000, "cw": 0, "cost": 0.1,
+                        "models": {OPUS: {"in": 0, "out": 0, "cr": 100_000, "cw": 0, "cost": 0.1}},
+                        "_accounting_version": 1,
+                    },
+                },
+            },
+        }
+        # 新口径（v2）重算应覆盖 v1 的虚高数，并清除在盘文件在 phantom_day 上的旧版幻影记录，
+        # 同时完整保留已删文件 archived-deleted.jsonl 的 100,000。
+        today = self.scan("today")
+        all_range = self.scan("all")
+        self.assertEqual(today["cr"], 1_200)
+        self.assertEqual(ledger["tools"]["claude"][phantom_day]["cr"], 100_000)
+        self.assertEqual(all_range["cr"], 5_000_000 + 1_200 + 100_000)
+        # 再次合并旧版 v1 大值记录时，仍保持 v2 的修正结果。
+        remerged = USAGE.ledger_reconcile("claude", {today_key: {"cr": 5_001_200}}, {
+            "resumed-b.jsonl": {today_key: {"cr": 5_001_200, "_accounting_version": 1}},
+        })
+        self.assertEqual(remerged[today_key]["cr"], 1_200)
 
 
 if __name__ == "__main__":

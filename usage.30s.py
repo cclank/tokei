@@ -343,7 +343,7 @@ QWENWORK_QUOTA_CACHE = _writable_path("qwenwork_quota_cache.json")
 PROVIDER_QUOTA_CACHE = _writable_path("provider_quota_cache.json")
 ANTIGRAVITY_SCAN_CACHE = _writable_path("antigravity_scan_cache.json")
 ANTIGRAVITY_CREDENTIALS_CACHE = _writable_path("antigravity_credentials.json")
-# IDE 会把语言服务器的 pid / 端口 / CSRF 写进 daemon/ls_*.json；CLI 目前不写。
+# IDE 会把语言服务器的 pid / 端口 / CSRF 写进 daemon/ 下的 ls_*.json 或 hub_*.json；CLI 目前不写。
 # 命令行走不通时靠这些文件兜底，读到之后仍要校验 pid 活着、端口真的在听。
 ANTIGRAVITY_DAEMON_DIRS = (
     os.path.join(HOME, ".gemini", "antigravity", "daemon"),
@@ -9079,7 +9079,7 @@ def _antigravity_process_kind(command):
     return None
 
 
-def _antigravity_process_infos(output):
+def _antigravity_process_infos(output, daemon_hub_pids=()):
     results = []
     for line in str(output or "").splitlines():
         match = re.match(r"^\s*(\d+)\s+(.+)$", line)
@@ -9093,12 +9093,12 @@ def _antigravity_process_infos(output):
         hub_https_port = None
         # Hub 2.x 把 CSRF 移到语言服务自身的环境变量;HTTPS 端口 0 表示动态分配。
         if kind == "ide" and not csrf:
-            if (_antigravity_extract_flag(command, "--subclient_type") != "hub" or
-                    not re.search(r"(?:^|\s)--standalone(?:=true)?(?:\s|$)", command, re.I)):
-                continue
-            hub_https_port = _provider_integer(
-                _antigravity_extract_flag(command, "--https_server_port"))
-            if hub_https_port is None or not 0 <= hub_https_port <= 65535:
+            if (_antigravity_extract_flag(command, "--subclient_type") == "hub" and
+                    re.search(r"(?:^|\s)--standalone(?:=true)?(?:\s|$)", command, re.I)):
+                port = _provider_integer(_antigravity_extract_flag(command, "--https_server_port"))
+                if port is not None and 0 <= port <= 65535:
+                    hub_https_port = port
+            if hub_https_port is None and pid not in daemon_hub_pids:
                 continue
         extension_port = _provider_integer(
             _antigravity_extract_flag(command, "--extension_server_port"))
@@ -9107,6 +9107,7 @@ def _antigravity_process_infos(output):
         results.append({
             "pid": pid, "kind": kind, "csrf_token": csrf or "",
             "hub_https_port": hub_https_port,
+            "needs_hub_daemon": kind == "ide" and not csrf and hub_https_port is None,
             "extension_port": extension_port,
             "extension_csrf_token": _antigravity_extract_flag(
                 command, "--extension_server_csrf_token"),
@@ -9353,24 +9354,48 @@ def _antigravity_port_open(port):
         return False
 
 
+def _load_antigravity_hub_daemon(path):
+    max_bytes = 64 * 1024
+    if os.path.islink(path) or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(max_bytes + 1)
+        if len(data) <= max_bytes:
+            return json.loads(data)
+    except (OSError, ValueError, RecursionError):
+        pass
+    return {}
+
+
 def _antigravity_daemon_credentials():
     """IDE 的 daemon 发现文件里有 pid/端口/CSRF;命令行拿不到 token 时用它兜底。"""
     found = []
     for directory in ANTIGRAVITY_DAEMON_DIRS:
-        for path in glob.glob(os.path.join(directory, "ls_*.json")):
-            data = _load_json(path, {})
+        for path in (glob.glob(os.path.join(directory, "ls_*.json"))
+                     + glob.glob(os.path.join(directory, "hub_*.json"))):
+            is_hub = os.path.basename(path).startswith("hub_")
+            data = _load_antigravity_hub_daemon(path) if is_hub else _load_json(path, {})
             if not isinstance(data, dict):
                 continue
             pid = _provider_integer(data.get("pid"))
             token = data.get("csrfToken")
             if not pid or not isinstance(token, str) or not token:
                 continue
+            if is_hub and (len(token) > 1024 or not token.isascii() or not token.isprintable()):
+                continue
             if not _antigravity_pid_alive(pid):
                 continue
-            ports = [port for port in (_provider_integer(data.get("httpsPort")),
-                                       _provider_integer(data.get("httpPort")))
-                     if port]
-            found.append({"pid": pid, "token": token, "ports": ports, "path": path})
+            endpoints = [(scheme, port) for scheme in ("https", "http")
+                         if (port := _provider_integer(data.get(f"{scheme}Port")))
+                         and 0 < port <= 65535]
+            if not endpoints:
+                continue
+            entry = {"pid": pid, "token": token,
+                     "ports": [port for _, port in endpoints], "path": path}
+            if is_hub:
+                entry["hub_endpoints"] = endpoints
+            found.append(entry)
     return found
 
 
@@ -9380,6 +9405,8 @@ def _antigravity_merge_daemon_processes(processes, daemons):
     for entry in daemons:
         pid = entry["pid"]
         proc = by_pid.get(pid)
+        if "hub_endpoints" in entry and (proc is None or proc.get("kind") != "ide"):
+            continue
         if not _antigravity_pid_alive(pid):
             continue
         listening = proc.get("ports") if proc is not None else None
@@ -9400,6 +9427,10 @@ def _antigravity_merge_daemon_processes(processes, daemons):
             proc["ports"] = listening
         if not proc.get("csrf_token"):
             proc["csrf_token"] = entry["token"]
+            if "hub_endpoints" in entry:
+                proc["daemon_hub_endpoints"] = [
+                    (scheme, port) for scheme, port in entry["hub_endpoints"] if port in live_ports
+                ]
         if not proc.get("daemon_ports"):
             proc["daemon_ports"] = live_ports
     return processes
@@ -9480,19 +9511,26 @@ def _antigravity_running_processes(now_epoch=None):
                 capture_output=True, text=True, timeout=2, check=False).stdout
         except (OSError, subprocess.SubprocessError):
             return []
-    processes = _antigravity_process_infos(output)
     daemons = _antigravity_daemon_credentials()
+    processes = _antigravity_process_infos(
+        output, {entry["pid"] for entry in daemons if "hub_endpoints" in entry})
     if daemons:
         processes = _antigravity_merge_daemon_processes(processes, daemons)
+    processes = [proc for proc in processes
+                 if not proc.get("needs_hub_daemon") or proc.get("daemon_hub_endpoints")]
     if processes:
         legacy_processes = []
         for proc in processes:
             if proc.get("hub_https_port") is None:
-                legacy_processes.append(proc)
+                # Hub daemon credentials, like Hub environment credentials, stay in memory.
+                if not proc.get("daemon_hub_endpoints"):
+                    legacy_processes.append(proc)
                 continue
             # 新版 Hub 只读取该 LS 的环境变量。凭据留在内存，不进入旧版缓存。
             env = _antigravity_proc_env(proc["pid"])
-            proc["csrf_token"] = env.get("ANTIGRAVITY_SERVER_CSRF_TOKEN") or proc["csrf_token"]
+            if token := env.get("ANTIGRAVITY_SERVER_CSRF_TOKEN"):
+                proc["csrf_token"] = token
+                proc.pop("daemon_hub_endpoints", None)
         credentials_to_save = {}
         if legacy_processes:
             discovered = _discover_antigravity_credentials(legacy_processes)
@@ -9531,6 +9569,8 @@ def _antigravity_listening_ports(pid):
 def _antigravity_endpoints(process):
     endpoints = []
     csrf = process.get("csrf_token") or ""
+    if hub_endpoints := process.get("daemon_hub_endpoints"):
+        return [(scheme, port, csrf, True) for scheme, port in hub_endpoints] if csrf else []
     hub_port = process.get("hub_https_port")
     if hub_port is not None:
         if not csrf:
@@ -17951,6 +17991,10 @@ def _sync_safe_usage_payload(payload):
     # contain an email/login label. Keep them in the local cache only.
     for key in ("cursor", "zed", "sub2api", "zai", "antigravity"):
         snapshot.pop(key, None)
+    errors = snapshot.get("_errors")
+    if isinstance(errors, dict) and "antigravity_quota" in errors:
+        # Readout errors can include local connection or header details.
+        snapshot["_errors"] = {key: value for key, value in errors.items() if key != "antigravity_quota"}
     # Devin / MiniMax Code 把 token 与账号额度放在同一个键下：token 要同步，
     # 额度（Devin 的那行带着登录邮箱）同样只留在本机。
     for key in ("devin", "minimax"):

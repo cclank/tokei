@@ -947,6 +947,7 @@ class ProviderQuotaTests(unittest.TestCase):
             "sub2api": {"available": True},
             "zai": {"available": True},
             "antigravity": {"account": "gemini@example.com"},
+            "_errors": {"antigravity_quota": "local-only diagnostic", "claude": "unreadable log"},
             "grok_bot": {
                 "ranges": {"today": {"sessions": 1}},
                 "quota": {
@@ -961,6 +962,8 @@ class ProviderQuotaTests(unittest.TestCase):
         for provider in ("cursor", "zed", "sub2api", "zai", "antigravity"):
             self.assertNotIn(provider, snapshot)
         self.assertEqual(snapshot["grok_bot"], payload["grok_bot"])
+        self.assertEqual(snapshot["_errors"], {"claude": "unreadable log"})
+        self.assertIn("antigravity_quota", payload["_errors"])
         self.assertIn("cursor", payload)
 
     def test_antigravity_proc_env_edge_cases(self):
@@ -1026,27 +1029,38 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(process["ls_port"], 51213)
         self.assertEqual(saved["321"], {"token": "fresh-token", "port": 51213})
 
-    def test_antigravity_daemon_file_supplies_token_and_ports(self):
+    def test_antigravity_hub_daemon_file_limits_ports_and_keeps_token_in_memory(self):
+        output = ("4321 /Applications/Antigravity.app/Contents/Resources/bin/language_server\n"
+                  "4322 /usr/bin/unrelated-local-service\n")
         with tempfile.TemporaryDirectory() as tmp:
+            self.isolate_cache(Path(tmp))
             daemon = Path(tmp, "daemon")
             daemon.mkdir()
-            Path(daemon, "ls_fixture.json").write_text(json.dumps({
+            Path(daemon, "hub_63042.json").write_text(json.dumps({
                 "pid": 4321, "httpsPort": 63041, "httpPort": 63042,
                 "csrfToken": "daemon-token",
             }), encoding="utf-8")
+            Path(daemon, "hub_63043.json").write_text(json.dumps({
+                "pid": 4322, "httpsPort": 63043, "csrfToken": "unrelated-fixture",
+            }), encoding="utf-8")
             with mock.patch.object(USAGE, "ANTIGRAVITY_DAEMON_DIRS", (str(daemon),)), \
+                    mock.patch.object(USAGE, "_IS_WINDOWS", False), \
+                    mock.patch.object(USAGE.subprocess, "run", return_value=mock.Mock(stdout=output)), \
                     mock.patch.object(USAGE, "_antigravity_pid_alive", return_value=True), \
                     mock.patch.object(USAGE, "_antigravity_listening_ports",
-                                      return_value=[63041, 63042]):
-                entries = USAGE._antigravity_daemon_credentials()
-                processes = USAGE._antigravity_merge_daemon_processes([], entries)
+                                      return_value=[63041, 63042, 63043]), \
+                    mock.patch.object(USAGE, "_discover_antigravity_credentials") as legacy:
+                processes = USAGE._antigravity_running_processes()
+                self.assertEqual([proc["pid"] for proc in processes], [4321])
                 endpoints = USAGE._antigravity_endpoints(processes[0])
+            legacy.assert_not_called()
+            saved = json.loads(Path(USAGE.ANTIGRAVITY_CREDENTIALS_CACHE).read_text())
+            self.assertEqual(saved["credentials"], {})
 
-        self.assertEqual(entries[0]["token"], "daemon-token")
-        self.assertEqual(processes[0]["pid"], 4321)
-        self.assertEqual(processes[0]["csrf_token"], "daemon-token")
-        self.assertIn(("https", 63041, "daemon-token", True), endpoints)
-        self.assertIn(("http", 63042, "daemon-token", True), endpoints)
+        self.assertEqual(endpoints, [
+            ("https", 63041, "daemon-token", True),
+            ("http", 63042, "daemon-token", True),
+        ])
 
     def test_antigravity_daemon_file_with_dead_pid_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:

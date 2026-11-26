@@ -34,6 +34,7 @@ struct MenuBarQuotaSourceCheck {
         try checkDefaults()
         try checkDefaultMetricsUnchanged()
         try checkReading()
+        try checkAntigravity()
         try checkRenderable()
         try checkDensity()
         try checkWindowGlyphsAreDistinct()
@@ -112,7 +113,9 @@ struct MenuBarQuotaSourceCheck {
     private static func checkSourceIdentity() throws {
         let order = MenuBarQuotaSource.allCases.map(\.rawValue)
         try expect(order == ["claude5h", "claudeWeek", "claudeFable",
-                             "codex5h", "codexWeek", "kimi5h", "kimiSubscription", "grok"],
+                             "codex5h", "codexWeek", "kimi5h", "kimiSubscription", "grok",
+                             "antigravityGeminiWeek", "antigravityGemini5h", "antigravityClaudeGPTWeek",
+                             "antigravityClaudeGPT5h", "antigravityArgonWeek"],
                    "quota source order changed: \(order)")
 
         // 这两个 key 已经发布过，存的本来就是这两个窗口的开关。
@@ -130,7 +133,9 @@ struct MenuBarQuotaSourceCheck {
         // 标签必须写清是哪个窗口，这是用户能分辨谁是谁的前提。
         let labels = MenuBarQuotaSource.allCases.map(\.label)
         try expect(labels == ["Claude 5h", "Claude 周", "Claude Fable",
-                              "Codex 5h", "Codex 周", "Kimi 5h", "Kimi 订阅", "Grok"],
+                              "Codex 5h", "Codex 周", "Kimi 5h", "Kimi 订阅", "Grok",
+                              "Antigravity Gemini 周", "Antigravity Gemini 5h", "Antigravity Claude/GPT 周",
+                              "Antigravity Claude/GPT 5h", "Antigravity Gemini 4 Argon 周"],
                    "window labels changed: \(labels)")
 
         let defaultOn = MenuBarQuotaSource.allCases.filter(\.defaultEnabled).map(\.rawValue)
@@ -138,7 +143,8 @@ struct MenuBarQuotaSourceCheck {
                    "only the two historically-on windows may default on: \(defaultOn)")
 
         let windows = MenuBarQuotaSource.allCases.map(\.window)
-        try expect(windows == [.fiveHour, .week, .week, .fiveHour, .week, .fiveHour, nil, nil],
+        try expect(windows == [.fiveHour, .week, .week, .fiveHour, .week, .fiveHour, nil, nil,
+                               .week, .fiveHour, .week, .fiveHour, .week],
                    "window kinds changed")
     }
 
@@ -192,11 +198,11 @@ struct MenuBarQuotaSourceCheck {
 
         let usage = try decodeFixture(fixtureJSON)
         let used = MenuBarQuotaSource.allCases.map { $0.reading(in: usage).value }
-        try expect(used == [20, 40, 10, 88, 35, 15, 55, 25], "reading mapped to the wrong field: \(used)")
+        try expect(used == [20, 40, 10, 88, 35, 15, 55, 25, 17, 19, 23, 29, 31], "reading mapped to the wrong field: \(used)")
 
         // 模型里存已用百分比，状态栏显示剩余，别把 100-x 丢了。
         let metrics = MenuBarQuotaSource.metrics(in: usage)
-        try expect(metrics.map(\.value) == ["80", "60", "90", "12", "65", "85", "45", "75"],
+        try expect(metrics.map(\.value) == ["80", "60", "90", "12", "65", "85", "45", "75", "83", "81", "77", "71", "69"],
                    "remaining conversion or order wrong: \(metrics.map(\.value))")
 
         // 账号没有这个窗口 → 整项不出现。
@@ -204,7 +210,9 @@ struct MenuBarQuotaSourceCheck {
         missingFable.claude.qf = nil
         try expect(MenuBarQuotaSource.metrics(in: missingFable).map(\.kind.displayName)
                     == ["Claude 5h", "Claude 周", "Codex 5h", "Codex 周",
-                        "Kimi 5h", "Kimi 订阅", "Grok"],
+                        "Kimi 5h", "Kimi 订阅", "Grok", "Antigravity Gemini 周",
+                        "Antigravity Gemini 5h", "Antigravity Claude/GPT 周",
+                        "Antigravity Claude/GPT 5h", "Antigravity Gemini 4 Argon 周"],
                    "a nil window must drop out entirely")
 
         // 数据过期 → 照常显示上次读到的数（标记 stale，状态栏变淡），不再整项消失。
@@ -221,6 +229,48 @@ struct MenuBarQuotaSourceCheck {
             .first { $0.kind.displayName == "Codex 5h" }
         try expect(reset?.value == "—" && reset?.remaining == nil && reset?.stale == true,
                    "a window that reset since the reading shows a dash")
+    }
+
+    private static func checkAntigravity() throws {
+        let ud = UserDefaults.standard
+        let keys = MenuBarQuotaSource.allCases.map(\.defaultsKey)
+        defer { keys.forEach { ud.removeObject(forKey: $0) } }
+        keys.forEach { ud.set(false, forKey: $0) }
+        ud.set(true, forKey: MenuBarQuotaSource.codexWeek.defaultsKey)
+        let gemini = MenuBarQuotaSource.antigravityGeminiWeek
+        ud.set(true, forKey: gemini.defaultsKey)
+
+        var usage = try decodeFixture(fixtureJSON)
+        let metrics = MenuBarQuotaSource.metrics(in: usage)
+        let displayed = MenuBarTitleRenderer.metricsForDisplay(metrics, density: .full)
+        try expect(displayed.map(\.kind.displayName) == ["Codex 周", "Antigravity Gemini 周"]
+            && displayed.map(\.value) == ["65", "83"], "Antigravity should fill the second slot next to Codex")
+        try expect(displayed[1].accessibilitySummary.contains("Antigravity Gemini 周")
+            && displayed[1].accessibilitySummary.contains("83%"), "status item exposes the provider and real quota")
+        for style in MenuBarStyle.allCases {
+            let title = MenuBarTitleRenderer.render(style: style, density: .full, keepAwake: false, metrics: metrics).title.string
+            try expect(title.contains("65") && title.contains("83"), "both values rendered for \(style)")
+        }
+
+        usage.antigravity.windows[0].used_pct = 100
+        try expect(MenuBarQuotaSource.metrics(in: usage).last?.remaining == 0,
+                   "exhausted Antigravity still renders as 0% remaining")
+        usage.antigravity.windows[0].usage_known = false
+        try expect(!gemini.isRenderable(in: usage) && MenuBarQuotaSource.metrics(in: usage).count == 1,
+                   "unknown Antigravity value cannot be displayed even if used_pct exists")
+        usage.antigravity.windows[0].usage_known = true
+        usage.antigravity.windows[0].used_pct = 17
+        usage.antigravity.stale = true
+        let old = MenuBarQuotaSource.metrics(in: usage).last
+        try expect(old?.value == "83" && old?.stale == true,
+                   "stale Antigravity quota keeps its last known reading")
+        usage.antigravity.stale = false
+        usage.antigravity.windows[0].reset = Int(Date().timeIntervalSince1970) - 60
+        let reset = MenuBarQuotaSource.metrics(in: usage).last
+        try expect(reset?.value == "—" && reset?.stale == true,
+                   "expired reset cannot show an old reading during the cache TTL")
+        usage.antigravity.available = false
+        try expect(!gemini.isRenderable(in: usage), "unavailable Antigravity must stay hidden")
     }
 
     private static func checkRenderable() throws {
@@ -430,6 +480,16 @@ struct MenuBarQuotaSourceCheck {
         },
         "pct": 25,
         "window": "week"
+      },
+      "antigravity": {
+        "available": true,
+        "windows": [
+          {"id": "antigravity-gemini-weekly", "used_pct": 17},
+          {"id": "antigravity-gemini-5h", "used_pct": 19},
+          {"id": "antigravity-3p-weekly", "used_pct": 23},
+          {"id": "antigravity-3p-5h", "used_pct": 29},
+          {"id": "antigravity-gemini-argon-weekly", "used_pct": 31}
+        ]
       },
       "hermes": {
         "ranges": {

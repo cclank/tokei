@@ -81,6 +81,11 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
     case kimi5h
     case kimiSubscription
     case grok
+    case antigravityGeminiWeek
+    case antigravityGemini5h
+    case antigravityClaudeGPTWeek
+    case antigravityClaudeGPT5h
+    case antigravityArgonWeek
 
     var id: String { rawValue }
 
@@ -94,6 +99,11 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .kimi5h: return "Kimi 5h"
         case .kimiSubscription: return L("Kimi 订阅")
         case .grok: return "Grok"
+        case .antigravityGeminiWeek: return "Antigravity \(L("Gemini 周"))"
+        case .antigravityGemini5h: return "Antigravity Gemini 5h"
+        case .antigravityClaudeGPTWeek: return "Antigravity \(L("Claude/GPT 周"))"
+        case .antigravityClaudeGPT5h: return "Antigravity Claude/GPT 5h"
+        case .antigravityArgonWeek: return "Antigravity \(L("Gemini 4 Argon 周"))"
         }
     }
 
@@ -108,15 +118,17 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .kimi5h: return "menuBarQuotaKimi5h"
         case .kimiSubscription: return "menuBarQuotaKimiSubscription"
         case .grok: return "menuBarQuotaGrok"
+        case .antigravityGeminiWeek: return "menuBarQuotaAntigravityGeminiWeek"
+        case .antigravityGemini5h: return "menuBarQuotaAntigravityGemini5h"
+        case .antigravityClaudeGPTWeek: return "menuBarQuotaAntigravityClaudeGPTWeek"
+        case .antigravityClaudeGPT5h: return "menuBarQuotaAntigravityClaudeGPT5h"
+        case .antigravityArgonWeek: return "menuBarQuotaAntigravityArgonWeek"
         }
     }
 
     /// 只有历史上就默认开的两项保持默认开，其余新增窗口默认关，避免抢占状态栏。
     var defaultEnabled: Bool {
-        switch self {
-        case .claude5h, .codexWeek: return true
-        case .claudeWeek, .claudeFable, .codex5h, .kimi5h, .kimiSubscription, .grok: return false
-        }
+        self == .claude5h || self == .codexWeek
     }
 
     var isEnabled: Bool {
@@ -125,11 +137,29 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         return ud.bool(forKey: defaultsKey)
     }
 
+    var antigravityWindowID: String? {
+        switch self {
+        case .antigravityGeminiWeek: return "antigravity-gemini-weekly"
+        case .antigravityGemini5h: return "antigravity-gemini-5h"
+        case .antigravityClaudeGPTWeek: return "antigravity-3p-weekly"
+        case .antigravityClaudeGPT5h: return "antigravity-3p-5h"
+        case .antigravityArgonWeek: return "antigravity-gemini-argon-weekly"
+        default: return nil
+        }
+    }
+
+    private func antigravityWindow(in usage: Usage) -> ProviderQuotaWindow? {
+        guard let id = antigravityWindowID, usage.antigravity.available else { return nil }
+        return usage.antigravity.windows.first { $0.id == id && $0.usage_known }
+    }
+
     /// Grok 的窗口随数据在周/月之间变，画不出确定的符号，所以不给它符号。
     var window: MenuBarQuotaWindow? {
         switch self {
         case .claude5h, .codex5h, .kimi5h: return .fiveHour
         case .claudeWeek, .claudeFable, .codexWeek: return .week
+        case .antigravityGemini5h, .antigravityClaudeGPT5h: return .fiveHour
+        case .antigravityGeminiWeek, .antigravityClaudeGPTWeek, .antigravityArgonWeek: return .week
         case .kimiSubscription, .grok: return nil
         }
     }
@@ -142,6 +172,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .codex5h, .codexWeek: return AppDelegate.codexColor
         case .kimi5h, .kimiSubscription: return AppDelegate.kimicodeColor
         case .grok: return AppDelegate.grokColor
+        case .antigravityGeminiWeek, .antigravityGemini5h, .antigravityClaudeGPTWeek, .antigravityClaudeGPT5h, .antigravityArgonWeek:
+            return MenuBarTokenSource.antigravity.nsColor
         }
     }
 
@@ -152,6 +184,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .codex5h, .codexWeek: return Theme.codex
         case .kimi5h, .kimiSubscription: return Theme.kimicode
         case .grok: return Theme.grok
+        case .antigravityGeminiWeek, .antigravityGemini5h, .antigravityClaudeGPTWeek, .antigravityClaudeGPT5h, .antigravityArgonWeek:
+            return Theme.gemini
         }
     }
 
@@ -166,6 +200,11 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .kimi5h: return (usage.kimicode.p5, usage.kimicode.p5_stale)
         case .kimiSubscription: return (usage.kimicode.pw, usage.kimicode.pw_stale)
         case .grok: return (usage.grok.pct, usage.grok.stale)
+        case .antigravityGeminiWeek, .antigravityGemini5h, .antigravityClaudeGPTWeek, .antigravityClaudeGPT5h, .antigravityArgonWeek:
+            guard let window = antigravityWindow(in: usage), let used = window.used_pct,
+                  (0...100).contains(used) else { return (nil, nil) }
+            let expired = window.reset.map { $0 <= Int(Date().timeIntervalSince1970) } ?? false
+            return (used, usage.antigravity.stale || expired)
         }
     }
 
@@ -180,6 +219,8 @@ enum MenuBarQuotaSource: String, CaseIterable, Identifiable {
         case .kimi5h: return usage.kimicode.r5
         case .kimiSubscription: return usage.kimicode.rw
         case .grok: return usage.grok.reset
+        case .antigravityGeminiWeek, .antigravityGemini5h, .antigravityClaudeGPTWeek, .antigravityClaudeGPT5h, .antigravityArgonWeek:
+            return antigravityWindow(in: usage)?.reset
         }
     }
 

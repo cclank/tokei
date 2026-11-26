@@ -18375,8 +18375,11 @@ def _update_catalog_prices():
                "models": models}
     _atomic_write_json(PRICING_FILE, payload)
     _record_pricing_changes(changed_models)
-    suffix = f"，保留 {retained_count} 个历史模型" if retained_count else ""
-    print(f"已更新 {active_count} 个在线模型{suffix} → {PRICING_FILE}")
+    # Whole sentences, not a spliced suffix: the app translates each line as one template.
+    if retained_count:
+        print(f"已更新 {active_count} 个在线模型，保留 {retained_count} 个历史模型 → {PRICING_FILE}")
+    else:
+        print(f"已更新 {active_count} 个在线模型 → {PRICING_FILE}")
     return 0
 
 

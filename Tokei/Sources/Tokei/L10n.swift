@@ -136,6 +136,15 @@ enum L10n {
         return text
     }
 
+    /// Translates multi-line collector output (e.g. the price update report) line by line,
+    /// since `data` matches one whole sentence at a time.
+    static func dataLines(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline)
+            .map { data($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
     private static var cachedPatterns: [(String, NSRegularExpression)]?
 
     private static func dataPatterns() -> [(String, NSRegularExpression)] {
@@ -188,6 +197,19 @@ enum L10n {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Localization").appendingPathComponent(file))
         return urls
+    }
+
+    /// Prefix the sync transaction script puts in front of its failure message.
+    static let syncErrorPrefix = "Tokei sync error: "
+
+    /// Translates the sync transaction's output for display. The script reports in Chinese,
+    /// one message per line, mixed with Git's own output, which is left as is.
+    static func syncOutput(_ output: String) -> String {
+        output.split(whereSeparator: \.isNewline).map { line -> String in
+            let text = String(line)
+            guard text.hasPrefix(syncErrorPrefix) else { return data(text) }
+            return syncErrorPrefix + data(String(text.dropFirst(syncErrorPrefix.count)))
+        }.joined(separator: "\n")
     }
 }
 

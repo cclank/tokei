@@ -196,3 +196,12 @@ export function data(text: string): string {
   }
   return text;
 }
+
+/** Translates multi-line collector output (e.g. the price update report) line by line. */
+export function dataLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => data(line.trim()))
+    .filter(Boolean)
+    .join("\n");
+}

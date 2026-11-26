@@ -4577,15 +4577,13 @@ struct PanelView: View {
             let output = String(data: data, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
                 priceUpdating = false
-                if flag == "--update-prices" {
-                    priceResult = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if flag == "--update-unknown",
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let count = json["count"] as? Int {
+                    priceResult = count > 0 ? L("补全 %@ 个模型", count) : L("所有模型已匹配 ✓")
                 } else {
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let count = json["count"] as? Int {
-                        priceResult = count > 0 ? L("补全 %@ 个模型", count) : L("所有模型已匹配 ✓")
-                    } else {
-                        priceResult = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    }
+                    // The collector reports in Chinese, one sentence per line.
+                    priceResult = L10n.dataLines(output)
                 }
                 store.refresh()
             }

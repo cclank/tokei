@@ -2,7 +2,7 @@
 // runPriceUpdate、toggleDiagnostics）。
 import { useEffect, useState } from "react";
 import { runCollector } from "../../lib/collector";
-import { L } from "../../lib/i18n";
+import { dataLines, L } from "../../lib/i18n";
 import { useUsageStore } from "../../lib/store";
 import { Icon } from "../../ui/Icon";
 import { fill, fs, T } from "../../ui/theme";
@@ -30,7 +30,8 @@ export function PricingSection() {
     let next: string;
     try {
       const output = await runCollector([flag]);
-      next = output.trim();
+      // The collector reports in Chinese, one sentence per line.
+      next = dataLines(output);
       if (flag === "--update-unknown") {
         try {
           const json = JSON.parse(output) as { count?: unknown };
@@ -42,7 +43,7 @@ export function PricingSection() {
         }
       }
     } catch (err) {
-      next = collectorError(err);
+      next = dataLines(collectorError(err));
     }
     setUpdating(false);
     setResult(next);

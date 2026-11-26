@@ -9,7 +9,7 @@ Tokei 主要读取本地 AI 工具日志，统计 token 用量与成本。额度
 | 工具 | 日志路径 | 格式 |
 |------|---------|------|
 | Claude Code | `~/.claude/*/*.jsonl` | JSONL, `type=assistant` 行含 `message.usage` |
-| Gemini / Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db` / `~/.gemini/*/chats/session-*.json` | SQLite (`gen_metadata` protobuf) / JSON (`messages[].tokens`) |
+| Gemini / Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.db`、`~/.gemini/*/chats/session-*.json`、`${T3CODE_HOME:-~/.t3}/userdata/providers/antigravity/*/antigravity-acp/conversations/*.db` | SQLite (`gen_metadata` protobuf) / JSON (`messages[].tokens`) |
 | Grok Build | `${GROK_HOME:-~/.grok}/logs/unified.jsonl` + `sessions/*/*/{summary,signals}.json` | JSONL, `shell.turn.inference_done` + 会话指标 |
 | Grok Bot | `~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob` | JSON 快照；会话、消息、响应、工具调用、时间 |
 | Qoder Desktop | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db` | SQLite, `chat_message.token_info` / `model_info` |

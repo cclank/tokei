@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# TOKEI_COLLECTOR_REVISION=19
+# TOKEI_COLLECTOR_REVISION=20
 # <bitbar.title>AI Usage Bar</bitbar.title>
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>local</bitbar.author>
@@ -5762,12 +5762,29 @@ def _codex_quota_values(limits, now_epoch=None, consumed=None):
 # - Gemini CLI: ~/.gemini/tmp/<projectHash>/chats/{session-*.json,session-*.jsonl,<parent>/*.jsonl}
 #   assistant 行 type=="gemini",tokens={input,output,cached,thoughts,total}
 # - Antigravity CLI: ~/.gemini/antigravity-cli/conversations/<uuid>.db
+# - T3 Code ACP: <T3 home>/userdata/providers/antigravity/<profile>/antigravity-acp/conversations/<uuid>.db
 #   gen_metadata 表存储 protobuf 逐步生成指标(包含 input, output, cached, thoughts, model, start_time)
+def _t3_antigravity_db_files():
+    home = _expand_path(os.environ.get("T3CODE_HOME")) or os.path.join(HOME, ".t3")
+    providers = os.path.join(os.path.realpath(home), "userdata", "providers", "antigravity")
+    if os.path.normcase(os.path.realpath(providers)) != os.path.normcase(providers):
+        return
+    for profile in glob.iglob(os.path.join(glob.escape(providers), "*")):
+        conversations = os.path.join(profile, "antigravity-acp", "conversations")
+        if os.path.normcase(os.path.realpath(conversations)) != os.path.normcase(conversations):
+            continue
+        # Profile discovery only reads the provider's direct SQLite files.
+        for path in glob.iglob(os.path.join(glob.escape(conversations), "*.db")):
+            if os.path.normcase(os.path.realpath(path)) == os.path.normcase(path):
+                yield path
+
+
 def _gemini_session_files():
-    files = []
+    files = list(_t3_antigravity_db_files())
     roots = _path_candidates("TOKEI_GEMINI_DIR", GEMINI_DIR, *GEMINI_DIRS)
     patterns = []
     for root in roots:
+        root = glob.escape(root)
         patterns.extend((
             os.path.join(root, "*.db"),
             os.path.join(root, "**", "*.db"),
@@ -5778,8 +5795,9 @@ def _gemini_session_files():
         ))
     for pattern in patterns:
         files.extend(glob.glob(pattern, recursive=True))
-    return sorted(set(os.path.realpath(path) for path in files
-                      if os.path.isfile(path) and not path.endswith("conversation_summaries.db")))
+    canonical = (os.path.realpath(path) for path in files if os.path.isfile(path)
+                 and os.path.basename(path).casefold() != "conversation_summaries.db")
+    return sorted({os.path.normcase(path): path for path in canonical}.values())
 
 
 _PROTO_VARINT_MAX_BYTES = 10  # protobuf 规范:64 位整数最多 10 个字节
@@ -5933,6 +5951,7 @@ def _load_antigravity_db(path):
     """从 Antigravity conversations/*.db 的 gen_metadata 表解析逐步 token 用量"""
     events = []
     max_ts = ""
+    sid = os.path.splitext(os.path.basename(path))[0]
     conn = None
     try:
         conn = _sqlite_open_readonly(path, timeout=1)
@@ -5941,6 +5960,13 @@ def _load_antigravity_db(path):
             step_rows = conn.execute("SELECT idx, metadata FROM steps").fetchall()
         except sqlite3.Error:
             step_rows = []
+        try:
+            ids = conn.execute("SELECT DISTINCT cascade_id FROM trajectory_meta "
+                               "WHERE cascade_id IS NOT NULL LIMIT 2").fetchall()
+        except sqlite3.Error:
+            ids = []  # Legacy databases use the conversation filename as their ID.
+        if len(ids) == 1 and isinstance(ids[0][0], str) and ids[0][0].strip():
+            sid = ids[0][0].strip()
     except Exception:
         return None
     finally:
@@ -5983,7 +6009,7 @@ def _load_antigravity_db(path):
                 max_ts = iso_ts
             events.append({
                 "timing": list(timing) if timing else None,
-                "id": f"{os.path.basename(path)}:{idx}:{record_index}",
+                "id": f"{sid}.db:{idx}:{record_index}",
                 "timestamp": iso_ts,
                 "model": model,
                 "tokens": {
@@ -5997,11 +6023,9 @@ def _load_antigravity_db(path):
 
     if not events:
         return None
-    sid = os.path.basename(path)
-    if sid.endswith(".db"):
-        sid = sid[:-3]
     return {
         "sid": sid,
+        "db_identity_checked": True,
         "updated": max_ts,
         "rank": 3,
         "events": events,
@@ -6117,27 +6141,33 @@ def _gemini_event_cost(model, inp, out, cached, thoughts):
             + (out + thoughts) * price["out"]) / 1e6
 
 
+def _reprice_antigravity_day(day):
+    if day.get("_role_pricing_version", 0) >= _ANTIGRAVITY_ROLE_PRICING_VERSION:
+        return False
+    delta = 0.0
+    matched = False
+    for model, usage in (day.get("models") or {}).items():
+        normalized = _normalize(model)
+        if not normalized or normalized.removeprefix("google/") not in _ANTIGRAVITY_MODEL_ALIASES:
+            continue
+        cost = _gemini_event_cost(model, usage.get("in", 0), usage.get("out", 0),
+                                  usage.get("cached", 0), usage.get("thoughts", 0))
+        delta += cost - usage.get("cost", 0)
+        usage["cost"] = cost
+        matched = True
+    if matched:
+        day["cost"] = max(day.get("cost", 0) + delta, 0.0)
+        day["_role_pricing_version"] = _ANTIGRAVITY_ROLE_PRICING_VERSION
+    return matched
+
+
 def _reprice_antigravity_ledger():
     """Correct retained role-model costs even when the source DB was removed."""
-    changed_days = []
+    changed_days = set()
     for dk, day in _load_ledger().get("tools", {}).get("gemini", {}).items():
-        if day.get("_role_pricing_version", 0) >= _ANTIGRAVITY_ROLE_PRICING_VERSION:
-            continue
-        delta = 0.0
-        matched = False
-        for model, usage in (day.get("models") or {}).items():
-            normalized = _normalize(model)
-            if not normalized or normalized.removeprefix("google/") not in _ANTIGRAVITY_MODEL_ALIASES:
-                continue
-            cost = _gemini_event_cost(model, usage.get("in", 0), usage.get("out", 0),
-                                      usage.get("cached", 0), usage.get("thoughts", 0))
-            delta += cost - usage.get("cost", 0)
-            usage["cost"] = cost
-            matched = True
-        if matched:
-            day["cost"] = max(day.get("cost", 0) + delta, 0.0)
-            day["_role_pricing_version"] = _ANTIGRAVITY_ROLE_PRICING_VERSION
-            changed_days.append(dk)
+        for record in (day, *(day.get("_sources") or {}).values()):
+            if _reprice_antigravity_day(record):
+                changed_days.add(dk)
     if changed_days:
         _ledger_mark_dirty(changed_days)
 
@@ -6147,12 +6177,6 @@ def scan_gemini(bounds, cache):
     ledger_touch("gemini")
     fc = cache.setdefault("gemini", {})
     files = _gemini_session_files()
-    if not files:
-        _remember_antigravity_quota_usage(fc)
-        if fc:
-            fc.clear()
-            cache["_dirty"] = True
-        return _empty_gemini()
 
     stale = set(fc)
     for path in files:
@@ -6162,10 +6186,12 @@ def scan_gemini(bounds, cache):
         except OSError:
             continue
         # SQLite 的新数据可能全在 -wal 里,主库 mtime/size 一动不动 —— 只看主库会永不刷新。
-        signature = (_sqlite_signature(path) if path.endswith(".db")
+        is_db = path.endswith(".db")
+        signature = (_sqlite_signature(path) if is_db
                      else f"{stat.st_mtime_ns}:{stat.st_size}")
         entry = fc.get(path)
-        if entry and entry.get("sig") == signature and entry.get("v") == _GEMINI_PARSE_VERSION:
+        if (entry and entry.get("sig") == signature and entry.get("v") == _GEMINI_PARSE_VERSION
+                and (not is_db or entry.get("db_identity_checked"))):
             continue
         parsed = _load_gemini_usage_file(path)
         if parsed is None:
@@ -6189,8 +6215,10 @@ def scan_gemini(bounds, cache):
         if current is None or score > current[0]:
             sessions[sid] = (score, entry)
 
-    days = {}
+    source_days = {}
+    live_sessions = {}
     for sid, (_, entry) in sessions.items():
+        session_days = source_days.setdefault(sid, {})
         for event in entry.get("events", []):
             dt = parse_ts(event.get("timestamp", ""))
             if dt is None:
@@ -6204,16 +6232,17 @@ def scan_gemini(bounds, cache):
             thoughts = int(tokens.get("thoughts", 0) or 0)
             cost = _gemini_event_cost(model, inp, out, cached, thoughts)
             day_key = dt.date().isoformat()
-            day = days.setdefault(
+            day = session_days.setdefault(
                 day_key, {"in": 0, "out": 0, "cached": 0, "thoughts": 0,
-                          "cost": 0.0, "models": {}, "sessions": set(), "hours": [0] * 24,
+                          "cost": 0.0, "models": {}, "hours": [0] * 24,
                           "_ledger_version": _GEMINI_PARSE_VERSION,
                           "_role_pricing_version": _ANTIGRAVITY_ROLE_PRICING_VERSION})
+            live_sessions.setdefault(day_key, set()).add(sid)
             timing = event.get("timing")
             if timing:
                 _perf_add(day.setdefault("perf", {}), model, out, timing[1], timing[0])
             day["in"] += inp; day["out"] += out; day["cached"] += cached
-            day["thoughts"] += thoughts; day["cost"] += cost; day["sessions"].add(sid)
+            day["thoughts"] += thoughts; day["cost"] += cost
             day["hours"][dt.hour] += inp + out + thoughts
             model_usage = day["models"].setdefault(
                 model, {"in": 0, "out": 0, "cached": 0, "thoughts": 0, "cost": 0.0})
@@ -6225,19 +6254,21 @@ def scan_gemini(bounds, cache):
              "models": {}, "sessions": set()}
          for k in RANGE_KEYS}
     # 会话数只能来自现存日志(被清日志无从归属)
-    for dk, day in days.items():
+    for dk, sids in live_sessions.items():
         try:
             d = date.fromisoformat(dk)
         except ValueError:
             continue
         for key in classify_date(d, bounds):
-            B[key]["sessions"].update(day.get("sessions", set()))
+            B[key]["sessions"].update(sids)
 
-    for dk, day in ledger_reconcile("gemini", days).items():
+    days = {}
+    for dk, day in ledger_reconcile("gemini", {}, source_days).items():
         try:
             d = date.fromisoformat(dk)
         except ValueError:
             continue
+        days[dk] = {key: value for key, value in day.items() if key != "_sources"}
         for key in classify_date(d, bounds):
             bucket = B[key]
             bucket["in"] += day.get("in", 0); bucket["out"] += day.get("out", 0)

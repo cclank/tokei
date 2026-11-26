@@ -146,6 +146,24 @@ class GeminiUsageTests(unittest.TestCase):
         USAGE._reprice_antigravity_ledger()
         self.assertFalse(USAGE._LEDGER_CACHE["dirty"], "migration must settle after one write")
 
+    def test_role_repricing_survives_flush_after_session_files_are_removed(self):
+        today = datetime.now().astimezone().date().isoformat()
+        model = "gemini-pro-orchestrator-g1-pro"
+        usage = {"in": 1000, "out": 30, "cached": 800, "thoughts": 10, "cost": 0.00104}
+        day = {**usage, "models": {model: usage.copy()}, "_ledger_version": 3}
+        USAGE._load_ledger()["tools"]["gemini"] = {
+            today: {**deepcopy(day), "_sources": {"retained-session": day}}
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(USAGE, "_LEDGER_FILE", str(Path(tmp) / "ledger.json")), \
+                mock.patch.object(USAGE, "_gemini_session_files", return_value=[]):
+            result = USAGE.scan_gemini(USAGE.range_bounds(), {})
+            self.assertAlmostEqual(result["ranges"]["all"]["cost"], 0.00088)
+            USAGE.ledger_flush()
+            stored = json.loads(Path(USAGE._LEDGER_FILE).read_text())["tools"]["gemini"][today]
+            self.assertAlmostEqual(stored["cost"], 0.00088)
+            self.assertEqual(stored["in"], 1000)
+
     def test_jsonl_updates_nested_subagents_and_migration_dedup(self):
         with tempfile.TemporaryDirectory() as tmp:
             chats = Path(tmp) / "project" / "chats"
@@ -346,19 +364,110 @@ class AntigravityRobustnessTests(unittest.TestCase):
                           + cls._field(4, 2, tokens)
                           + cls._field(9, 2, cls._field(4, 2, cls._field(1, 0, ts_sec))))
 
-    def _write_db(self, blobs, dirname="conv"):
-        root = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: shutil.rmtree(root, True))
-        directory = root / dirname
-        directory.mkdir(parents=True)
-        path = directory / "conv.db"
+    def _write_db(self, blobs, dirname="conv", *, path=None, cascade_id=None):
+        if path is None:
+            root = Path(tempfile.mkdtemp())
+            self.addCleanup(lambda: shutil.rmtree(root, True))
+            path = root / dirname / "conv.db"
+        path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path))
         conn.execute("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB)")
+        if cascade_id is not None:
+            conn.execute("CREATE TABLE trajectory_meta (cascade_id TEXT)")
+            conn.execute("INSERT INTO trajectory_meta VALUES (?)", (cascade_id,))
         for idx, blob in enumerate(blobs):
             conn.execute("INSERT INTO gen_metadata VALUES (?, ?)", (idx, blob))
         conn.commit()
         conn.close()
         return str(path)
+
+    def test_t3_profiles_merge_with_native_sessions_and_keep_archived_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            native = home / ".gemini" / "antigravity" / "conversations"
+            profiles = home / ".t3" / "userdata" / "providers" / "antigravity"
+            first = profiles / "first" / "antigravity-acp" / "conversations"
+            second = profiles / "second" / "antigravity-acp" / "conversations"
+            stamp = int(datetime.now().astimezone().timestamp())
+            for directory, name, sid, tokens in (
+                (first, "same.db", "t3-first", 1000),
+                (second, "same.db", "t3-second", 2000),
+                (native, "app.db", "app", 100),
+            ):
+                self._write_db([self._step(stamp, inp=tokens, cached=0)],
+                               path=directory / name, cascade_id=sid)
+            shutil.copy2(first / "same.db", native / "renamed-copy.db")
+            with mock.patch.object(USAGE, "HOME", str(home)), \
+                    mock.patch.object(USAGE, "GEMINI_DIR", str(native)), \
+                    mock.patch.object(USAGE, "GEMINI_DIRS", [str(native)]), \
+                    mock.patch.object(USAGE, "_LEDGER_FILE", str(home / "ledger.json")), \
+                    mock.patch.object(USAGE, "_LEDGER_TODAY_FLUSH_INTERVAL", 0), \
+                    mock.patch.object(USAGE, "_ANTIGRAVITY_QUOTA_USAGE_FILE", str(home / "cycles.json")), \
+                    mock.patch.dict(os.environ, {"T3CODE_HOME": "", "TOKEI_GEMINI_DIR": str(first)}):
+                cache = {}
+                bounds = USAGE.range_bounds()
+                self.assertEqual(len(USAGE._gemini_session_files()), 4)
+                usage = USAGE.scan_gemini(bounds, cache)["ranges"]["all"]
+                self.assertEqual(usage["in"], 3100)
+                self.assertEqual(usage["sessions"], {"t3-first", "t3-second", "app"})
+                events = USAGE._remember_antigravity_quota_usage(cache["gemini"])
+                self.assertEqual(sorted(row[2] for row in events.values()), [100, 1000, 2000])
+                USAGE.ledger_flush()
+                (first / "same.db").unlink()
+                (second / "same.db").unlink()
+                (native / "renamed-copy.db").unlink()
+                (native / "app.db").unlink()
+                # A new independent session must add to the retained T3 sessions.
+                self._write_db([self._step(stamp, inp=60, cached=0)],
+                               path=native / "new.db", cascade_id="app-next")
+                USAGE._LEDGER_CACHE["data"] = None
+                usage = USAGE.scan_gemini(bounds, {})["ranges"]["all"]
+                self.assertEqual(usage["in"], 3160)
+                self.assertEqual(usage["sessions"], {"app-next"})
+
+    def test_t3_home_override_is_discovered_on_the_next_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            directory = home / "T3 data [测试]" / "userdata" / "providers" / "antigravity" \
+                / "profile" / "antigravity-acp" / "conversations"
+            with mock.patch.object(USAGE, "HOME", str(home)), \
+                    mock.patch.object(USAGE, "GEMINI_DIR", str(home / ".gemini")), \
+                    mock.patch.object(USAGE, "GEMINI_DIRS", []), \
+                    mock.patch.dict(os.environ, {"T3CODE_HOME": str(home / "T3 data [测试]"),
+                                                 "TOKEI_GEMINI_DIR": ""}):
+                self.assertEqual(USAGE._gemini_session_files(), [])
+                directory.mkdir(parents=True)
+                db = directory / "profile.db"
+                db.touch()
+                (directory / "conversation_summaries.db").touch()
+                (directory / "session-unrelated.jsonl").touch()
+                (directory / "nested").mkdir()
+                (directory / "nested" / "unrelated.db").touch()
+                self.assertEqual(USAGE._gemini_session_files(), [str(db.resolve())])
+
+    def test_t3_discovery_does_not_follow_links_outside_the_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            profiles = home / ".t3" / "userdata" / "providers" / "antigravity"
+            conversations = profiles / "profile" / "antigravity-acp" / "conversations"
+            conversations.mkdir(parents=True)
+            real_db = conversations / "profile.db"
+            real_db.touch()
+            other_profile = home / "unrelated-profile"
+            other_conversations = other_profile / "antigravity-acp" / "conversations"
+            other_conversations.mkdir(parents=True)
+            other_db = other_conversations / "unrelated.db"
+            other_db.touch()
+            try:
+                (profiles / "linked-profile").symlink_to(other_profile, target_is_directory=True)
+                (conversations / "linked.db").symlink_to(other_db)
+            except OSError as error:
+                self.skipTest(f"Symbolic links unavailable: {error}")
+            with mock.patch.object(USAGE, "HOME", str(home)), \
+                    mock.patch.object(USAGE, "GEMINI_DIR", str(home / ".gemini")), \
+                    mock.patch.object(USAGE, "GEMINI_DIRS", []), \
+                    mock.patch.dict(os.environ, {"T3CODE_HOME": "", "TOKEI_GEMINI_DIR": ""}):
+                self.assertEqual(USAGE._gemini_session_files(), [str(real_db.resolve())])
 
     def test_current_antigravity_rows_use_referenced_step_timestamp(self):
         now_sec = int(datetime.now().astimezone().timestamp())

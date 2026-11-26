@@ -718,6 +718,16 @@ def _predecessor_pricing_id(normalized):
     return None
 
 
+_CLAUDE_CONTEXT_SUFFIX_RE = re.compile(r"\[\d+[km]\]$", re.IGNORECASE)
+
+
+def _claude_base_model(model):
+    """剥离 Claude Code 写入 cost-state 的上下文窗口后缀（如 [1m]），与消息里的模型名对齐。"""
+    if not isinstance(model, str):
+        return model
+    return _CLAUDE_CONTEXT_SUFFIX_RE.sub("", model.strip())
+
+
 def _normalize(model: str):
     """本地 model 名 → OpenRouter canonical id。免费档去 :free 按基础价;preview 后缀保留。"""
     m = (model or "").strip().lower()
@@ -732,6 +742,7 @@ def _normalize(model: str):
     if "/" in m:
         return m                                      # 已是 OpenRouter 格式
     if m.startswith("claude"):
+        m = _CLAUDE_CONTEXT_SUFFIX_RE.sub("", m)
         # 日期快照与 -latest 同基础版一个价：claude-opus-5-5-20260921 → claude-opus-5-5。
         # 不剥的话下一行会把「5-20260921」当成版本号，最后按家族兜底成别的型号计价。
         m = re.sub(r"-(?:\d{8}|latest)$", "", m)
@@ -2525,6 +2536,53 @@ def _dedupe_claude_events(file_events):
 
 
 _CLAUDE_SIDE_FIELDS = ("in", "out", "cr", "cw", "cw5", "cw1", "ws")
+_CLAUDE_ACCOUNTING_VERSION = 2
+
+
+def _claude_normalize_cost_usage(usage):
+    """把 cost-state 的 modelUsage 按基础模型名合并（如 claude-opus-5-5[1m] → claude-opus-5-5）。"""
+    merged = {}
+    for raw_model, u in (usage or {}).items():
+        if not isinstance(u, dict):
+            continue
+        model = _claude_base_model(raw_model) or raw_model
+        cur = merged.get(model)
+        if cur is None:
+            merged[model] = dict(u)
+        else:
+            for key in _CLAUDE_SIDE_FIELDS:
+                cur[key] = int(cur.get(key, 0) or 0) + int(u.get(key, 0) or 0)
+            if "cost_usd" in cur and "cost_usd" in u:
+                cur["cost_usd"] = cur["cost_usd"] + u["cost_usd"]
+            else:
+                cur.pop("cost_usd", None)
+    return merged
+
+
+def _claude_cost_usage_total(usage):
+    return sum(
+        int((u or {}).get(key, 0) or 0)
+        for u in (usage or {}).values()
+        for key in ("in", "out", "cr", "cw")
+    )
+
+
+def _claude_usage_le(before, after):
+    return all(
+        int((after.get(model) or {}).get(key, 0) or 0) >= int(u.get(key, 0) or 0)
+        for model, u in before.items()
+        for key in _CLAUDE_SIDE_FIELDS
+    )
+
+
+def _claude_event_dedup_key(event):
+    mid = event.get("mid")
+    if mid:
+        return ("message", mid, event.get("request_id"))
+    event_id = event.get("event_id")
+    if event_id:
+        return ("event", event_id)
+    return None
 
 
 def _claude_subagent_parent(path):
@@ -2535,7 +2593,116 @@ def _claude_subagent_parent(path):
     return os.path.dirname(folder) + ".jsonl"
 
 
-def _claude_side_events(path, entry, sub_events=()):
+def _claude_inherited_cost_states(file_cache, subs):
+    """识别跨文件续接会话：新日志沿用原会话 startTime 且首条非空 cost-state 延续原会话累计值时，
+    返回 {新文件路径: (续接前快照, 续接前时刻, 已被原快照覆盖的消息去重键集合)}。"""
+    records = {}
+    by_start = {}
+    for path, entry in file_cache.items():
+        if not isinstance(entry, dict):
+            continue
+        states = sorted((s for s in entry.get("costs") or [] if isinstance(s, dict)),
+                        key=lambda s: s.get("line", 0))
+        if not states:
+            continue
+        own = [e for e in entry.get("events", []) if isinstance(e, dict)]
+        keys = set()
+        earliest = None
+        for e in own:
+            key = _claude_event_dedup_key(e)
+            if key is not None:
+                keys.add(key)
+            dt = parse_ts(e.get("timestamp", ""))
+            if dt is not None:
+                ts = dt.timestamp()
+                earliest = ts if earliest is None else min(earliest, ts)
+        norm_states = []
+        for s in states:
+            usage = _claude_normalize_cost_usage(s.get("usage"))
+            st = s.get("start_time")
+            norm_states.append((s, usage, st))
+            if isinstance(st, int) and not isinstance(st, bool) and st > 0:
+                by_start.setdefault(st, set()).add(path)
+        records[path] = {"states": norm_states, "own": own, "keys": keys,
+                         "earliest": earliest, "dir": os.path.dirname(path)}
+
+    inherited = {}
+    for path, rec in records.items():
+        first = next(((s, u, st) for s, u, st in rec["states"] if u), None)
+        if first is None:
+            continue
+        first_state, first_usage, start_time = first
+        if not (isinstance(start_time, int) and not isinstance(start_time, bool) and start_time > 0):
+            continue
+        siblings = by_start.get(start_time)
+        if not siblings or len(siblings) < 2:
+            continue
+        first_at = first_state.get("at")
+        first_tot = _claude_cost_usage_total(first_usage)
+        best = None
+        predecessors = []
+        for other_path in siblings:
+            if other_path == path:
+                continue
+            other = records[other_path]
+            if other["dir"] != rec["dir"] and not (rec["keys"] & other["keys"]):
+                continue
+            for cand_state, cand_usage, cand_st in other["states"]:
+                if cand_st != start_time:
+                    continue
+                if not any(int(u.get(k, 0) or 0) > 0
+                           for u in cand_usage.values() for k in _CLAUDE_SIDE_FIELDS):
+                    continue
+                if not _claude_usage_le(cand_usage, first_usage):
+                    continue
+                cand_at = cand_state.get("at")
+                if cand_at is not None and first_at is not None and cand_at > first_at:
+                    continue
+                cand_tot = _claude_cost_usage_total(cand_usage)
+                strictly_before = (
+                    cand_tot < first_tot
+                    or (cand_at is not None and first_at is not None and cand_at < first_at)
+                    or (cand_tot == first_tot and (
+                        other["earliest"] if other["earliest"] is not None else math.inf, other_path
+                    ) < (
+                        rec["earliest"] if rec["earliest"] is not None else math.inf, path
+                    ))
+                )
+                if not strictly_before:
+                    continue
+                rank = (cand_tot, cand_at if cand_at is not None else -math.inf,
+                        -(other["earliest"] or 0.0), other_path)
+                predecessors.append((other_path, cand_state, cand_tot))
+                if best is None or rank > best[0]:
+                    best = (rank, other_path, cand_state, cand_usage)
+        if best is None:
+            continue
+        best_tot, _, _, _ = best[0]
+        _, _, best_state, best_usage = best
+        covered_keys = set()
+        for pred_path, pred_state, pred_tot in predecessors:
+            if pred_tot > best_tot:
+                continue
+            pred_line = pred_state.get("line", 0)
+            pred_at = pred_state.get("at")
+            for e in records[pred_path]["own"]:
+                if e.get("line", 0) < pred_line:
+                    key = _claude_event_dedup_key(e)
+                    if key is not None:
+                        covered_keys.add(key)
+            if pred_at is not None:
+                for e in subs.get(pred_path, ()):
+                    dt = parse_ts(e.get("timestamp", ""))
+                    if dt is not None and dt.timestamp() <= pred_at:
+                        key = _claude_event_dedup_key(e)
+                        if key is not None:
+                            covered_keys.add(key)
+        inherited[path] = (best_usage, best_state.get("at"), covered_keys)
+    return inherited
+
+
+def _claude_side_events(path, entry, sub_events=(), initial_base=None,
+                        initial_at=None, inherited_keys=None):
     """把会话的 cost-state 行换算成侧调用事件。
 
     Claude Code 只把主对话的回复写成 assistant 消息。Haiku 替主模型搜索、读网页，主模型压缩上下文
@@ -2555,21 +2722,33 @@ def _claude_side_events(path, entry, sub_events=()):
             timed_subs.append((dt.timestamp(), e))
     name = os.path.basename(path)
     result = []
-    prev, prev_line, prev_at = {}, 0, None
+    prev = _claude_normalize_cost_usage(initial_base) if initial_base else {}
+    prev_line, prev_at = 0, initial_at
+    skip_keys = set(inherited_keys) if inherited_keys else set()
     for state in states:
         line, at = state.get("line", 0), state.get("at")
-        usage = state.get("usage") or {}
+        usage = _claude_normalize_cost_usage(state.get("usage"))
+        if not usage and prev_line == 0 and prev:
+            continue
         restart = any(
             int((usage.get(model) or {}).get(key, 0)) < int(before.get(key, 0))
             for model, before in prev.items() for key in _CLAUDE_SIDE_FIELDS)
         base = {} if restart else prev
-        segment = [e for e in own if prev_line < e.get("line", 0) < line]
+        segment = [
+            e for e in own
+            if prev_line < e.get("line", 0) < line
+            and (restart or _claude_event_dedup_key(e) not in skip_keys)
+        ]
         if at is not None:
-            segment += [e for t, e in timed_subs if (prev_at is None or t > prev_at) and t <= at]
+            segment += [
+                e for t, e in timed_subs
+                if (prev_at is None or t > prev_at) and t <= at
+                and (restart or _claude_event_dedup_key(e) not in skip_keys)
+            ]
         logged = {}
         for _, e in _dedupe_claude_events((path, e) for e in segment):
-            total = logged.setdefault(e.get("model") or "unknown",
-                                      dict.fromkeys(_CLAUDE_SIDE_FIELDS, 0))
+            model_key = _claude_base_model(e.get("model") or "unknown") or "unknown"
+            total = logged.setdefault(model_key, dict.fromkeys(_CLAUDE_SIDE_FIELDS, 0))
             for key in _CLAUDE_SIDE_FIELDS:
                 total[key] += int(e.get(key) or 0)
             total["cost"] = total.get("cost", 0.0) + e["cost"]
@@ -2609,6 +2788,7 @@ def _claude_side_events(path, entry, sub_events=()):
                         event["cost"] = max(event["cost"], remaining_cost)
             result.append(event)
         prev, prev_line, prev_at = usage, line, at
+        skip_keys = set()
     return result
 
 
@@ -2620,13 +2800,17 @@ def _claude_events_with_side(file_cache):
         if parent and isinstance(entry, dict):
             subs.setdefault(parent, []).extend(
                 e for e in entry.get("events", []) if isinstance(e, dict))
+    inherited = _claude_inherited_cost_states(file_cache, subs)
     pairs = []
     for path, entry in file_cache.items():
         if not isinstance(entry, dict):
             continue
         for event in entry.get("events", []):
             pairs.append((path, event))
-        for event in _claude_side_events(path, entry, subs.get(path, ())):
+        init_base, init_at, init_keys = inherited.get(path, (None, None, None))
+        for event in _claude_side_events(path, entry, subs.get(path, ()),
+                                         initial_base=init_base, initial_at=init_at,
+                                         inherited_keys=init_keys):
             pairs.append((path, event))
     return pairs
 
@@ -2637,7 +2821,8 @@ def _claude_events_with_side(file_cache):
 # 4：缓存分模型成本快照，并把已记录的搜索费计入消息成本。
 # 5：保留消息中明确归属到模型的 WebFetch 次数。
 # 6：读取消息实际使用的 Fast 模式，以便对 Fable 5.2 分开计价。
-_CLAUDE_PERF_VERSION = 6
+# 7：记录 cost-state 的 startTime，并剥离 [1m] 等上下文后缀以正确计算续接与长上下文会话的侧调用。
+_CLAUDE_PERF_VERSION = 7
 # 顶层的 uuid 和 timestamp 紧挨着，正文里的引号都是转义过的，所以这个模式只会命中顶层字段。
 # 用它取用户消息、工具结果这些行的写入时间，不必整行解析大段的工具输出。
 _CLAUDE_LINE_TIME = re.compile(r'"uuid"\s*:\s*"([0-9a-f-]{36})"\s*,\s*"timestamp"\s*:\s*"([^"]+)"')
@@ -2674,7 +2859,7 @@ _CLAUDE_USER_LINE = re.compile(
 
 
 def _claude_cost_state(line, line_number, at):
-    """会话结束时的 cost-state 行 → {line, at, usage: {模型: 累计用量}}；不是就返回 None。"""
+    """会话结束时的 cost-state 行 → {line, at, usage: {模型: 累计用量}, start_time?}；不是就返回 None。"""
     try:
         o = json.loads(line)
     except Exception:
@@ -2700,8 +2885,23 @@ def _claude_cost_state(line, line_number, at):
         if (not o.get("hasUnknownModelCost") and isinstance(cost, (int, float))
                 and not isinstance(cost, bool) and 0 <= cost < math.inf):
             model_usage["cost_usd"] = cost
-        models[model] = model_usage
-    return {"line": line_number, "at": at, "usage": models}
+        base_model = _claude_base_model(model) or model
+        prev_model = models.get(base_model)
+        if prev_model is None:
+            models[base_model] = model_usage
+        else:
+            for key in _CLAUDE_SIDE_FIELDS:
+                prev_model[key] += model_usage[key]
+            if "cost_usd" in prev_model and "cost_usd" in model_usage:
+                prev_model["cost_usd"] += model_usage["cost_usd"]
+            else:
+                prev_model.pop("cost_usd", None)
+    state = {"line": line_number, "at": at, "usage": models}
+    start_time = o.get("startTime")
+    if (isinstance(start_time, (int, float)) and not isinstance(start_time, bool)
+            and math.isfinite(start_time) and start_time > 0):
+        state["start_time"] = int(start_time)
+    return state
 
 
 def _claude_parse_lines(handle, offset, line_number, events, when, via, costs=None):
@@ -2878,12 +3078,16 @@ def scan_claude(bounds, cache):
             cur_file = f
         sig = f"{mtime}:{size}"
         entry = fc.get(f)
-        # v5 里只有含 Fable 5.2 的文件需要重新读取原日志，补出请求的 Fast 状态。
-        if (entry and entry.get("perf_v") == 5
-                and not _cached_entry_has_pricing_change(
-                    {"events": entry.get("events")}, _CLAUDE_FAST_PRICE_MULTIPLIERS)):
-            entry["perf_v"] = 6
-            changed = True
+        # v5 里只有含 Fable 5.2 的文件需要重新读取原日志，补出请求的 Fast 状态；
+        # v6 里只有含 cost-state 的文件需要重读补出 startTime 与基础模型归一化。
+        if entry and entry.get("perf_v") in (5, 6):
+            needs_fast = (entry.get("perf_v") == 5
+                          and _cached_entry_has_pricing_change(
+                              {"events": entry.get("events")}, _CLAUDE_FAST_PRICE_MULTIPLIERS))
+            needs_costs = bool(entry.get("costs"))
+            if not needs_fast and not needs_costs:
+                entry["perf_v"] = _CLAUDE_PERF_VERSION
+                changed = True
         if (not entry or entry.get("sig") != sig
                 or entry.get("perf_v") != _CLAUDE_PERF_VERSION):
             try:
@@ -2984,8 +3188,32 @@ def scan_claude(bounds, cache):
     for dk, names in day_projects.items():
         live_days[dk]["projects"] = sorted(names)[:3]
 
-    for dk, day in ledger_reconcile("claude", live_days, _ledger_file_sources(
-            fc, lambda path, _: os.path.basename(path))).items():
+    claude_sources = _ledger_file_sources(
+        fc, lambda path, _: os.path.basename(path),
+        accounting_version=_CLAUDE_ACCOUNTING_VERSION)
+    # 仍在盘上的会话升级到新版口径后，若某天不再产生事件（例如旧版虚增的 [1m]/续接侧调用），
+    # 用同来源 ID 的新版空记录替换旧版快照；已删除日志仍保留在账本中。
+    stored_claude = _load_ledger()["tools"].get("claude") or {}
+    if stored_claude:
+        live_identities = {}
+        for path, entry in fc.items():
+            if not isinstance(entry, dict):
+                continue
+            ident = os.path.basename(path)
+            live_identities.setdefault(ident, set()).update((entry.get("days") or {}).keys())
+        for ident, live_day_keys in live_identities.items():
+            source_id = hashlib.sha256(str(ident).encode()).hexdigest()
+            for dk, kept in stored_claude.items():
+                if dk in live_day_keys or not isinstance(kept, dict):
+                    continue
+                prev_src = (kept.get("_sources") or {}).get(source_id)
+                if (isinstance(prev_src, dict)
+                        and prev_src.get("_accounting_version", 0) < _CLAUDE_ACCOUNTING_VERSION):
+                    claude_sources.setdefault(ident, {})[dk] = {
+                        "_accounting_version": _CLAUDE_ACCOUNTING_VERSION,
+                    }
+
+    for dk, day in ledger_reconcile("claude", live_days, claude_sources).items():
         try:
             d = date.fromisoformat(dk)
         except ValueError:

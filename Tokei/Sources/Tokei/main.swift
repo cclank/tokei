@@ -429,6 +429,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             guard let self = self, self.popover.isShown else { return }
             if let popoverWindow = self.popover.contentViewController?.view.window,
                popoverWindow == event.window { return }
+            // Recent macOS hosts status items in a system process, so a click on our own
+            // icon also arrives here. Closing on that mouse-down makes the mouse-up in
+            // handleStatusItemClick see a closed panel and reopen it, so the icon could
+            // never hide the panel. Leave clicks on the icon to handleStatusItemClick.
+            let point = event.window?.convertPoint(toScreen: event.locationInWindow)
+                ?? event.locationInWindow
+            if let button = self.statusItem?.button,
+               PopoverAnchor.statusItem(button, contains: point) { return }
             self.popover.close()
         }
 

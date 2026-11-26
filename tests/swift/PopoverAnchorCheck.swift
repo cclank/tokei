@@ -20,6 +20,23 @@ struct PopoverAnchorCheck {
         try expect(PopoverAnchorGeometry.visibleButtonRect(
             insetButton.offsetBy(dx: 0, dy: -50), screen: primary, menuBarHeight: 33
         ) == nil, "a taller menu bar still rejects offscreen or hidden button positions")
+        // A click on our own icon is not an outside click: the full menu bar height
+        // counts, neighbouring icons and anything below the menu bar do not.
+        for (point, expected) in [(NSPoint(x: 944, y: 1064), true),
+                                  (NSPoint(x: 933, y: 1079.5), true),
+                                  (NSPoint(x: 955, y: 1047), true),
+                                  (NSPoint(x: 932, y: 1064), false),
+                                  (NSPoint(x: 956, y: 1064), false),
+                                  (NSPoint(x: 944, y: 1040), false),
+                                  (NSPoint(x: CGFloat.nan, y: 1064), false)] {
+            try expect(PopoverAnchorGeometry.statusItemContains(
+                point, buttonRect: insetButton, screen: primary, menuBarHeight: 33
+            ) == expected, "status-item hit test at \(point) should be \(expected)")
+        }
+        try expect(!PopoverAnchorGeometry.statusItemContains(
+            NSPoint(x: 944, y: 1014), buttonRect: insetButton.offsetBy(dx: 0, dy: -50),
+            screen: primary, menuBarHeight: 33
+        ), "a hidden status item never swallows outside clicks")
         for screen in [primary, external] {
             let button = NSRect(x: screen.minX + 900, y: screen.maxY - menu, width: 64, height: menu)
             try expect(PopoverAnchorGeometry.visibleButtonRect(button, screen: screen,

@@ -16,6 +16,19 @@ enum PopoverAnchorGeometry {
         }
         return rect
     }
+
+    /// Whether a point in screen coordinates lies on the stretch of menu bar the status
+    /// button occupies. The button is centred in a taller status-bar window, so the
+    /// padding above and below it counts as the icon too.
+    static func statusItemContains(_ point: NSPoint, buttonRect: NSRect, screen: NSRect,
+                                   menuBarHeight: CGFloat) -> Bool {
+        guard point.x.isFinite, point.y.isFinite,
+              let rect = visibleButtonRect(buttonRect, screen: screen,
+                                           menuBarHeight: menuBarHeight) else { return false }
+        return point.x >= rect.minX && point.x <= rect.maxX &&
+            point.y >= screen.maxY - max(menuBarHeight, rect.height) - 1 &&
+            point.y <= screen.maxY + 1
+    }
 }
 
 /// 由 AppDelegate 的主线程事件入口调用，与现有 AppKit 生命周期保持一致。
@@ -30,17 +43,35 @@ final class PopoverAnchor {
     private(set) var screenFrame: NSRect?
     var view: NSView? { panel?.contentView }
 
-    @discardableResult
-    func update(from button: NSStatusBarButton) -> Bool {
-        precondition(Thread.isMainThread)
+    private static func geometry(
+        of button: NSStatusBarButton
+    ) -> (buttonRect: NSRect, screenFrame: NSRect, menuBarHeight: CGFloat)? {
         guard let window = button.window, window.isVisible, let screen = window.screen else {
-            return false
+            return nil
         }
         // 大菜单栏等布局下，按钮会居中放在比 system.thickness 更高的窗口里。
         // 用实际状态栏窗口高度覆盖这段留白，避免把仍可见的按钮误判为收起。
         let menuBarHeight = max(NSStatusBar.system.thickness, window.frame.height)
-        return update(buttonRect: window.convertToScreen(button.convert(button.bounds, to: nil)),
-                      screenFrame: screen.frame, menuBarHeight: menuBarHeight)
+        return (window.convertToScreen(button.convert(button.bounds, to: nil)),
+                screen.frame, menuBarHeight)
+    }
+
+    /// Whether a point in screen coordinates lies on this status button. Always false
+    /// while the button is hidden or off screen.
+    static func statusItem(_ button: NSStatusBarButton, contains point: NSPoint) -> Bool {
+        precondition(Thread.isMainThread)
+        guard let geometry = geometry(of: button) else { return false }
+        return PopoverAnchorGeometry.statusItemContains(
+            point, buttonRect: geometry.buttonRect, screen: geometry.screenFrame,
+            menuBarHeight: geometry.menuBarHeight)
+    }
+
+    @discardableResult
+    func update(from button: NSStatusBarButton) -> Bool {
+        precondition(Thread.isMainThread)
+        guard let geometry = Self.geometry(of: button) else { return false }
+        return update(buttonRect: geometry.buttonRect, screenFrame: geometry.screenFrame,
+                      menuBarHeight: geometry.menuBarHeight)
     }
 
     @discardableResult

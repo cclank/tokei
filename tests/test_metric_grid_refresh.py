@@ -29,6 +29,7 @@ class MetricGridRefreshTests(unittest.TestCase):
         source = (ROOT / "tests/swift/MetricGridRefreshCheck.swift.in").read_text(encoding="utf-8")
         cells = source_block(design, "struct MetricCell: View")
         cells += "\n" + source_block(design, "struct RingMetricCell: View")
+        cells += "\n" + source_block(design, "struct EqualHeightGrid: Layout")
         identity_marker = "private enum MetricGridCell: Identifiable"
         identity = source_block(panel, identity_marker) if identity_marker in panel else ""
         source = source.replace("/* PRODUCTION_CELLS */", cells)

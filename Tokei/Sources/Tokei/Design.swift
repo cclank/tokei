@@ -102,6 +102,7 @@ enum Theme {
 // 毛玻璃之上的浮起卡片:淡色填充 + 渐变描边 + 柔和投影。
 struct Card<Content: View>: View {
     var tint: Color
+    var liftsOnHover = true
     @ViewBuilder var content: () -> Content
     @State private var hover = false
     var body: some View {
@@ -132,7 +133,7 @@ struct Card<Content: View>: View {
             .shadow(color: Color.black.opacity(hover ? 0.42 : 0.30),
                     radius: hover ? 16 : 12, x: 0, y: hover ? 9 : 6)
             .scaleEffect(hover ? 1.012 : 1)
-            .onHover { hover = $0 }
+            .onHover { if liftsOnHover { hover = $0 } }
             .animation(.easeOut(duration: 0.18), value: hover)
     }
 }
@@ -142,22 +143,30 @@ struct EqualHeightGrid: Layout {
     var hSpacing: CGFloat = 13
     var vSpacing: CGFloat = 13
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard !subviews.isEmpty else { return .zero }
-        let colW = colWidth(in: proposal.width ?? 600)
-        var h: CGFloat = 0
-        for row in stride(from: 0, to: subviews.count, by: columns) {
-            if row > 0 { h += vSpacing }
-            h += rowHeight(row: row, colW: colW, subviews: subviews)
-        }
-        return CGSize(width: proposal.width ?? 600, height: h)
+    struct Cache {
+        var columnWidth: CGFloat? = nil
+        var rowHeights: [CGFloat] = []
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    // SwiftUI recreates the cache when the layout or its subviews change.
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width ?? 600
+        let colW = colWidth(in: width)
+        let heights = measureRows(at: colW, subviews: subviews)
+        cache = Cache(columnWidth: colW, rowHeights: heights)
+        guard !heights.isEmpty else { return .zero }
+        let height = heights.reduce(0, +) + CGFloat(heights.count - 1) * vSpacing
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         let colW = colWidth(in: bounds.width)
+        let heights = cache.columnWidth == colW ? cache.rowHeights : measureRows(at: colW, subviews: subviews)
         var y = bounds.minY
-        for row in stride(from: 0, to: subviews.count, by: columns) {
-            let rh = rowHeight(row: row, colW: colW, subviews: subviews)
+        for (rowIndex, rh) in heights.enumerated() {
+            let row = rowIndex * columns
             for i in row..<min(row + columns, subviews.count) {
                 let x = bounds.minX + CGFloat(i - row) * (colW + hSpacing)
                 subviews[i].place(at: CGPoint(x: x, y: y), anchor: .topLeading,
@@ -170,10 +179,15 @@ struct EqualHeightGrid: Layout {
     private func colWidth(in total: CGFloat) -> CGFloat {
         (total - hSpacing * CGFloat(columns - 1)) / CGFloat(columns)
     }
-    private func rowHeight(row: Int, colW: CGFloat, subviews: Subviews) -> CGFloat {
-        (row..<min(row + columns, subviews.count)).map {
-            subviews[$0].sizeThatFits(.init(width: colW, height: nil)).height
-        }.max() ?? 0
+
+    private func measureRows(at columnWidth: CGFloat, subviews: Subviews) -> [CGFloat] {
+        stride(from: 0, to: subviews.count, by: columns).map { row in
+            var height: CGFloat = 0
+            for index in row..<min(row + columns, subviews.count) {
+                height = max(height, subviews[index].sizeThatFits(.init(width: columnWidth, height: nil)).height)
+            }
+            return height
+        }
     }
 }
 

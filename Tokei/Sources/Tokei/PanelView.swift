@@ -58,7 +58,18 @@ struct PanelView: View {
         let active: Bool
         let tint: Color
         var presentation: ToolCardPresentation = .standard
-        let content: AnyView
+        let makeContent: () -> AnyView
+
+        init(id: String, name: String, visible: Bool, active: Bool, tint: Color,
+             presentation: ToolCardPresentation = .standard, content: @autoclosure @escaping () -> AnyView) {
+            self.id = id
+            self.name = name
+            self.visible = visible
+            self.active = active
+            self.tint = tint
+            self.presentation = presentation
+            makeContent = content
+        }
     }
     @AppStorage("showClaude") private var showClaude = true
     @AppStorage("showCodex") private var showCodex = true
@@ -611,18 +622,22 @@ struct PanelView: View {
         if useWide {
             EqualHeightGrid(columns: ordered.count == 1 ? 1 : 2) {
                 ForEach(ordered) { item in
-                    Card(tint: item.tint) { item.content }
-                        .id(cardContentIdentity(for: item))
+                    toolCard(item)
                 }
             }
         } else {
             VStack(spacing: 13) {
                 ForEach(ordered) { item in
-                    Card(tint: item.tint) { item.content }
-                        .id(cardContentIdentity(for: item))
+                    toolCard(item)
                 }
             }
         }
+    }
+
+    private func toolCard(_ item: ToolCardItem) -> some View {
+        // Scrolling under a stationary pointer must not animate each passing card.
+        Card(tint: item.tint, liftsOnHover: false, content: item.makeContent)
+            .id(cardContentIdentity(for: item))
     }
 
     private func cardContentIdentity(for item: ToolCardItem) -> String {

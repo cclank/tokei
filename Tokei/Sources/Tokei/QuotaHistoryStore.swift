@@ -68,6 +68,7 @@ final class QuotaHistoryStore: ObservableObject {
 
     private let fileURL: URL
     private let retentionSeconds: Int
+    private let persistenceQueue = DispatchQueue(label: "tokei.quotaHistory.persistence", qos: .utility)
     private var state: QuotaHistoryState
 
     init(
@@ -88,7 +89,7 @@ final class QuotaHistoryStore: ObservableObject {
         var changed = false
 
         let retained = points.filter { $0.timestamp >= cutoff }
-        if retained != points {
+        if retained.count != points.count {
             points = retained
             changed = true
         }
@@ -179,6 +180,10 @@ final class QuotaHistoryStore: ObservableObject {
         return points.filter { $0.timestamp >= cutoff }
     }
 
+    func flushPendingWrites() {
+        persistenceQueue.sync {}
+    }
+
     private static func loadState(from fileURL: URL) -> QuotaHistoryState {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return QuotaHistoryState()
@@ -198,17 +203,20 @@ final class QuotaHistoryStore: ObservableObject {
     }
 
     private func saveState() {
-        let directory = fileURL.deletingLastPathComponent()
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(state)
-            try data.write(to: fileURL, options: .atomic)
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: fileURL.path
-            )
-        } catch {
-            fputs("Tokei quota history write failed: \(error)\n", stderr)
+        // Publish points immediately and write immutable snapshots in capture order.
+        persistenceQueue.async { [fileURL, state] in
+            do {
+                try FileManager.default.createDirectory(
+                    at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                let data = try JSONEncoder().encode(state)
+                try data.write(to: fileURL, options: .atomic)
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: fileURL.path
+                )
+            } catch {
+                fputs("Tokei quota history write failed: \(error)\n", stderr)
+            }
         }
     }
 

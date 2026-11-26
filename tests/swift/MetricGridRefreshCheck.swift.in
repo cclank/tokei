@@ -44,8 +44,13 @@ struct Probe: View {
             metrics.insert(.init("circle.hexagongrid.fill", "Credits", "\(fixture.step)"), at: 0)
         default: break
         }
-        return metricGrid(phase == 4 ? [] : [.init("dollarsign.circle", "Cost", "$171.34")],
-                          hit: phase == 2 ? 0 : 96, extra: metrics, tint: .blue)
+        return EqualHeightGrid {
+            metricGrid(phase == 4 ? [] : [.init("dollarsign.circle", "Cost", "$171.34")],
+                       hit: phase == 2 ? 0 : 96, extra: metrics, tint: .blue)
+            Color.blue.frame(height: 40)
+            // The second row should follow the new height of the first after each update.
+            Color.green.frame(height: 20)
+        }
             .padding(24).frame(width: 640, height: 360, alignment: .topLeading)
             .background(Color.black).environment(\.colorScheme, .dark)
     }

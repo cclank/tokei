@@ -86,6 +86,7 @@ struct QuotaHistoryStoreCheck {
             QuotaModelActivity(model: "claude-opus", tokenDelta: 20),
         ], "a transient empty scan should not reset the activity baseline")
 
+        store.flushPendingWrites()
         let reloaded = QuotaHistoryStore(fileURL: fileURL)
         try expect(reloaded.points == store.points, "history should survive a reload")
 
@@ -99,6 +100,7 @@ struct QuotaHistoryStoreCheck {
             at: base.addingTimeInterval(8 * 24 * 60 * 60)
         )
         try expect(reloaded.points.count == 1, "points outside retention should be pruned")
+        reloaded.flushPendingWrites()
 
         try checkProjection()
         try checkRecovery()
@@ -153,6 +155,7 @@ struct QuotaHistoryStoreCheck {
         let daily = QuotaHistoryProjection.dailyConsumption(from: store.points, tool: .antigravity)
         try expect(daily.first { $0.window == AntigravityHistoryWindow.geminiWeek.title }?.consumed == 5,
                    "refills do not subtract consumed quota")
+        store.flushPendingWrites()
         let reloaded = QuotaHistoryStore(fileURL: file)
         try expect(reloaded.points == store.points, "Antigravity and legacy history survive reload together")
         let encoded = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
@@ -210,6 +213,7 @@ struct QuotaHistoryStoreCheck {
         let store = QuotaHistoryStore(fileURL: url)
         store.record(QuotaCapture(codexWeekRemaining: 0), at: Date(timeIntervalSince1970: TimeInterval(base)))
         store.record(QuotaCapture(codexWeekRemaining: 100), at: Date(timeIntervalSince1970: TimeInterval(base + 60)))
+        store.flushPendingWrites()
         let reloaded = QuotaHistoryStore(fileURL: url)
         try expect(reloaded.points.map(\.codexWeekRemaining) == [0, 100],
                    "a recorded reset must survive a store reload without treating zero as missing")

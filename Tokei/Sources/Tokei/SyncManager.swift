@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-struct SyncConfig: Codable {
+struct SyncConfig: Codable, Equatable {
     var device_id: String
     var sync_dir: String
     var auto_sync: Bool?
@@ -327,6 +327,10 @@ final class SyncManager {
     // MARK: - Read peers
 
     func loadPeers() -> PeerLoadReport {
+        Self.loadPeers(config: config)
+    }
+
+    static func loadPeers(config: SyncConfig?) -> PeerLoadReport {
         guard let cfg = config else {
             return PeerLoadReport(
                 peers: [],

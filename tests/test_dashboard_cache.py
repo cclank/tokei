@@ -16,13 +16,11 @@ class DashboardCacheTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         source = (root / "Tokei" / "Sources" / "Tokei" / "main.swift").read_text()
 
-        self.assertIn(
-            "if !self.refreshPending && !self.dashboardPrewarmStarted",
+        self.assertRegex(
             source,
-        )
-        self.assertIn(
-            "DashboardRepository.shared.load(.all, force: true)",
-            source,
+            r"if !(?:self\.)?refreshPending && !(?:self\.)?dashboardPrewarmStarted\s*\{\s*"
+            r"(?:self\.)?dashboardPrewarmStarted = true\s*"
+            r"DashboardRepository\.shared\.load\(\.all, force: true\)",
         )
 
     def test_dashboard_days_are_cached_only_when_changed(self):

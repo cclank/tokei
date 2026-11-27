@@ -736,3 +736,6 @@
 "远端持续更新，三次同步重试均失败" = "The remote kept changing; all three sync retries failed";
 "检测到其他设备同时更新，正在重试 %@/3" = "Another device updated at the same time; retrying %@/3";
 "push 失败" = "Push failed";
+
+"请在设置的「Provider 额度」中保存 OpenCode Go API Key。" = "Save an OpenCode Go API key in Settings → Provider Quotas.";
+"清除 OpenCode Go 密钥" = "Clear OpenCode Go key";

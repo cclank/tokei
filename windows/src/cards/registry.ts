@@ -6,7 +6,7 @@ import { grokBotCard, grokCard } from "./grok";
 import { doubaoWorkCard } from "./doubaowork";
 import { hermesCard } from "./hermes";
 import { openclawCard } from "./openclaw";
-import { cursorCard, devinCard, minimaxCard, sub2apiCard, zaiCard, zedCard } from "./providerQuota";
+import { cursorCard, devinCard, minimaxCard, openCodeGoCard, sub2apiCard, zaiCard, zedCard } from "./providerQuota";
 import { qodercliCard, qodercliCNCard, qoderIdeCard, qoderworkCard } from "./qoder";
 import { qwenworkCard } from "./qwenwork";
 import type { CardSpec } from "./spec";
@@ -34,6 +34,7 @@ export const CARDS: CardSpec[] = [
   cursorCard,
   zedCard,
   sub2apiCard,
+  openCodeGoCard,
   zaiCard,
   grokCard,
   grokBotCard,

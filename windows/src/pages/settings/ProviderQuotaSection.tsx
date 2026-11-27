@@ -70,6 +70,8 @@ export function ProviderQuotaSection() {
   const [zaiRegion, setZaiRegion] = useState<ZaiRegion>("global");
   const [zaiKey, setZaiKey] = useState("");
   const [zaiKeyStored, setZaiKeyStored] = useState(false);
+  const [openCodeGoKey, setOpenCodeGoKey] = useState("");
+  const [openCodeGoKeyStored, setOpenCodeGoKeyStored] = useState(false);
   const [miniMaxKey, setMiniMaxKey] = useState("");
   const [miniMaxKeyStored, setMiniMaxKeyStored] = useState(false);
   const [result, setResult] = useState("");
@@ -77,17 +79,19 @@ export function ProviderQuotaSection() {
 
   /** 重新读一遍存储状态；返回 MiniMax 有没有 Key，保存后要据此开关联网查询。 */
   const load = useCallback(async (): Promise<boolean> => {
-    const [config, sub2api, zai, minimax] = await Promise.all([
+    const [config, sub2api, zai, minimax, openCodeGo] = await Promise.all([
       readTokeiConfig().catch(() => ({}) as Record<string, unknown>),
       stored("sub2api"),
       stored("zai"),
       stored("minimax"),
+      stored("opencode_go"),
     ]);
     setSub2APIBaseURL(configString(config, "sub2api_base_url") ?? "");
     setZaiRegion(configString(config, "zai_region") === "bigmodel-cn" ? "bigmodel-cn" : "global");
     setSub2APIKeyStored(sub2api);
     setZaiKeyStored(zai);
     setMiniMaxKeyStored(minimax);
+    setOpenCodeGoKeyStored(openCodeGo);
     return minimax;
   }, []);
 
@@ -108,6 +112,7 @@ export function ProviderQuotaSection() {
         ["sub2api", sub2APIKey],
         ["zai", zaiKey],
         ["minimax", miniMaxKey],
+        ["opencode_go", openCodeGoKey],
       ];
       for (const [provider, value] of keys) {
         if (value.trim()) await setSecret(provider, value.trim());
@@ -115,6 +120,7 @@ export function ProviderQuotaSection() {
       setSub2APIKey("");
       setZaiKey("");
       setMiniMaxKey("");
+      setOpenCodeGoKey("");
       const minimax = await load();
       await updateTokeiConfig({ minimax_quota_enabled: miniMaxCardShown() && minimax });
       setResult(L("已保存"));
@@ -182,6 +188,18 @@ export function ProviderQuotaSection() {
         secure
       />
       {zaiKeyStored && <ClearButton title={L("清除 z.ai 密钥")} onClick={() => void clear("zai")} />}
+
+      <ThinDivider />
+
+      <ProviderTitle name="OpenCode Go" tint={Theme.sub2api} />
+      <ProviderField
+        label="API Key"
+        placeholder={openCodeGoKeyStored ? keptPlaceholder : "OpenCode Go API Key"}
+        value={openCodeGoKey}
+        onChange={setOpenCodeGoKey}
+        secure
+      />
+      {openCodeGoKeyStored && <ClearButton title={L("清除 OpenCode Go 密钥")} onClick={() => void clear("opencode_go")} />}
 
       <ThinDivider />
 

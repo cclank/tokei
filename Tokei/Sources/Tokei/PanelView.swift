@@ -76,6 +76,7 @@ struct PanelView: View {
     @AppStorage("showGemini") private var showGemini = true
     @AppStorage("showCursor") private var showCursor = false
     @AppStorage("showZed") private var showZed = false
+    @AppStorage("showOpenCodeGo") private var showOpenCodeGo = false
     @AppStorage("showSub2API") private var showSub2API = false
     @AppStorage("showZai") private var showZai = false
     @AppStorage("showGrok") private var showGrok = true
@@ -153,7 +154,7 @@ struct PanelView: View {
     }
 
     private var visibleCount: Int {
-        [showClaude, showCodex, showGemini, showCursor, showZed, showSub2API, showZai,
+        [showClaude, showCodex, showGemini, showCursor, showZed, showSub2API, showZai, showOpenCodeGo,
          showGrok, showGrokBot, showDoubaoWork, showQoder, showQoderWork, showQoderCli, showQoderCliCN, showHermes,
          showZcode, showMimoCode,
          showOpenClaw, showPi, showWorkBuddy, showWorkBuddyAI, showDeepSeekHarness,
@@ -498,6 +499,11 @@ struct PanelView: View {
                          content: AnyView(providerQuotaBlock(
                             "Zed", quota: u.zed, tint: Theme.zed,
                             setupHint: L("请先在 Zed 中登录 GitHub，再到设置的「Provider 额度」中授权读取登录态。")))),
+            ToolCardItem(id: "opencode_go", name: "OpenCode Go", visible: showOpenCodeGo,
+                         active: showOpenCodeGo, tint: Theme.sub2api, presentation: .compactStatus,
+                         content: AnyView(providerQuotaBlock(
+                            "OpenCode Go", quota: u.opencodeGo, tint: Theme.sub2api,
+                            setupHint: L("请在设置的「Provider 额度」中保存 OpenCode Go API Key。")))),
             ToolCardItem(id: "sub2api", name: "Sub2API", visible: showSub2API, active: showSub2API,
                          tint: Theme.sub2api, presentation: .compactStatus,
                          content: AnyView(providerQuotaBlock(
@@ -1147,7 +1153,9 @@ struct PanelView: View {
                 quotaRow(
                     title: L10n.data(window.title),
                     pct: max(0, min(100, 100 - used)),
-                    detail: window.detail.map { L10n.data($0) },
+                    detail: quota.source == "opencode_go"
+                        ? L("已用 %@%%", String(format: "%.0f", used))
+                        : window.detail.map { L10n.data($0) },
                     reset: window.reset,
                     tint: tint
                 )
@@ -3008,6 +3016,8 @@ struct PanelView: View {
     @State private var zaiRegion = "global"
     @State private var zaiKey = ""
     @State private var zaiKeyStored = false
+    @State private var openCodeGoKey = ""
+    @State private var openCodeGoKeyStored = false
     @State private var miniMaxKey = ""
     @State private var miniMaxKeyStored = false
     @State private var providerSettingsResult = ""
@@ -3401,6 +3411,7 @@ struct PanelView: View {
                 settingsRow("Gemini / Antigravity", tint: Theme.gemini, isOn: $showGemini)
                 settingsRow("Cursor", tint: Theme.cursor, isOn: $showCursor)
                 settingsRow("Zed", tint: Theme.zed, isOn: $showZed)
+                settingsRow("OpenCode Go", tint: Theme.sub2api, isOn: $showOpenCodeGo)
                 settingsRow("Sub2API", tint: Theme.sub2api, isOn: $showSub2API)
                 settingsRow("z.ai / GLM", tint: Theme.zai, isOn: $showZai)
                 settingsRow("Grok", tint: Theme.grok, isOn: $showGrok)
@@ -3452,6 +3463,10 @@ struct PanelView: View {
         }
         .onChange(of: showZed) { enabled in
             Self.setProviderQuotaEnabled("zed", enabled)
+            store.refresh()
+        }
+        .onChange(of: showOpenCodeGo) { enabled in
+            Self.setProviderQuotaEnabled("opencode_go", enabled)
             store.refresh()
         }
         .onChange(of: showSub2API) { enabled in
@@ -3550,6 +3565,26 @@ struct PanelView: View {
 
             thinDivider
 
+            Text("OpenCode Go")
+                .font(.system(size: Theme.fontSize(10), weight: .semibold))
+                .foregroundStyle(Theme.sub2api)
+            providerSettingsField(
+                label: "API Key",
+                placeholder: openCodeGoKeyStored ? L("已保存，留空不修改") : "OpenCode Go API Key",
+                text: $openCodeGoKey,
+                secure: true
+            )
+            if openCodeGoKeyStored {
+                HStack {
+                    Spacer()
+                    settingsActionButton(icon: "trash", title: L("清除 OpenCode Go 密钥")) {
+                        clearProviderToken(.opencodeGo)
+                    }
+                }
+            }
+
+            thinDivider
+
             Text("MiniMax Code")
                 .font(.system(size: Theme.fontSize(10), weight: .semibold))
                 .foregroundStyle(Theme.minimax)
@@ -3621,6 +3656,7 @@ struct PanelView: View {
         zaiRegion = SyncManager.providerSetting("zai_region") ?? "global"
         sub2APIKeyStored = ProviderCredentialStore.token(for: .sub2api) != nil
         zaiKeyStored = ProviderCredentialStore.token(for: .zai) != nil
+        openCodeGoKeyStored = ProviderCredentialStore.token(for: .opencodeGo) != nil
         miniMaxKeyStored = ProviderCredentialStore.token(for: .minimax) != nil
     }
 
@@ -3641,13 +3677,16 @@ struct PanelView: View {
             || ProviderCredentialStore.setToken(zaiKey, for: .zai)
         let savedMiniMaxKey = miniMaxKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || ProviderCredentialStore.setToken(miniMaxKey, for: .minimax)
-        guard savedURL, savedRegion, savedSub2APIKey, savedZaiKey, savedMiniMaxKey else {
+        let savedOpenCodeGoKey = openCodeGoKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || ProviderCredentialStore.setToken(openCodeGoKey, for: .opencodeGo)
+        guard savedURL, savedRegion, savedSub2APIKey, savedZaiKey, savedMiniMaxKey, savedOpenCodeGoKey else {
             providerSettingsResult = L("保存失败")
             return
         }
         sub2APIKey = ""
         zaiKey = ""
         miniMaxKey = ""
+        openCodeGoKey = ""
         loadProviderSettings()
         Self.setProviderQuotaEnabled("minimax", showMiniMax && miniMaxKeyStored)
         providerSettingsResult = L("已保存")
@@ -3898,6 +3937,7 @@ struct PanelView: View {
             ("cursor", "showCursor", false),
             ("grok_bot", "grokBotQuotaEnabled", false),
             ("zed", "showZed", false),
+            ("opencode_go", "showOpenCodeGo", false),
             ("sub2api", "showSub2API", false),
             ("zai", "showZai", false),
         ]

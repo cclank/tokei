@@ -117,7 +117,7 @@ export function ProviderQuotaContent({ quota, tint }: { quota: ProviderQuotaStat
               key={w.id || index}
               title={title}
               pct={Math.max(0, Math.min(100, 100 - w.used_pct))}
-              detail={w.detail ? data(w.detail) : null}
+              detail={quota.source === "opencode_go" ? L("已用 %@%%", Math.round(w.used_pct).toString()) : w.detail ? data(w.detail) : null}
               reset={w.reset}
               tint={tint}
             />
@@ -291,6 +291,16 @@ export const zedCard = providerQuotaCard({
   tint: Theme.zed,
   activeWhenVisible: true,
   setupHint: () => L("请先在 Zed 中登录 GitHub，再到设置的「Provider 额度」中授权读取登录态。"),
+});
+
+export const openCodeGoCard = providerQuotaCard({
+  id: "opencode_go",
+  key: "opencode_go",
+  name: "OpenCode Go",
+  visibleKey: "showOpenCodeGo",
+  tint: Theme.sub2api,
+  activeWhenVisible: true,
+  setupHint: () => L("请在设置的「Provider 额度」中保存 OpenCode Go API Key。"),
 });
 
 export const sub2apiCard = providerQuotaCard({

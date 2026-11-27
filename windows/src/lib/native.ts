@@ -26,7 +26,7 @@ export async function updateTokeiConfig(patch: Record<string, unknown>): Promise
   return (await call<Record<string, unknown>>("update_tokei_config", { patch })) ?? {};
 }
 
-export type SecretProvider = "sub2api" | "zai" | "minimax";
+export type SecretProvider = "sub2api" | "zai" | "minimax" | "opencode_go";
 
 /** 只回答有没有存 Key，不把 Key 本身交给前端。 */
 export async function hasSecret(provider: SecretProvider): Promise<boolean> {

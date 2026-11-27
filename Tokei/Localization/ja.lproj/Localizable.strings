@@ -584,3 +584,6 @@
 "Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。" = "今日の使用量には Gemini CLI を含みます。現在のサイクルは Antigravity の各週次利用枠プールのローカル使用量の合計です。";
 "托盘显示" = "トレイの表示";
 "Windows 通过托盘悬停提示展示所选数据。" = "Windows では、トレイアイコンのツールチップに選択したデータを表示します。";
+
+"请在设置的「Provider 额度」中保存 OpenCode Go API Key。" = "設定の「プロバイダーの割り当て」で OpenCode Go の API キーを保存してください。";
+"清除 OpenCode Go 密钥" = "OpenCode Go キーを消去";

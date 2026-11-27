@@ -15,6 +15,7 @@ export const CARD_CONFIG_KEYS: Record<string, string> = {
   showMiniMax: "minimax_quota_enabled",
   showCursor: "cursor_quota_enabled",
   showZed: "zed_quota_enabled",
+  showOpenCodeGo: "opencode_go_quota_enabled",
   showSub2API: "sub2api_quota_enabled",
   showZai: "zai_quota_enabled",
 };

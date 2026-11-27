@@ -274,7 +274,7 @@ final class SyncManager {
     }
 
     private static let providerQuotaIDs: Set<String> = [
-        "cursor", "grok_bot", "zed", "sub2api", "zai", "antigravity", "devin", "minimax",
+        "cursor", "grok_bot", "zed", "sub2api", "zai", "antigravity", "devin", "minimax", "opencode_go",
     ]
     private static let providerSettingKeys: Set<String> = [
         "sub2api_base_url", "zai_region", "zai_usage_scope",

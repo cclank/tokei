@@ -584,3 +584,6 @@
 "Gemini / Antigravity 的今日用量包含 Gemini CLI；本周期为 Antigravity 各周额度池的本机用量合计。" = "La journée inclut Gemini CLI. Le cycle en cours additionne l’utilisation locale des pools de quota hebdomadaires actifs d’Antigravity.";
 "托盘显示" = "Affichage de la zone de notification";
 "Windows 通过托盘悬停提示展示所选数据。" = "Windows affiche les données sélectionnées dans l’infobulle de la zone de notification.";
+
+"请在设置的「Provider 额度」中保存 OpenCode Go API Key。" = "Enregistrez une clé API OpenCode Go dans Réglages → Quotas des fournisseurs.";
+"清除 OpenCode Go 密钥" = "Effacer la clé OpenCode Go";

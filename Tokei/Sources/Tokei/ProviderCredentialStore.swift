@@ -7,6 +7,7 @@ enum ProviderSecret: String {
     case sub2api
     case zai
     case minimax
+    case opencodeGo = "opencode_go"
 }
 
 enum ProviderCredentialStore {
@@ -47,7 +48,7 @@ enum ProviderCredentialStore {
 
 #if TOKEI_PROVIDER_CREDENTIAL_STORE_TEST
     static func purgeTestItems() {
-        for provider in [ProviderSecret.sub2api, .zai, .minimax] {
+        for provider in [ProviderSecret.sub2api, .zai, .minimax, .opencodeGo] {
             _ = SecItemDelete(baseQuery(for: provider, service: service) as CFDictionary)
         }
     }
@@ -150,6 +151,9 @@ enum ProviderCredentialStore {
         }
         if providerQuotaEnabled("minimax"), let token = token(for: .minimax) {
             result["TOKEI_MINIMAX_API_KEY"] = token
+        }
+        if providerQuotaEnabled("opencode_go"), let token = token(for: .opencodeGo) {
+            result["TOKEI_OPENCODE_GO_API_KEY"] = token
         }
         if providerQuotaEnabled("zed"), let credentials = zedCredentials() {
             result["TOKEI_ZED_USER_ID"] = credentials.userID

@@ -23,6 +23,7 @@ pub(crate) const SECRETS: &[(&str, &str)] = &[
     ("sub2api", "SUB2API_API_KEY"),
     ("zai", "Z_AI_API_KEY"),
     ("minimax", "TOKEI_MINIMAX_API_KEY"),
+    ("opencode_go", "TOKEI_OPENCODE_GO_API_KEY"),
 ];
 
 pub fn tokei_dir() -> Result<PathBuf, String> {

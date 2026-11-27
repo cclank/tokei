@@ -1405,6 +1405,7 @@ struct Usage: Codable {
     @Boxed var antigravity: ProviderQuotaStat
     @Boxed var cursor: ProviderQuotaStat
     @Boxed var zed: ProviderQuotaStat
+    @Boxed var opencodeGo: ProviderQuotaStat
     @Boxed var sub2api: ProviderQuotaStat
     @Boxed var zai: ProviderQuotaStat
 
@@ -1416,6 +1417,7 @@ struct Usage: Codable {
         case codebuddy
         case deepseekHarness = "deepseek_harness", opencode, qwencode
         case qwenwork, kimicode, musecode, cmdcode, copilot, prime_agent, devin, minimax, antigravity, cursor, zed, sub2api, zai
+        case opencodeGo = "opencode_go"
     }
 
     init(from decoder: Decoder) throws {
@@ -1456,6 +1458,7 @@ struct Usage: Codable {
         antigravity = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .antigravity) ?? ProviderQuotaStat()
         cursor = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .cursor) ?? ProviderQuotaStat()
         zed = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .zed) ?? ProviderQuotaStat()
+        opencodeGo = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .opencodeGo) ?? ProviderQuotaStat()
         sub2api = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .sub2api) ?? ProviderQuotaStat()
         zai = try c.decodeIfPresent(ProviderQuotaStat.self, forKey: .zai) ?? ProviderQuotaStat()
     }

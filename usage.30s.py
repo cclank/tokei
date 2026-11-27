@@ -74,7 +74,7 @@ def _linux_xdg_path(env_name, *parts):
 
 
 _PIPED_PROVIDER_KEYS = {}
-_PROVIDER_KEY_NAMES = ("SUB2API_API_KEY", "Z_AI_API_KEY", "TOKEI_MINIMAX_API_KEY")
+_PROVIDER_KEY_NAMES = ("SUB2API_API_KEY", "Z_AI_API_KEY", "TOKEI_MINIMAX_API_KEY", "TOKEI_OPENCODE_GO_API_KEY")
 
 
 def _read_provider_keys_from_stdin():
@@ -7299,6 +7299,7 @@ _PROVIDER_QUOTA_ENV = {
     "antigravity": "TOKEI_ANTIGRAVITY_QUOTA",
     "devin": "TOKEI_DEVIN_QUOTA",
     "minimax": "TOKEI_MINIMAX_QUOTA",
+    "opencode_go": "TOKEI_OPENCODE_GO_QUOTA",
 }
 
 
@@ -10401,6 +10402,58 @@ def scan_minimax_quota():
     return fetch_minimax_quota() if _provider_quota_enabled("minimax") else {}
 
 
+_OPENCODE_GO_USAGE_URL = "https://opencode.ai/inference/go/v1/usage"
+
+
+def _normalize_opencode_go_quota(payload):
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    windows = []
+    if isinstance(usage, dict):
+        for key, title, minutes in (
+            ("rolling", "5 小时", 300), ("weekly", "周", 10080), ("monthly", "月", None),
+        ):
+            meter = usage.get(key)
+            if not isinstance(meter, dict):
+                continue
+            percent = _provider_integer(meter.get("percent"))
+            if percent is None or not 0 <= percent <= 100:
+                continue
+            windows.append(_provider_window(key, title, percent, meter.get("resetsAt"), minutes))
+    if not windows:
+        raise ValueError("OpenCode Go response contains no valid quota windows")
+    return {
+        "available": True,
+        "windows": windows,
+        "source": "opencode_go",
+        "updated": int(datetime.now().timestamp()),
+        "stale": False,
+    }
+
+
+def scan_opencode_go_quota():
+    if not _provider_quota_enabled("opencode_go"):
+        return {}
+    # Only a key explicitly supplied to Tokei; never read OpenCode auth.json.
+    key = _PIPED_PROVIDER_KEYS.get("TOKEI_OPENCODE_GO_API_KEY") or os.environ.get(
+        "TOKEI_OPENCODE_GO_API_KEY", "")
+    key = key.strip()
+    if not key:
+        return {}
+    marker = _provider_credential_marker("opencode_go", key, _OPENCODE_GO_USAGE_URL)
+    cached = _cached_provider_quota("opencode_go", marker, _PROVIDER_QUOTA_TTL)
+    if cached:
+        return cached
+    try:
+        quota = _normalize_opencode_go_quota(_provider_json_request(
+            _OPENCODE_GO_USAGE_URL, headers={"Authorization": f"Bearer {key}"}, timeout=5))
+    except Exception:
+        # Never expose upstream bodies, URLs or header validation errors.
+        # Do not show an old quota if access was explicitly denied.
+        raise RuntimeError("OpenCode Go quota unavailable") from None
+    _save_provider_quota_cache("opencode_go", marker, quota)
+    return quota
+
+
 def scan_provider_quotas(errors=None):
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -10411,6 +10464,7 @@ def scan_provider_quotas(errors=None):
         "antigravity": scan_antigravity_quota,
         "devin": scan_devin_quota,
         "minimax": scan_minimax_quota,
+        "opencode_go": scan_opencode_go_quota,
     }
     result = {name: {} for name in (*all_scans, "cursor", "grok_bot")}
     scans = {name: scan for name, scan in all_scans.items()
@@ -17927,7 +17981,7 @@ def compute(local_only=False):
         kimi_plan = kimi_updated = None
         kimi_quota = _kimi_quota_values(None)
         provider_quotas = {name: {} for name in (
-            "zed", "sub2api", "zai", "antigravity", "devin", "minimax", "cursor", "grok_bot")}
+            "zed", "sub2api", "zai", "antigravity", "devin", "minimax", "cursor", "grok_bot", "opencode_go")}
         codex_reset_cards = {}
     else:
         plan = _safe_scan("claude_plan", scan_claude_plan, lambda: {}, errors) or {}
@@ -17987,6 +18041,7 @@ def compute(local_only=False):
         "zed": provider_quotas["zed"],
         "sub2api": provider_quotas["sub2api"],
         "zai": provider_quotas["zai"],
+        "opencode_go": provider_quotas.get("opencode_go", {}),
         "grok": {
             "ranges": kranges,
             "model": gk["model"],

@@ -120,6 +120,7 @@ Tokei 是一款 **macOS 菜单栏应用**，实时追踪 20+ 款 AI 编程工具
 - Tokei 不读取或解密千问办公的 `auth-v2.dat`、浏览器 Cookie 或 `.status.json` 账号资料；仅用 `.status.json` 文件元数据使切换账号后的额度缓存失效，也不会自动启动千问办公
 - Cursor、Zed、Sub2API、z.ai 卡片默认关闭；开启后才查询额度。Sub2API 与 z.ai API Key 保存于 macOS Keychain，不写入 `config.json` 或额度缓存
 - MiniMax Code 的 Token 统计只读本机运行时库与日志，不联网；额度查询默认关闭，只有在「设置 → Provider 额度」填入 Token Plan Key 后才调用 MiniMax 官方 remains 接口（Key 存 macOS Keychain）。Tokei 不读取、不复用 MiniMax Code 的登录态
+- OpenCode Go / Go Plus 额度默认关闭。在工具设置中开启「OpenCode Go」，再到「Provider 额度」保存 Go API Key，即可查看 5 小时、周、月的已用比例和重置时间。Key 仅保存在系统凭据存储中；Tokei 不读取 OpenCode 的登录文件，只向 [OpenCode 官方额度接口](https://opencode.ai/docs/console/go/#usage) 发起只读查询。
 - Cursor 只读取 Cursor.app 的本地登录态数据库；Zed 以禁止交互的方式读取现有 Keychain 登录态，不会弹出授权框
 - Cursor 与 z.ai 的账号级统计在 Dashboard 中单独展示；Grok Bot 本地快照没有 Token 字段，因此官方模型用量直接并入“模型用量”，额度仅在 Grok Bot 主卡片展示
 - 开启多设备同步后，Grok Bot 的官方 Token、模型、费用和额度汇总会进入同步快照；界面采用时间最新的一份账号数据，不会按设备重复相加
